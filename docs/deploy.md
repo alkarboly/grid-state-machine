@@ -43,7 +43,7 @@ The free instance has 512 MB. Startup builds all 3000 homes, including the 30-ho
 
 That same startup line stays up while the history is filled. On a laptop that takes about two minutes. The free CPU is slower, so leave the deploy on that line until the port opens.
 
-The map polls `/api/scene` on that same origin. The side panel starts open. It shows the price and day shape, Fleet manager and Maintenance manager with the latest step and a timer, and Maintenance alerts for homes past a limit.
+The map polls `/api/scene` on that same origin. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
 
 ## 3. Check
 

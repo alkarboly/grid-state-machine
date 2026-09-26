@@ -54,7 +54,7 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
 )
-from gridsim.fleet.agent import audit, day_shape
+from gridsim.fleet.agent import audit, day_shape, record_toggle
 from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
 from gridsim.fleet.simulate import (
     build_sites,
@@ -215,6 +215,33 @@ def _action_stamp(action: dict) -> tuple:
         payload.get("stage"),
         tuple((item.get("stage"), item.get("result")) for item in steps if isinstance(item, dict)),
     )
+
+
+def _maintenance_row(action: dict) -> bool:
+    if action.get("kind") in ("scheduled_service", "return_online"):
+        return True
+    payload = action.get("payload") or {}
+    return isinstance(payload, dict) and bool(payload.get("chart_id"))
+
+
+def _scene_actions(actions: list[dict]) -> list[dict]:
+    """Recent rows for the side panel. Service tickets stay visible beside newer calls."""
+    rows = [row for row in actions if row.get("actor") in CASE_ACTORS]
+    care = [row for row in rows if _maintenance_row(row)]
+    care_ids = {row.get("id") for row in care}
+    rest = [row for row in rows if row.get("id") not in care_ids]
+    care.sort(key=lambda row: row.get("ts") or "", reverse=True)
+    rest.sort(key=lambda row: row.get("ts") or "", reverse=True)
+    return (care[:24] + rest[:16])[:40]
+
+
+def _site_actions(actions: list[dict], site_id: str) -> list[dict]:
+    """Ticket history for one home, plus its other recent actions."""
+    rows = [row for row in actions if row.get("site_id") == site_id]
+    tickets = [row for row in rows if _maintenance_row(row)]
+    ticket_ids = {row.get("id") for row in tickets}
+    others = [row for row in rows if row.get("id") not in ticket_ids]
+    return tickets[-12:] + others[-12:]
 
 
 def _snapshot(grid: dict, fleet: dict, applied: dict, frequency_hz: float) -> dict:
@@ -422,6 +449,7 @@ class Fleet:
     ) -> dict:
         """Arm a chart, turn on price dispatch, or open and close the service contactor."""
         known = [spec["chart_id"] for spec in CHARTS]
+        dirty: list[dict] = []
         with self._lock:
             site = next((item for item in self.sites if item["id"] == site_id), None)
             if site is None:
@@ -431,26 +459,38 @@ class Fleet:
                     raise ValueError("armed is required with chart_id")
                 if chart_id != "all" and chart_id not in known:
                     raise ValueError("unknown chart_id")
-                current = [item for item in (site.get("armed") or []) if item in known]
+                before = [item for item in (site.get("armed") or []) if item in known]
                 if chart_id == "all":
                     site["armed"] = list(known) if armed else []
-                elif armed and chart_id not in current:
-                    current.append(chart_id)
-                    site["armed"] = current
+                elif armed and chart_id not in before:
+                    site["armed"] = [*before, chart_id]
                 elif not armed:
-                    site["armed"] = [item for item in current if item != chart_id]
+                    site["armed"] = [item for item in before if item != chart_id]
                 else:
-                    site["armed"] = current
+                    site["armed"] = before
+                after = list(site.get("armed") or [])
+                changed = [code for code in known if (code in after) != (code in before)]
+                now = now_central()
+                for code in changed:
+                    for row in record_toggle(site, self.actions, code, code in after, now):
+                        if not any(item.get("id") == row.get("id") for item in self.actions):
+                            self.actions.append(row)
+                        dirty.append(row)
+                if dirty and self._conn:
+                    upsert_actions(self._conn, dirty)
             if dispatch is not None:
                 site["agent_dispatch"] = bool(dispatch)
             if grid is not None:
                 site["grid_off"] = not grid
-            return {
+            view = {
                 "site_id": site_id,
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),
                 "grid": "off" if site.get("grid_off") else "on",
             }
+        if dirty:
+            push_actions(dirty)
+        return view
 
     def agent_view(self) -> dict:
         with self._lock:
@@ -695,11 +735,7 @@ class Fleet:
                     for row in reversed(self.calls[-12:])
                 ],
                 "market": self.market,
-                "actions": sorted(
-                    (row for row in self.actions if row.get("actor") in CASE_ACTORS),
-                    key=lambda row: row.get("ts") or "",
-                    reverse=True,
-                )[:40],
+                "actions": _scene_actions(self.actions),
                 "addons": catalog_rows(),
                 "codes": [
                     {
@@ -751,7 +787,7 @@ class Fleet:
                 "usage": list(self.usage.get(site_id, [])[-24:]),
                 "state_log": [dict(row) for row in reversed(site.get("state_log") or [])],
                 "snapshot": machine_snapshot(site),
-                "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
+                "actions": _site_actions(self.actions, site_id),
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),
                 "agent_call": site.get("agent_call"),

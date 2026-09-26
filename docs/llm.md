@@ -44,7 +44,7 @@ Insert into `unit_actions` with a new hex `id`. `POST /api/actions` assigns the 
 
 | kind | payload | What the next tick does |
 | --- | --- | --- |
-| `scheduled_service` | `{}`, or `{chart_id, stage, estimate_min, escalation, gathered}` | Base goes `offline` until `ends_at`. A missing end is 1–2 hours. A `reset` stage stays open so the maintenance manager can clear it or escalate the same row. A finished `ticket` disarms that chart. The bot writes `return_online`. |
+| `scheduled_service` | `{}`, or `{chart_id, stage, estimate_min, escalation, gathered}` | Base goes `offline` until `ends_at`. A missing end is 1–2 hours. A `reset` stage stays open so the maintenance manager can clear it or escalate the same row. `escalation` is `{stage, estimate_min, result, actor, ts}`, oldest first. New steps are appended. A finished `ticket` disarms that chart. The bot writes `return_online`. |
 | `set_signal` | `{"signal": "hold", "intensity": 0}` | That home's call changes until `ends_at`. Default window is one hour. `signal` is `push`, `pull`, or `hold`. |
 | `install_addon` | `{"addon_id": "solar"}` | Disco starts metering `solar` or `ev_charger`. |
 | `remove_addon` | `{"addon_id": "solar"}` | Disco stops metering it. |

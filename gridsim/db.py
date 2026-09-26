@@ -484,32 +484,48 @@ def upsert_actions(conn: sqlite3.Connection, rows: list[dict]) -> None:
     conn.commit()
 
 
+def _action_from_row(row) -> dict:
+    return {
+        "id": row[0],
+        "ts": row[1],
+        "site_id": row[2],
+        "kind": row[3],
+        "status": row[4],
+        "starts_at": row[5],
+        "ends_at": row[6],
+        "note": row[7] or "",
+        "payload": json.loads(row[8] or "{}"),
+        "actor": row[9],
+    }
+
+
 def load_actions(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        """
+    columns = """
         SELECT id, ts, site_id, kind, status, starts_at, ends_at, note, payload_json, actor
         FROM unit_actions
-        WHERE status IN ('pending', 'active')
-        ORDER BY ts
-        """
-    ).fetchall()
-    loaded = []
-    for row in rows:
-        loaded.append(
-            {
-                "id": row[0],
-                "ts": row[1],
-                "site_id": row[2],
-                "kind": row[3],
-                "status": row[4],
-                "starts_at": row[5],
-                "ends_at": row[6],
-                "note": row[7] or "",
-                "payload": json.loads(row[8] or "{}"),
-                "actor": row[9],
-            }
+    """
+    open_rows = [
+        _action_from_row(row)
+        for row in conn.execute(
+            f"{columns} WHERE status IN ('pending', 'active') ORDER BY ts"
         )
-    return loaded
+    ]
+    history = [
+        _action_from_row(row)
+        for row in conn.execute(
+            f"""
+            {columns}
+            WHERE status IN ('done', 'cancelled')
+              AND kind IN ('scheduled_service', 'return_online')
+            ORDER BY ts DESC
+            LIMIT 160
+            """
+        )
+    ]
+    by_id = {row["id"]: row for row in reversed(history)}
+    for row in open_rows:
+        by_id[row["id"]] = row
+    return sorted(by_id.values(), key=lambda row: row.get("ts") or "")
 
 
 def load_addon_map(conn: sqlite3.Connection) -> dict[str, list[str]]:

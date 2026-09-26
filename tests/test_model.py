@@ -587,13 +587,12 @@ class ScaleTests(unittest.TestCase):
         spec = CHARTS[0]
         spike = evaluate(spec, 4.0, 0.0, 1.0, [])
         self.assertTrue(spike["alarm"])
-        # A run rule is a warning, not an alarm. It fires on healthy charts often
-        # enough that alarming on it would flood a fleet-sized map.
+        # seven_same_side is recorded and left alone. two_of_three_2sigma warns.
         shift = evaluate(spec, 0.4, 0.0, 1.0, [0.4] * 6)
         self.assertIn("seven_same_side", shift["rules"])
-        self.assertFalse(shift["in_control"])
+        self.assertTrue(shift["in_control"])
         self.assertFalse(shift["alarm"])
-        self.assertTrue(shift["warning"])
+        self.assertFalse(shift["warning"])
         calm = evaluate(spec, 0.2, 0.0, 1.0, [])
         self.assertTrue(calm["in_control"])
         self.assertFalse(calm["alarm"])

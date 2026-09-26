@@ -261,7 +261,13 @@ def _ticket_note(site: dict, chart_id: str, gathered: dict, reset_min: int | Non
     return ". ".join(bits) + "."
 
 
-def _return_online(site_id: str, now: datetime, actor: str, service_id: str) -> dict:
+def _return_online(
+    site_id: str,
+    now: datetime,
+    actor: str,
+    service_id: str,
+    note: str = "Back online after system reset",
+) -> dict:
     return {
         "id": uuid.uuid4().hex,
         "ts": iso(now),
@@ -270,7 +276,7 @@ def _return_online(site_id: str, now: datetime, actor: str, service_id: str) -> 
         "status": "done",
         "starts_at": iso(now),
         "ends_at": iso(now),
-        "note": "Back online after system reset",
+        "note": note,
         "payload": {"service_id": service_id},
         "actor": actor,
     }
@@ -318,11 +324,7 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             "estimate_min": policy["reset_min"],
             "because": because,
             "gathered": gathered,
-            "escalation": [{
-                "stage": "reset",
-                "estimate_min": policy["reset_min"],
-                "result": "trying",
-            }],
+            "escalation": [_step("reset", policy["reset_min"], "trying", "maintenance", now)],
         }
         row = new_action(
             site["id"],
@@ -334,7 +336,7 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             ends_at=now + timedelta(minutes=policy["reset_min"]),
         )
     else:
-        payload = _ticket_payload(spec, policy, gathered, because, None)
+        payload = _ticket_payload(spec, policy, gathered, because, None, now)
         row = new_action(
             site["id"],
             "scheduled_service",
@@ -348,12 +350,32 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
     return row
 
 
-def _ticket_payload(spec, policy, gathered, because, reset_min) -> dict:
+def _step(stage: str, estimate_min, result: str, actor: str, now: datetime) -> dict:
+    return {
+        "stage": stage,
+        "estimate_min": estimate_min,
+        "result": result,
+        "actor": actor,
+        "ts": iso(now),
+    }
+
+
+def _append_step(ticket: dict, stage: str, estimate_min, result: str, actor: str, now: datetime) -> None:
+    """Add one escalation step. Earlier steps stay on the ticket."""
+    payload = ticket.setdefault("payload", {})
+    steps = payload.get("escalation")
+    if not isinstance(steps, list):
+        steps = []
+        payload["escalation"] = steps
+    steps.append(_step(stage, estimate_min, result, actor, now))
+
+
+def _ticket_payload(spec, policy, gathered, because, reset_min, now: datetime) -> dict:
     result = "reset skipped" if not reset_min else f"reset {reset_min}m did not clear"
     steps = []
     if reset_min:
-        steps.append({"stage": "reset", "estimate_min": reset_min, "result": "did not clear"})
-    steps.append({"stage": "ticket", "estimate_min": policy["service_min"], "result": result})
+        steps.append(_step("reset", reset_min, "did not clear", "maintenance", now))
+    steps.append(_step("ticket", policy["service_min"], result, "llm", now))
     return {
         "chart_id": spec["chart_id"],
         "stage": "ticket",
@@ -369,23 +391,89 @@ def _clear_reset(site, ticket, now, created) -> None:
     site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
     ticket["status"] = "done"
     ticket["note"] = f"System reset cleared {chart_id}."
-    ticket["payload"]["escalation"] = [{
-        "stage": "reset",
-        "estimate_min": ticket["payload"].get("estimate_min"),
-        "result": "cleared",
-    }]
+    steps = ticket["payload"].get("escalation") or []
+    if not steps or steps[-1].get("result") != "cleared":
+        _append_step(
+            ticket,
+            "reset",
+            ticket["payload"].get("estimate_min"),
+            "cleared",
+            ticket.get("actor") or "maintenance",
+            now,
+        )
     created.append(_return_online(site["id"], now, ticket.get("actor") or "maintenance", ticket["id"]))
 
 
 def _escalate(site, ticket, chart, spec, policy, now) -> None:
     reset_min = policy["reset_min"]
     gathered = _gathered(site, chart)
-    because = ticket["payload"].get("because") or []
-    ticket["payload"] = _ticket_payload(spec, policy, gathered, because, reset_min)
+    payload = ticket.setdefault("payload", {})
+    payload["chart_id"] = spec["chart_id"]
+    payload["stage"] = "ticket"
+    payload["estimate_min"] = policy["service_min"]
+    payload["gathered"] = gathered
+    payload["because"] = payload.get("because") or []
+    if reset_min:
+        _append_step(ticket, "reset", reset_min, "did not clear", "maintenance", now)
+    result = "reset skipped" if not reset_min else f"reset {reset_min}m did not clear"
+    _append_step(ticket, "ticket", policy["service_min"], result, "llm", now)
     ticket["actor"] = "llm"
     ticket["status"] = "active"
     ticket["ends_at"] = iso(now + timedelta(minutes=policy["service_min"]))
     ticket["note"] = _agent_note(site, spec["chart_id"], gathered, reset_min)
+
+
+def record_toggle(site: dict, actions: list[dict], chart_id: str, armed: bool, now: datetime) -> list[dict]:
+    """Update this chart's ticket when a simulation toggle is triggered or cleared.
+
+    A trigger opens the ticket when none is open, and records that step first.
+    A clear closes the open ticket. Either way the earlier escalation steps stay.
+    Frequency has no ticket. Returns the rows that need storing.
+    """
+    policy = RESOLUTION.get(chart_id)
+    if not policy:
+        return []
+    ticket = _open_ticket(actions, site["id"], chart_id)
+    if armed:
+        if ticket is not None:
+            payload = ticket.setdefault("payload", {})
+            estimate = payload.get("estimate_min") or 0
+            _append_step(ticket, payload.get("stage") or "reset", estimate, "triggered", "api", now)
+            end = datetime.fromisoformat(ticket["ends_at"]) if ticket.get("ends_at") else now
+            if estimate and end <= now:
+                ticket["ends_at"] = iso(now + timedelta(minutes=int(estimate)))
+                ticket["status"] = "active"
+            return [ticket]
+        spec = next(item for item in CHARTS if item["chart_id"] == chart_id)
+        chart = next(
+            (item for item in (site.get("charts") or []) if item.get("chart_id") == chart_id),
+            {"chart_id": chart_id, "z": None},
+        )
+        row = _open_case(site, spec, chart, policy, now, actions)
+        row["payload"]["escalation"].insert(0, _step(
+            row["payload"]["stage"],
+            row["payload"].get("estimate_min"),
+            "triggered",
+            "api",
+            now,
+        ))
+        return [row]
+    if ticket is None:
+        return []
+    payload = ticket.setdefault("payload", {})
+    chart_name = payload.get("chart_id") or chart_id
+    _append_step(ticket, payload.get("stage") or "reset", payload.get("estimate_min"), "cleared", "api", now)
+    ticket["status"] = "done"
+    ticket["note"] = f"Trigger cleared {chart_name}."
+    online = _return_online(
+        site["id"],
+        now,
+        ticket.get("actor") or "maintenance",
+        ticket["id"],
+        note="Back online after the trigger was cleared",
+    )
+    actions.append(online)
+    return [ticket, online]
 
 
 def fleet_manager(

@@ -141,6 +141,7 @@ def evaluate(spec: dict, measured: float, expected: float, sigma: float, history
         if above >= 2 or below >= 2:
             rules.append("two_of_three_2sigma")
 
+    acted = [rule for rule in rules if rule != "seven_same_side"]
     return {
         "chart_id": spec["chart_id"],
         "component": spec["component"],
@@ -156,9 +157,9 @@ def evaluate(spec: dict, measured: float, expected: float, sigma: float, history
         "lcl": round(-LIMIT_SIGMA * sigma, 4),
         "z": round(z, 3),
         "rules": rules,
-        "in_control": not rules,
-        # Only a point outside the limits raises an alarm. The run rules are
-        # advisory, because across a fleet of charts they fire on their own.
+        "in_control": not acted,
+        # Only a point outside the limits raises an alarm. two_of_three_2sigma
+        # warns. seven_same_side does not.
         "alarm": "beyond_3sigma" in rules,
-        "warning": bool(rules) if rules else abs(z) >= WARN_SIGMA,
+        "warning": bool(acted) if acted else abs(z) >= WARN_SIGMA,
     }

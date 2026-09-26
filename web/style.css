@@ -543,6 +543,23 @@ h2 {
   line-height: 1.35;
 }
 .case .escalation { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+.steps {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.alert.case-row .steps { grid-column: 1 / -1; }
+.step {
+  display: grid;
+  grid-template-columns: 4.6em 8.6em minmax(0, 1fr);
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.step b { color: var(--ink); font-weight: 500; font-size: 11px; }
 .because { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .because mark {
   background: #3d3424;

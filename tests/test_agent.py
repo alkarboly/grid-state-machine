@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from gridsim.fleet.actions import market_rate
-from gridsim.fleet.agent import RESOLUTION, audit, choose_unit_signal, day_shape, expected_kw, typical_kw
+from gridsim.fleet.agent import RESOLUTION, audit, choose_unit_signal, day_shape, expected_kw, record_toggle, typical_kw
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import build_sites, tick_sites
 
@@ -76,7 +76,11 @@ class AgentTests(unittest.TestCase):
         later = now + timedelta(minutes=2)
         closed = audit([site], rows, _grid(0.5), {}, later)
         self.assertEqual(rows[0]["status"], "done")
-        self.assertEqual(rows[0]["payload"]["escalation"][0]["result"], "cleared")
+        self.assertEqual(
+            [item["result"] for item in rows[0]["payload"]["escalation"]],
+            ["trying", "cleared"],
+        )
+        self.assertEqual(rows[0]["payload"]["escalation"][0]["actor"], "maintenance")
         self.assertEqual(site["armed"], [])
         self.assertEqual(closed[0]["kind"], "return_online")
 
@@ -95,14 +99,50 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(ticket["payload"]["estimate_min"], 20)
         self.assertEqual(
             [item["result"] for item in ticket["payload"]["escalation"]],
-            ["did not clear", "reset 2m did not clear"],
+            ["trying", "did not clear", "reset 2m did not clear"],
         )
+        self.assertEqual(ticket["payload"]["escalation"][-1]["actor"], "llm")
         self.assertIn("soc 55", ticket["note"])
 
     def test_a_warning_posts_nothing(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
         site = _bare(set(), {"base_temp", "soc_tracking"})
         self.assertEqual(audit([site], [], _grid(0.5), {}, now), [])
+
+    def test_a_toggle_updates_the_ticket_and_keeps_the_steps(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare(set())
+        site["metrics"] = {"base": {"soc_pct": 40, "temp_c": 31.0}, "panel": {"load_kw": 1.1}}
+        actions: list[dict] = []
+        opened = record_toggle(site, actions, "disco_voltage", True, now)
+        self.assertEqual(opened[0]["kind"], "scheduled_service")
+        self.assertEqual(
+            [item["result"] for item in opened[0]["payload"]["escalation"]],
+            ["triggered", "trying"],
+        )
+        self.assertEqual(opened[0]["payload"]["escalation"][0]["actor"], "api")
+        self.assertEqual(record_toggle(site, actions, "frequency", True, now), [])
+        self.assertEqual(len(actions), 1)
+
+        again = record_toggle(site, actions, "disco_voltage", True, now)
+        self.assertEqual(len([row for row in actions if row["kind"] == "scheduled_service"]), 1)
+        self.assertEqual(again[0]["payload"]["escalation"][-1]["result"], "triggered")
+
+        closed = record_toggle(site, actions, "disco_voltage", False, now + timedelta(minutes=1))
+        ticket = next(row for row in actions if row["kind"] == "scheduled_service")
+        self.assertEqual(ticket["status"], "done")
+        self.assertEqual(
+            [item["result"] for item in ticket["payload"]["escalation"]],
+            ["triggered", "trying", "triggered", "cleared"],
+        )
+        self.assertEqual(closed[-1]["kind"], "return_online")
+        self.assertEqual(ticket["id"], opened[0]["id"])
+
+        later = record_toggle(site, actions, "disco_voltage", True, now + timedelta(minutes=2))
+        tickets = [row for row in actions if row["kind"] == "scheduled_service"]
+        self.assertEqual(len(tickets), 2)
+        self.assertEqual(tickets[0]["payload"]["escalation"][-1]["result"], "cleared")
+        self.assertEqual(later[0]["payload"]["escalation"][0]["result"], "triggered")
 
     def test_arming_a_chart_puts_it_past_the_limits(self):
         now = datetime(2026, 9, 25, 15, 0, tzinfo=CENTRAL)

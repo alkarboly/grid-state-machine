@@ -1,6 +1,6 @@
 # Control charts
 
-Each battery keeps six X-bar charts. The charted number is the mean residual in the bucket, the average of `measured − expected` over the ticks in that point. The center line is 0. σ in the table is the given standard for one tick. The limits on a point are `±3 * σ / √n`, where n is how many ticks are in that point. A chart is `in_control` when no rule has fired.
+Each battery keeps six X-bar charts. The charted number is the mean residual in the bucket, the average of `measured − expected` over the ticks in that point. The center line is 0. σ in the table is the given standard for one tick. The limits on a point are `±3 * σ / √n`, where n is how many ticks are in that point. A chart is `in_control` when `beyond_3sigma` and `two_of_three_2sigma` have not fired. `seven_same_side` is recorded and left alone.
 
 The standard is given. It is not estimated from the trace, so a fault cannot widen its own limits. Healthy sensor noise sits inside the standard. The chart reacts when the subgroup mean leaves `±3 σ/√n`.
 
@@ -38,7 +38,7 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 
 `action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`. The ticket note is the gathered readings and the escalation, not this sentence.
 
-Each alarming code opens one `scheduled_service` ticket. A warning posts nothing. `frequency` posts nothing. The ticket is the assignment: `payload.stage`, `payload.estimate_min`, and `payload.escalation` are stored on the `unit_actions` row. The minutes are assumptions.
+Each alarming code opens one `scheduled_service` ticket. A warning posts nothing. `frequency` posts nothing. The ticket is the assignment: `payload.stage`, `payload.estimate_min`, and `payload.escalation` are stored on the `unit_actions` row. The minutes are assumptions. `escalation` is the history of that ticket. Each step is `{stage, estimate_min, result, actor, ts}`. A new step is appended. Earlier steps stay, including after the row moves from `maintenance` to `llm`.
 
 | Code | First response | If the reset does not clear it |
 | --- | --- | --- |
@@ -49,9 +49,9 @@ Each alarming code opens one `scheduled_service` ticket. A warning posts nothing
 | `base_temp` | Reset skipped. Heat does not clear by reboot. | Agent ticket, 30 minutes. |
 | `frequency` | none | none |
 
-The reset is a short outage: the base is `offline` until the estimate ends. A reset that clears disarms the chart and writes `return_online`. A reset that does not clear keeps the same row, sets `stage` to `ticket`, sets `actor` to `llm`, and extends `ends_at` by the service estimate. The agent note is gathered from that home: z, measured, state of charge, temperature, and load. `payload.escalation` lists each stage with its estimate and result.
+The reset is a short outage: the base is `offline` until the estimate ends. A reset that clears disarms the chart, appends a `cleared` step, and writes `return_online`. A reset that does not clear keeps the same row, appends the failed reset and the agent visit, sets `stage` to `ticket`, sets `actor` to `llm`, and extends `ends_at` by the service estimate. The agent note is gathered from that home: z, measured, state of charge, temperature, and load.
 
-`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick places that residual at +4 times `σ / √n` for a full bucket, so the point is past the completed-subgroup limits and the maintenance manager opens the ticket for that code. `armed: false` clears it, and the home is healthy again. An armed chart does not average the trigger into the healthy samples already in the bucket. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick places that residual at +4 times `σ / √n` for a full bucket, so the point is past the completed-subgroup limits. Arming a code that has a response opens that code's ticket immediately and appends `{stage, estimate_min, result: "triggered", actor: "api", ts}` ahead of the first response. If that ticket is already open, the same step is appended and a second ticket is not opened. `armed: false` appends `{result: "cleared", actor: "api"}`, sets the ticket `done`, writes `return_online`, and leaves every earlier step on the row. The chart is no longer armed, so the home is healthy again. Frequency still posts nothing. An armed chart does not average the trigger into the healthy samples already in the bucket. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base. The unit shows that code's tickets, open and closed, with every escalation step.
 
 ## Rules
 
@@ -60,20 +60,20 @@ Evaluated in this order. More than one may fire on the same point.
 | `rules` value | Meaning |
 | --- | --- |
 | `beyond_3sigma` | This point is outside the 3-sigma limits. |
-| `seven_same_side` | This point and the six before it are all on the same side of 0. A sustained shift. |
+| `seven_same_side` | This point and the six before it are all on the same side of 0. A sustained shift. Recorded on the point. It does not warn and does not take the chart out of control. |
 | `two_of_three_2sigma` | Two of the last three points are beyond 2 sigma on the same side. |
 
 ## Severity, and why it is not the same as the rules
 
 `in_control` and `rules` are the statistics. `alarm` and `warning` are what a person should do about them. They are separate fields because at fleet scale they have to be.
 
-A run rule fires on roughly 1.6% of perfectly healthy charts — that is what "seven points on the same side of centre" means when the residual is symmetric noise. On one battery that is a useful nudge. Across 3000 batteries with six charts each, it is about 280 false alarms, which buries the 50 units that are actually broken. Alarming on every rule turned the map solid red.
+Seven points on the same side of centre is what symmetric noise does on roughly 1.6% of healthy charts. Across 3000 batteries with six charts each, that is about 280 shifts that are not a fault. `seven_same_side` stays in `rules` for the training row and does not warn.
 
 So:
 
 - **`alarm`** is true only for `beyond_3sigma`. This is the send-someone signal. It is what turns a unit red on the map and puts it in the attention queue.
-- **`warning`** is true when a run rule fired without a limit breach, or when the absolute z-score is at least 2 and no rule fired at all. This is the watch-it signal, shown in the unit view and counted in the rollup.
-- **`in_control`** stays false whenever any rule fired, so nothing statistical is hidden or thrown away. The `control_points` table keeps every rule that fired on every point, which is what a training label needs.
+- **`warning`** is true when `beyond_3sigma` or `two_of_three_2sigma` fired, or when the absolute z-score is at least 2 and neither of those fired. `seven_same_side` does not warn. This is the watch-it signal, shown in the unit view and counted in the rollup.
+- **`in_control`** is false when `beyond_3sigma` or `two_of_three_2sigma` fired. `seven_same_side` does not, by itself, take the chart out of control. The `control_points` table still keeps every rule that fired on every point, including `seven_same_side`.
 
 `alarm` on the maintenance component is true when any chart on that battery alarms. `alarming` lists those chart ids; `out_of_control` lists every chart where a rule fired.
 
@@ -107,4 +107,4 @@ Startup fills that window before the first tick. The values are simulated tick s
 
 ## Triggered faults
 
-Every home starts healthy. The only fault is a chart you arm. The maintenance manager opens one ticket for that code. Maintenance manager shows the stage, the estimate, and the escalation on that row. The fleet manager does not post a price call on that home while the ticket is open. A reset that clears, or a finished service visit, ends the fault. See [simulation.md](simulation.md).
+Every home starts healthy. The only fault is a chart you arm. Arming the chart opens one ticket for that code, and the maintenance manager continues it. Maintenance manager lists each ticket, open ones first, with every escalation step. The fleet manager does not post a price call on that home while the ticket is open. A reset that clears, a cleared trigger, or a finished service visit ends the fault and keeps the steps. See [simulation.md](simulation.md).

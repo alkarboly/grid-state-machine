@@ -653,6 +653,13 @@ function nowBlock(data) {
 }
 
 const WHO = { fleet: "fleet", maintenance: "maintenance", sim: "agent", api: "user", llm: "model" };
+const MACHINE = new Set(["fleet", "maintenance", "sim", "rules"]);
+
+function whoLabel(actor) {
+  if (!actor) return "";
+  if (MACHINE.has(actor)) return "[state machine]";
+  return WHO[actor] || actor;
+}
 const CASE_ACTORS = new Set(["fleet", "maintenance", "llm", "api", "sim"]);
 
 function actionEntry(action) {
@@ -707,12 +714,12 @@ function homesInView(data) {
 
 function agentCases(data, desk, ids) {
   const open = (status) => status === "pending" || status === "active";
-  return latestSteps(
-    (data.actions || [])
-      .filter((action) => CASE_ACTORS.has(action.actor) && caseDesk(action) === desk)
-      .filter((action) => !ids || ids.has(action.site_id))
-      .map(actionEntry),
-  ).sort((a, b) => {
+  const rows = (data.actions || [])
+    .filter((action) => CASE_ACTORS.has(action.actor) && caseDesk(action) === desk)
+    .filter((action) => !ids || ids.has(action.site_id))
+    .map(actionEntry);
+  const entries = desk === "maintenance" ? rows : latestSteps(rows);
+  return entries.sort((a, b) => {
     const rank = Number(open(b.status)) - Number(open(a.status));
     if (rank) return rank;
     return b.ts.localeCompare(a.ts);
@@ -745,9 +752,24 @@ function paintTimers() {
 
 setInterval(paintTimers, 1000);
 
+function stepText(item) {
+  const estimate = item.estimate_min ? `${item.estimate_min}m ` : "";
+  return `${item.stage || "step"} ${estimate}${item.result || ""}`.trim();
+}
+
+function stepList(payload) {
+  const steps = (payload || {}).escalation || [];
+  if (!steps.length) return "";
+  return `<ol class="steps">${steps.map((item) => {
+    const when = escapeHtml((item.ts || "").slice(11, 19));
+    const who = escapeHtml(whoLabel(item.actor));
+    return `<li class="step"><span>${when}</span><span>${who}</span><b>${escapeHtml(stepText(item))}</b></li>`;
+  }).join("")}</ol>`;
+}
+
 function caseCard(entry, opts = {}) {
   const status = entry.status || "";
-  const named = WHO[entry.actor] || entry.actor || "";
+  const named = whoLabel(entry.actor);
   const who = opts.desk && (entry.actor === opts.desk || entry.actor === "sim") ? "" : named;
   const open = status === "pending" || status === "active";
   const clock = open && entry.ends_at
@@ -761,18 +783,16 @@ function caseCard(entry, opts = {}) {
     const payload = entry.payload || {};
     const chart = escapeHtml(payload.chart_id || "");
     const estimate = payload.estimate_min ? `<span class="case-est">est ${payload.estimate_min}m</span>` : "";
-    const whoLine = named ? escapeHtml(named) : "";
-    const trail = (payload.escalation || [])
-      .map((item) => `${item.stage} ${item.estimate_min}m ${item.result}`)
-      .join(" · ");
-    const foot = [whoLine, trail].filter(Boolean).join(" · ");
+    const steps = stepList(payload);
+    const whoLine = !steps && named ? `<span class="escalation">${escapeHtml(named)}</span>` : "";
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
       ${pill || `<span class="status">case</span>`}
       <span class="alert-id">${escapeHtml(entry.site)}</span>
       ${timer}
       <span class="case-step">${escapeHtml(entry.title)}</span>
       ${estimate}
-      ${foot ? `<span class="escalation">${foot}</span>` : ""}
+      ${whoLine}
+      ${steps}
     </button>`;
   }
   const site = opts.site === false
@@ -782,13 +802,11 @@ function caseCard(entry, opts = {}) {
   const bits = [site, whoHtml, timer].filter(Boolean);
   const meta = bits.join(`<span> · </span>`);
   const hit = opts.site === false ? "" : ` data-site="${escapeHtml(entry.site)}"`;
-  const trail = ((entry.payload || {}).escalation || [])
-    .map((item) => `<p class="escalation">${escapeHtml(`${item.stage} ${item.estimate_min}m ${item.result}`)}</p>`)
-    .join("");
+  const steps = stepList(entry.payload);
   return `<article class="case status-${escapeHtml(status)}"${hit}>
       <div class="case-head"><b class="case-action">${escapeHtml(entry.title)}</b>${pill}</div>
       ${meta ? `<p class="case-meta">${meta}</p>` : ""}
-      ${trail}
+      ${steps}
     </article>`;
 }
 
@@ -1105,11 +1123,43 @@ function resolveNote(site, chartId) {
   return `<p class="note resolve${hot}">${text}</p>`;
 }
 
+const BOX_CHARTS = {
+  grid: ["disco_meter_delta"],
+  disco: ["disco_voltage", "frequency"],
+  panel: [],
+  base: ["soc_tracking", "base_temp"],
+};
+
 function decisionFooter(site) {
-  const openActions = (site.actions || []).filter((row) => row.status === "pending" || row.status === "active");
-  const steps = latestSteps(openActions.map(actionEntry));
-  if (!steps.length) return "";
-  return `<div class="cases">${steps.map((entry) => caseCard(entry, { site: false })).join("")}</div>`;
+  const charts = BOX_CHARTS[component] || [];
+  const actions = site.actions || [];
+  const tickets = actions
+    .filter((action) => action.kind === "scheduled_service")
+    .filter((action) => {
+      const chart = (action.payload || {}).chart_id || "";
+      if (charts.includes(chart)) return true;
+      return component === "base" && !chart;
+    })
+    .map(actionEntry);
+  const ticketIds = new Set(tickets.map((entry) => entry.id));
+  const openOther = latestSteps(
+    actions
+      .filter((action) => (action.status === "pending" || action.status === "active") && !ticketIds.has(action.id))
+      .filter((action) => {
+        const chart = (action.payload || {}).chart_id;
+        if (chart) return false;
+        return action.kind !== "scheduled_service" || component === "base";
+      })
+      .map(actionEntry),
+  );
+  const open = (status) => status === "pending" || status === "active";
+  const entries = [...tickets, ...openOther].sort((a, b) => {
+    const rank = Number(open(b.status)) - Number(open(a.status));
+    if (rank) return rank;
+    return b.ts.localeCompare(a.ts);
+  });
+  if (!entries.length) return "";
+  return `<div class="cases">${entries.map((entry) => caseCard(entry, { site: false })).join("")}</div>`;
 }
 
 function simControls(site) {
@@ -1214,7 +1264,8 @@ function metricRow(label, text, chartId, charts) {
 }
 
 function chartCard(chart) {
-  const status = chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ");
+  const shown = (chart.rules || []).filter((rule) => rule !== "seven_same_side");
+  const status = chart.in_control ? (chart.warning ? "watch" : "in control") : shown.join(", ");
   const tone = chart.in_control === false ? "flag" : chart.warning ? "watch" : "muted";
   const resolution = chart.alarm && chart.action ? `<p class="action">${chart.action}</p>` : "";
   return `<div class="chart open" id="chart-${chart.chart_id}">
@@ -1706,20 +1757,35 @@ function ingestDecisions(data) {
       key: `call:${call.ts}:${call.who}:${call.signal}:${why}`,
       ts: call.ts || "",
       time: (call.ts || "").slice(11, 19),
-      who: call.who || "rules",
+      who: whoLabel(call.who || "rules"),
       site: "",
       text,
     });
   }
   for (const action of data.actions || []) {
     if (!CASE_ACTORS.has(action.actor)) continue;
-    const why = (((action.payload || {}).because || []).map((item) => item.line).filter(Boolean))[0] || "";
+    const steps = (action.payload || {}).escalation || [];
     const title = decisionLabel(action);
+    if (steps.length) {
+      steps.forEach((step, index) => {
+        const actor = step.actor || action.actor;
+        incoming.push({
+          key: `act:${action.id}:step:${index}:${step.result}:${actor}`,
+          ts: step.ts || action.ts || "",
+          time: (step.ts || action.ts || "").slice(11, 19),
+          who: whoLabel(actor),
+          site: action.site_id || "",
+          text: `${title} · ${stepText(step)}`,
+        });
+      });
+      continue;
+    }
+    const why = (((action.payload || {}).because || []).map((item) => item.line).filter(Boolean))[0] || "";
     incoming.push({
-      key: `act:${action.id || `${action.site_id}:${action.ts}:${action.kind}`}`,
+      key: `act:${action.id || `${action.site_id}:${action.ts}:${action.kind}`}:${action.status}`,
       ts: action.ts || "",
       time: (action.ts || "").slice(11, 19),
-      who: WHO[action.actor] || action.actor || "",
+      who: whoLabel(action.actor),
       site: action.site_id || "",
       text: why && !title.includes(why) ? `${title} · ${why}` : title,
     });

@@ -34,13 +34,15 @@ At 3000 batteries the old single payload would have been tens of megabytes, beca
 
 The state is a filled outline from `web/geo.js`, with longitude compressed by `cos(31°)` so Texas is not stretched.
 
-Every battery is one dot, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, grey holding, red when a control chart is out of limits. The whole fleet is a single instanced draw call, with position and colour on the instance, so 3000 units cost about as much as one. A flagged unit gets a red ring; the selected unit gets a pale one.
+Every battery is one dot, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, green holding, red when a control chart is out of limits. Push and pull are drawn larger than hold, so the units that moved this tick read at a glance and the idle majority stays quiet. The whole fleet is a single instanced draw call, with position and colour on the instance, so 3000 units cost about as much as one. A flagged unit gets a red ring; the selected unit gets a pale one.
+
+Left-drag orbits the camera, the wheel zooms, and right-drag pans the orbit target. The target stays inside a box around the state, so a long drag cannot lose Texas.
 
 Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 
 Two kinds of arc are drawn, and they mean different things:
 
-- **Exception arcs** connect a flagged battery, or the selected one, to its metro hub. One arc per battery would be a hairball at this scale and would say nothing, so arcs are reserved for the units that need a person. The arc takes the unit's colour.
+- **Exception arcs** connect the selected battery to its metro hub. One arc per battery would be a hairball at this scale, and one per flagged unit reads as noise; the red rings already mark those. The arc takes the unit's colour.
 - **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between metro hubs, because ERCOT data does not support that topology.
 
 Choosing a maintenance family in the side panel dims every battery that is not out of limits in that family, so the map answers one question at a time. The side panel is an exception queue and a metro list rather than a roster of every unit; clicking a metro flies the camera to it.

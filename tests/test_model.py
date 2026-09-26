@@ -1,3 +1,4 @@
+import math
 import random
 import unittest
 from datetime import datetime
@@ -14,6 +15,9 @@ from gridsim.fleet.policy import choose_signal
 from gridsim.fleet.simulate import (
     COMPONENTS,
     DEMO_FAULTS,
+    EXTRAS_PER_KIND,
+    FAULT_KINDS,
+    inside_texas,
     OBSERVATION_FIELDS,
     apportion,
     build_sites,
@@ -215,15 +219,41 @@ class ScaleTests(unittest.TestCase):
         self.assertGreater(summary["Dallas"], summary["Victoria"])
         self.assertGreater(len(summary), 15)
 
-    def test_units_land_inside_texas_and_spread_around_the_metro(self):
+    def test_units_land_inside_texas_and_cluster_by_neighborhood(self):
         sites = build_sites(fleet_size=3000)
         for site in sites:
-            self.assertTrue(25.5 <= site["lat"] <= 36.6, site)
-            self.assertTrue(-106.7 <= site["lon"] <= -93.4, site)
+            self.assertTrue(inside_texas(site["lat"], site["lon"]), site)
         austin = [site for site in sites if site["metro"] == "austin"]
         centre = sum(1 for site in austin if abs(site["lat"] - 30.2672) < 0.05)
-        # A Rayleigh radius puts most units in the suburbs, not on the city centre.
+        # Neighborhoods sit in the suburbs. Downtown is not where the roofs are.
         self.assertLess(centre / len(austin), 0.2)
+        span = max(site["lat"] for site in austin) - min(site["lat"] for site in austin)
+        self.assertGreater(span, 0.12)
+        self.assertLess(span, 0.9)
+        # Houses in a subdivision are neighbours, not scattered across the metro.
+        sample = austin[::25]
+        nearest = []
+        for site in sample:
+            nearest.append(
+                min(
+                    math.hypot(site["lat"] - other["lat"], (site["lon"] - other["lon"]) * 0.86)
+                    for other in austin
+                    if other is not site
+                )
+            )
+        nearest.sort()
+        self.assertLess(nearest[len(nearest) // 2], 0.03)
+
+    def test_only_a_few_faults_of_each_kind(self):
+        sites = build_sites(fleet_size=3000)
+        faulted = [site for site in sites if site["fault"]]
+        self.assertEqual(len(faulted), len(DEMO_FAULTS) + EXTRAS_PER_KIND * len(FAULT_KINDS))
+        counts = {kind: 0 for kind in FAULT_KINDS}
+        for site in faulted:
+            for kind in site["fault"]:
+                counts[kind] += 1
+        for kind in FAULT_KINDS:
+            self.assertEqual(counts[kind], EXTRAS_PER_KIND + 1)
 
     def test_placement_is_stable_across_rebuilds(self):
         first = {site["id"]: (site["lat"], site["lon"]) for site in build_sites(fleet_size=800)}
@@ -310,7 +340,8 @@ class ScaleTests(unittest.TestCase):
         totals = rollup(sites, "2026-09-25T19:45:00-05:00")
         faulted = sum(1 for site in sites if site["fault"])
         self.assertLessEqual(totals["alarms"], faulted)
-        self.assertLess(totals["alarms"] / len(sites), 0.05)
+        self.assertLess(totals["alarms"] / len(sites), 0.02)
+        self.assertLessEqual(faulted, len(DEMO_FAULTS) + EXTRAS_PER_KIND * len(FAULT_KINDS))
 
 
 if __name__ == "__main__":

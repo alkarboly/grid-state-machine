@@ -79,4 +79,4 @@ These four batteries are the demo of four different maintenance kinds, always pr
 | `sat-0001` | `soc_tracking` | Reported state of charge is 2.5 kWh above the coulomb count |
 | `dal-0002` | `dispatch_response` | The battery delivers 55% of the commanded kilowatts |
 
-Every other unit draws a fault at `FAULT_RATE` from the same five kinds with a randomised magnitude, so the exception queue is populated across the whole map rather than in four hand-picked places. See [simulation.md](simulation.md).
+Two further cabinets of each kind are spaced through the rest of the fleet, 14 faulted cabinets in all. Everyone else is healthy. See [simulation.md](simulation.md).

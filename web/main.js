@@ -3,9 +3,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LON_SCALE, ORIGIN, TEXAS } from "/geo.js";
 
 const COLOR = {
-  pull: 0x8eb6d9,
-  push: 0xe0a15a,
-  hold: 0x8a9086,
+  pull: 0x4c9be8,
+  push: 0xf0a03a,
+  hold: 0x9dbe92,
   alarm: 0xe15b4c,
   hub: 0x7b7568,
   land: 0x181a20,
@@ -33,7 +33,13 @@ const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 400);
 camera.position.set(0, 16, 11.5);
 
 const controls = new OrbitControls(camera, canvas);
-controls.enablePan = false;
+// Right-drag moves the orbit target. Left-drag still orbits, the wheel still zooms.
+controls.enablePan = true;
+controls.screenSpacePanning = true;
+controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 1.2;
@@ -204,7 +210,7 @@ function focused(site) {
 }
 
 function unitRadius(count) {
-  return Math.max(0.008, Math.min(0.026, 0.62 / Math.sqrt(Math.max(count, 1))));
+  return Math.max(0.008, Math.min(0.026, 0.78 / Math.sqrt(Math.max(count, 1))));
 }
 
 function arcCurve(from, to) {
@@ -223,9 +229,13 @@ function renderUnits(data) {
   for (const site of data.sites) {
     const point = project(site.lat, site.lon, NODE_Y);
     const dim = !focused(site);
-    TINT.setHex(COLOR[modeOf(site)]);
+    const mode = modeOf(site);
+    // Hold is the quiet majority. Push and pull are drawn larger so they read
+    // at state scale instead of disappearing into the green.
+    const scale = radius * (mode === "hold" ? 1 : mode === "alarm" ? 1.35 : 2.15);
+    TINT.setHex(COLOR[mode]);
     if (dim) TINT.lerp(LAND, 0.78);
-    MATRIX.makeScale(radius, 1, radius).setPosition(point);
+    MATRIX.makeScale(scale, 1, scale).setPosition(point);
     units.setMatrixAt(drawn, MATRIX);
     units.setColorAt(drawn, TINT);
     drawn += 1;
@@ -403,7 +413,7 @@ function renderPanel(data) {
 
   panel.innerHTML = `
     <h2>Fleet</h2>
-    <div class="sub">${fmt(fleet.units)} batteries · ${fmt(fleet.pushing)} pushing · ${fmt(fleet.pulling)} pulling · ${fmt(fleet.holding)} holding</div>
+    <div class="sub">${fmt(fleet.units)} batteries · <span class="key push"><i></i>${fmt(fleet.pushing)} pushing</span> · <span class="key pull"><i></i>${fmt(fleet.pulling)} pulling</span> · <span class="key hold"><i></i>${fmt(fleet.holding)} holding</span></div>
     <div class="chips">${chips}</div>
     <div class="group">
       <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>

@@ -18,13 +18,15 @@ The metro list is ERCOT only. El Paso is in WECC, Amarillo is in SPP, and Beaumo
 
 ### Where inside a metro
 
-Radius from the metro centre is a Rayleigh draw with the anchor's `radius_km` as its scale, capped at 2.8 scales. Density therefore peaks a suburb out rather than downtown, which is where single-family roofs are. The draw is then stretched by `stretch` along an axis `axis_deg` east of north, so the Rio Grande Valley runs east-west and Austin runs up and down I-35.
+A metro is a handful of neighborhoods, not a smooth ellipse. Big metros get up to eight centres; a small town gets one. Each centre is a Rayleigh draw at about 0.85 of `radius_km`, stretched by `stretch` along `axis_deg` east of north, so the clumps follow the built-up area: the Valley runs east-west, Austin runs up and down I-35. Houses then scatter a few kilometres around their centre, which is a district rather than a downtown or a uniform fog.
+
+Any draw that falls outside the Texas outline in `web/geo.js` is rejected. That outline is the same one the map draws, so a battery cannot sit in the Gulf or past the border. Coastal metros lose the samples that would have landed in the water, and the rest stay on the land side.
 
 These are modelled addresses. They are not customer locations and they are not tied to a real feeder.
 
 ### Faults
 
-Four named batteries carry scripted faults, one per maintenance kind, listed in [control-charts.md](control-charts.md). Every other unit draws a fault at `FAULT_RATE`, 1.5%, from the same five kinds with a randomised magnitude. At 3000 units that is roughly 50 units in some kind of trouble at any moment.
+Four named batteries carry scripted faults, one per maintenance kind, listed in [control-charts.md](control-charts.md). Two further cabinets of each of the five kinds (`temp_c`, `voltage_v`, `soc_bias_kwh`, `response_scale`, `disco_bias_kw`) are spaced through the rest of the fleet. That is 14 cabinets in total. Everyone else is healthy, so the map can show each failure mode without turning into a field of alarms.
 
 ## Home load
 

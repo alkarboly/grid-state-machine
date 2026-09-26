@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from pathlib import Path
 
 from gridsim import config
@@ -20,15 +21,17 @@ HOUR_MEAN_KW = [
     4.20, 3.70, 2.90, 2.20, 1.70, 1.35,
 ]
 
-# Named demo faults, one per maintenance kind. The site row keeps the healthy
-# baseline; the tick applies these. Every other unit draws a fault at FAULT_RATE.
+# Named demo faults, one cabinet per maintenance kind. The site row keeps the
+# healthy baseline; the tick applies these. A few more of each kind are placed
+# across the fleet so every failure mode is visible without flooding the map.
 DEMO_FAULTS = {
     "aus-0003": {"temp_c": 49.0},
     "hou-0002": {"voltage_v": 226.0, "disco_bias_kw": 1.4},
     "sat-0001": {"soc_bias_kwh": 2.5},
     "dal-0002": {"response_scale": 0.55},
 }
-FAULT_RATE = 0.015
+FAULT_KINDS = ("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw")
+EXTRAS_PER_KIND = 2
 
 KM_PER_DEG_LAT = 110.574
 TAU = 2.0 * math.pi
@@ -91,27 +94,100 @@ def apportion(total: int, weights: list[float], minimum: int = 2) -> list[int]:
     return [minimum + count for count in counts]
 
 
-def _place(anchor: dict, rng: random.Random) -> tuple[float, float]:
-    """Rayleigh radius, so density peaks in the suburbs rather than downtown."""
-    scale = float(anchor.get("radius_km", 15.0))
-    radius = min(scale * math.sqrt(-2.0 * math.log(1.0 - rng.random())), scale * 2.8)
+def _texas_ring() -> list[tuple[float, float]]:
+    """The same outline the map draws, so a battery cannot sit past the border."""
+    text = (config.WEB / "geo.js").read_text(encoding="utf-8")
+    block = text.split("export const TEXAS = [", 1)[1].split("];", 1)[0]
+    return [(float(lat), float(lon)) for lat, lon in re.findall(r"\[\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\]", block)]
+
+
+_TEXAS: list[tuple[float, float]] | None = None
+
+
+def inside_texas(lat: float, lon: float) -> bool:
+    """Even-odd ray cast against the map outline. The Gulf fails this."""
+    global _TEXAS
+    if _TEXAS is None:
+        _TEXAS = _texas_ring()
+    inside = False
+    previous_lat, previous_lon = _TEXAS[-1]
+    for point_lat, point_lon in _TEXAS:
+        if (point_lon > lon) != (previous_lon > lon):
+            edge = (previous_lat - point_lat) * (lon - point_lon) / (previous_lon - point_lon) + point_lat
+            if lat < edge:
+                inside = not inside
+        previous_lat, previous_lon = point_lat, point_lon
+    return inside
+
+
+def _shift(lat: float, lon: float, north_km: float, east_km: float) -> tuple[float, float]:
+    return (
+        lat + north_km / KM_PER_DEG_LAT,
+        lon + east_km / (KM_PER_DEG_LAT * math.cos(math.radians(lat))),
+    )
+
+
+def _km(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
+    north = (lat_a - lat_b) * KM_PER_DEG_LAT
+    east = (lon_a - lon_b) * KM_PER_DEG_LAT * math.cos(math.radians((lat_a + lat_b) / 2.0))
+    return math.hypot(north, east)
+
+
+def _rayleigh(anchor: dict, rng: random.Random, scale_km: float, cap: float) -> tuple[float, float]:
+    radius = min(scale_km * math.sqrt(-2.0 * math.log(1.0 - rng.random())), scale_km * cap)
     angle = rng.random() * TAU
     axis = math.radians(float(anchor.get("axis_deg", 0.0)))
     major = radius * math.cos(angle) * float(anchor.get("stretch", 1.0))
     minor = radius * math.sin(angle)
     east = major * math.cos(axis) - minor * math.sin(axis)
     north = major * math.sin(axis) + minor * math.cos(axis)
-    lat = anchor["lat"] + north / KM_PER_DEG_LAT
-    lon = anchor["lon"] + east / (KM_PER_DEG_LAT * math.cos(math.radians(anchor["lat"])))
-    return round(lat, 5), round(lon, 5)
+    return _shift(anchor["lat"], anchor["lon"], north, east)
 
 
-def _fault(site_id: str, rng: random.Random, voltage_center: float) -> dict:
-    if site_id in DEMO_FAULTS:
-        return dict(DEMO_FAULTS[site_id])
-    if rng.random() >= FAULT_RATE:
-        return {}
-    kind = rng.choice(("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw"))
+def _neighborhoods(anchor: dict, count: int, rng: random.Random) -> list[tuple[float, float]]:
+    """A handful of subdivision centres in the built-up area, not one smooth cloud.
+
+    Single-family roofs clump by neighborhood and follow the metro's long axis.
+    Centres that fall in the Gulf or past the border are dropped.
+    """
+    wanted = 1 if count < 25 else min(8, max(2, round(count / 110)))
+    scale = float(anchor.get("radius_km", 15.0)) * 0.85
+    gap = max(4.0, float(anchor.get("radius_km", 15.0)) * 0.22)
+    centers: list[tuple[float, float]] = []
+    for _ in range(wanted * 40):
+        if len(centers) >= wanted:
+            break
+        lat, lon = _rayleigh(anchor, rng, scale, 1.35)
+        if not inside_texas(lat, lon):
+            continue
+        if any(_km(lat, lon, other_lat, other_lon) < gap for other_lat, other_lon in centers):
+            continue
+        centers.append((lat, lon))
+    if centers:
+        return centers
+    lat, lon = float(anchor["lat"]), float(anchor["lon"])
+    if inside_texas(lat, lon):
+        return [(lat, lon)]
+    for step in range(1, 40):
+        share = step / 40.0
+        pulled_lat = lat + (31.0 - lat) * share
+        pulled_lon = lon + (-99.2 - lon) * share
+        if inside_texas(pulled_lat, pulled_lon):
+            return [(pulled_lat, pulled_lon)]
+    return [(31.0, -99.2)]
+
+
+def _place(rng: random.Random, centers: list[tuple[float, float]]) -> tuple[float, float]:
+    """A house inside one neighborhood. Offsets that leave Texas are retried."""
+    centre_lat, centre_lon = centers[int(rng.random() * len(centers))]
+    for _ in range(16):
+        lat, lon = _shift(centre_lat, centre_lon, rng.gauss(0.0, 2.6), rng.gauss(0.0, 2.6))
+        if inside_texas(lat, lon):
+            return round(lat, 5), round(lon, 5)
+    return round(centre_lat, 5), round(centre_lon, 5)
+
+
+def _magnitude(kind: str, rng: random.Random, voltage_center: float) -> dict:
     if kind == "temp_c":
         return {"temp_c": round(44.0 + rng.random() * 9.0, 1)}
     if kind == "voltage_v":
@@ -121,6 +197,27 @@ def _fault(site_id: str, rng: random.Random, voltage_center: float) -> dict:
     if kind == "response_scale":
         return {"response_scale": round(0.35 + rng.random() * 0.35, 2)}
     return {"disco_bias_kw": round(0.8 + rng.random() * 1.2, 2)}
+
+
+def _scatter_faults(sites: list[dict]) -> None:
+    """Two further cabinets of each kind, spaced through the fleet."""
+    pool = [site for site in sites if not site["fault"]]
+    if not pool:
+        return
+    slots = EXTRAS_PER_KIND * len(FAULT_KINDS)
+    stride = max(1, len(pool) // (slots + 1))
+    index = stride // 2
+    used: set[str] = set()
+    for kind in FAULT_KINDS:
+        for _ in range(EXTRAS_PER_KIND):
+            for _attempt in range(len(pool)):
+                site = pool[index % len(pool)]
+                index += stride
+                if site["id"] in used:
+                    continue
+                used.add(site["id"])
+                site["fault"] = _magnitude(kind, random.Random(site["id"]), site["voltage_center_v"])
+                break
 
 
 def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None) -> list[dict]:
@@ -133,11 +230,12 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
     counts = apportion(total, weights)
     sites = []
     for anchor, count in zip(anchors, counts):
+        centers = _neighborhoods(anchor, count, random.Random("nbh:" + anchor["id"]))
         for number in range(1, count + 1):
             site_id = f"{anchor['prefix']}-{number:04d}"
             # Seeded per unit, so a restart puts every battery back where it was.
             profile = random.Random(site_id)
-            lat, lon = _place(anchor, profile)
+            lat, lon = _place(profile, centers)
             voltage_center = round(237.0 + profile.random() * 6.0, 2)
             sites.append(
                 {
@@ -159,7 +257,7 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     # the dispatch queue. Together they decide who answers a call.
                     "reserve_frac": round(config.SOC_RESERVE + profile.random() * 0.25, 3),
                     "duty": round(profile.random(), 3),
-                    "fault": _fault(site_id, profile, voltage_center),
+                    "fault": dict(DEMO_FAULTS[site_id]) if site_id in DEMO_FAULTS else {},
                     "physical_soc_kwh": round(
                         config.BASE_CAPACITY_KWH * (0.22 + profile.random() * 0.70), 3
                     ),
@@ -168,6 +266,7 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     "chart_history": {},
                 }
             )
+    _scatter_faults(sites)
     return sites
 
 

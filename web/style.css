@@ -4,9 +4,9 @@
   --ink: #e7e1d6;
   --muted: #8d887f;
   --line: #262931;
-  --pull: #8eb6d9;
-  --push: #e0a15a;
-  --hold: #8a9086;
+  --pull: #4c9be8;
+  --push: #f0a03a;
+  --hold: #9dbe92;
   --alarm: #e15b4c;
   --watch: #d8b46a;
 }
@@ -89,6 +89,11 @@ h2 {
 
 .sub, .muted { color: var(--muted); }
 .sub { font-size: 12px; margin-top: 3px; }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.key i { width: 7px; height: 7px; border-radius: 50%; }
+.key.push i { background: var(--push); }
+.key.pull i { background: var(--pull); }
+.key.hold i { background: var(--hold); }
 
 .mode {
   margin: 12px 0 4px;

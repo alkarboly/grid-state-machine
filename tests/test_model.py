@@ -11,10 +11,27 @@ from gridsim.ercot.normalize import (
 )
 from gridsim.fleet.charts import CHARTS, evaluate
 from gridsim.fleet.policy import choose_signal
-from gridsim.fleet.simulate import COMPONENTS, OBSERVATION_FIELDS, build_sites, tick_sites
+from gridsim.fleet.simulate import (
+    COMPONENTS,
+    DEMO_FAULTS,
+    OBSERVATION_FIELDS,
+    apportion,
+    build_sites,
+    load_anchors,
+    metro_summary,
+    tick_sites,
+)
+from gridsim.state import persist_sample, rollup
 from gridsim.timeutil import parse_ercot_ts
 
 CENTRAL = ZoneInfo("America/Chicago")
+
+# Small enough to stay fast, large enough that every demo fault id exists.
+FLEET_SIZE = 600
+
+
+def FLEET():
+    return build_sites(fleet_size=FLEET_SIZE)
 
 
 def _grid(percentile: float) -> dict:
@@ -126,25 +143,25 @@ class FleetTests(unittest.TestCase):
 
     def test_tick_writes_every_component_and_flags_faults(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
-        sites, logs, observations, points = tick_sites(build_sites(), _grid(0.9), now, 0.0, random.Random(1))
-        self.assertEqual(len(sites), 36)
+        sites, logs, observations, points = tick_sites(FLEET(), _grid(0.9), now, 0.0, random.Random(1))
+        self.assertEqual(len(sites), FLEET_SIZE)
         self.assertEqual({row["component"] for row in logs}, set(COMPONENTS))
         by_id = {site["id"]: site for site in sites}
-        self.assertTrue(by_id["aus-03"]["alarm"])
-        self.assertGreater(by_id["aus-03"]["metrics"]["base"]["temp_c"], 45)
-        self.assertTrue(by_id["hou-02"]["alarm"])
-        self.assertEqual(by_id["hou-02"]["metrics"]["disco"]["voltage_v"], 226.0)
-        pushed = by_id["aus-01"]
-        self.assertEqual(pushed["signal"], "push")
+        self.assertTrue(by_id["aus-0003"]["alarm"])
+        self.assertGreater(by_id["aus-0003"]["metrics"]["base"]["temp_c"], 45)
+        self.assertTrue(by_id["hou-0002"]["alarm"])
+        self.assertEqual(by_id["hou-0002"]["metrics"]["disco"]["voltage_v"], 226.0)
+        pushed = next(site for site in sites if site["state"] == "push")
+        self.assertEqual(pushed["metrics"]["grid"]["signal"], "push")
         self.assertGreater(pushed["metrics"]["base"]["discharge_kw"], 0)
         self.assertEqual(pushed["metrics"]["disco"]["contactor"], "closed")
         for component, metrics in pushed["metrics"].items():
             self.assertIsInstance(metrics, dict)
             self.assertTrue(metrics, component)
 
-        charging, _logs, _obs, _points = tick_sites(build_sites(), _grid(0.1), now, 0.25, random.Random(2))
-        home = {site["id"]: site for site in charging}["aus-01"]
-        self.assertEqual(home["signal"], "pull")
+        charging, _logs, _obs, _points = tick_sites(FLEET(), _grid(0.1), now, 0.25, random.Random(2))
+        home = next(site for site in charging if site["state"] == "pull")
+        self.assertEqual(home["metrics"]["grid"]["signal"], "pull")
         self.assertGreater(home["metrics"]["base"]["charge_kw"], 0)
         self.assertGreater(home["metrics"]["meter"]["energy_in_kwh"], 0)
         net = home["metrics"]["grid"]["in_kw"] - home["metrics"]["grid"]["out_kw"]
@@ -158,30 +175,105 @@ class FleetTests(unittest.TestCase):
         components = {spec["component"] for spec in CHARTS}
         self.assertTrue(components <= set(COMPONENTS), components - set(COMPONENTS))
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
-        _sites, _logs, _obs, points = tick_sites(build_sites(), _grid(0.5), now, 0.0, random.Random(4))
+        _sites, _logs, _obs, points = tick_sites(FLEET(), _grid(0.5), now, 0.0, random.Random(4))
         self.assertTrue(all(point["component"] in COMPONENTS for point in points))
 
     def test_each_battery_has_its_own_baseline(self):
-        scales = {site["load_scale"] for site in build_sites()}
-        temps = {site["temp_center_c"] for site in build_sites()}
-        self.assertGreater(len(scales), 20)
-        self.assertGreater(len(temps), 20)
+        sites = FLEET()
+        self.assertGreater(len({site["load_scale"] for site in sites}), 20)
+        self.assertGreater(len({site["temp_center_c"] for site in sites}), 20)
+        self.assertGreater(len({site["duty"] for site in sites}), 20)
+        self.assertGreater(len({site["reserve_frac"] for site in sites}), 20)
 
     def test_faults_hit_different_chart_families(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
-        sites, _logs, _obs, _points = tick_sites(build_sites(), _grid(0.9), now, 0.0, random.Random(3))
+        sites, _logs, _obs, _points = tick_sites(FLEET(), _grid(0.9), now, 0.0, random.Random(3))
         by_id = {site["id"]: site for site in sites}
 
         def rules(site_id, chart_id):
             chart = next(item for item in by_id[site_id]["charts"] if item["chart_id"] == chart_id)
             return chart["rules"]
 
-        self.assertIn("beyond_3sigma", rules("aus-03", "base_temp"))
-        self.assertIn("beyond_3sigma", rules("hou-02", "disco_voltage"))
-        self.assertIn("beyond_3sigma", rules("hou-02", "disco_meter_delta"))
-        self.assertIn("beyond_3sigma", rules("sat-01", "soc_tracking"))
-        self.assertIn("beyond_3sigma", rules("dal-02", "dispatch_response"))
-        self.assertTrue(by_id["aus-01"]["charts"][1]["in_control"])
+        self.assertIn("beyond_3sigma", rules("aus-0003", "base_temp"))
+        self.assertIn("beyond_3sigma", rules("hou-0002", "disco_voltage"))
+        self.assertIn("beyond_3sigma", rules("hou-0002", "disco_meter_delta"))
+        self.assertIn("beyond_3sigma", rules("sat-0001", "soc_tracking"))
+        self.assertIn("beyond_3sigma", rules("dal-0002", "dispatch_response"))
+        healthy = next(site for site in sites if not site["fault"])
+        self.assertTrue(all(chart["in_control"] for chart in healthy["charts"]))
+
+
+class ScaleTests(unittest.TestCase):
+    def test_counts_follow_metro_weight_and_sum_to_the_fleet(self):
+        self.assertEqual(sum(apportion(3000, [10, 5, 1])), 3000)
+        self.assertEqual(apportion(300, [1, 1, 1]), [100, 100, 100])
+        sites = build_sites(fleet_size=3000)
+        self.assertEqual(len(sites), 3000)
+        summary = {item["name"]: item["units"] for item in metro_summary(load_anchors(), sites)}
+        self.assertGreater(summary["Austin"], summary["Houston"])
+        self.assertGreater(summary["Houston"], summary["Dallas"])
+        self.assertGreater(summary["Dallas"], summary["Victoria"])
+        self.assertGreater(len(summary), 15)
+
+    def test_units_land_inside_texas_and_spread_around_the_metro(self):
+        sites = build_sites(fleet_size=3000)
+        for site in sites:
+            self.assertTrue(25.5 <= site["lat"] <= 36.6, site)
+            self.assertTrue(-106.7 <= site["lon"] <= -93.4, site)
+        austin = [site for site in sites if site["metro"] == "austin"]
+        centre = sum(1 for site in austin if abs(site["lat"] - 30.2672) < 0.05)
+        # A Rayleigh radius puts most units in the suburbs, not on the city centre.
+        self.assertLess(centre / len(austin), 0.2)
+
+    def test_placement_is_stable_across_rebuilds(self):
+        first = {site["id"]: (site["lat"], site["lon"]) for site in build_sites(fleet_size=800)}
+        second = {site["id"]: (site["lat"], site["lon"]) for site in build_sites(fleet_size=800)}
+        self.assertEqual(first, second)
+
+    def test_persist_sample_holds_the_demo_faults_and_caps_the_write_rate(self):
+        sites = build_sites(fleet_size=3000)
+        sample = persist_sample(sites, 60)
+        self.assertTrue(set(DEMO_FAULTS) <= sample)
+        self.assertLessEqual(len(sample), 64)
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        _sites, logs, observations, points = tick_sites(
+            sites, _grid(0.9), now, 0.0, random.Random(5), persist=sample
+        )
+        self.assertEqual(len(observations), len(sample))
+        self.assertEqual(len(logs), len(sample) * len(COMPONENTS))
+        # Sampled units write every chart; everyone else writes only exceptions.
+        extra = [point for point in points if point["site_id"] not in sample]
+        self.assertTrue(extra)
+        self.assertTrue(all(not point["in_control"] for point in extra))
+
+    def test_dispatch_reaches_more_of_the_fleet_as_the_grid_tightens(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+
+        def pushing(percentile):
+            sites, _l, _o, _p = tick_sites(
+                build_sites(fleet_size=1200), _grid(percentile), now, 0.0028, random.Random(6)
+            )
+            return sum(1 for site in sites if site["state"] == "push")
+
+        self.assertGreater(pushing(0.95), pushing(0.78))
+        self.assertGreater(pushing(0.78), 0)
+
+    def test_rollup_totals_match_the_fleet(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        sites, _l, _o, _p = tick_sites(
+            build_sites(fleet_size=1200), _grid(0.9), now, 0.0028, random.Random(7)
+        )
+        totals = rollup(sites, "2026-09-25T19:45:00-05:00")
+        self.assertEqual(totals["units"], 1200)
+        self.assertEqual(totals["pushing"] + totals["pulling"] + totals["holding"], 1200)
+        self.assertEqual(
+            totals["alarms"], sum(1 for site in sites if site["metrics"]["maintenance"]["alarm"])
+        )
+        self.assertAlmostEqual(
+            totals["discharge_kw"],
+            round(sum(site["metrics"]["base"]["discharge_kw"] for site in sites), 2),
+            places=1,
+        )
 
     def test_control_rules(self):
         spec = CHARTS[0]
@@ -193,6 +285,32 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(spike["lcl"], -3.0)
         pair = evaluate(spec, 2.5, 0.0, 1.0, [2.5, 0.0])
         self.assertIn("two_of_three_2sigma", pair["rules"])
+
+    def test_only_a_point_past_the_limits_alarms(self):
+        spec = CHARTS[0]
+        spike = evaluate(spec, 4.0, 0.0, 1.0, [])
+        self.assertTrue(spike["alarm"])
+        # A run rule is a warning, not an alarm. It fires on healthy charts often
+        # enough that alarming on it would flood a fleet-sized map.
+        shift = evaluate(spec, 0.4, 0.0, 1.0, [0.4] * 6)
+        self.assertIn("seven_same_side", shift["rules"])
+        self.assertFalse(shift["in_control"])
+        self.assertFalse(shift["alarm"])
+        self.assertTrue(shift["warning"])
+        calm = evaluate(spec, 0.2, 0.0, 1.0, [])
+        self.assertTrue(calm["in_control"])
+        self.assertFalse(calm["alarm"])
+        self.assertFalse(calm["warning"])
+
+    def test_alarm_rate_stays_near_the_fault_rate(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        sites = build_sites(fleet_size=2000)
+        for seed in (11, 12, 13):
+            sites, _l, _o, _p = tick_sites(sites, _grid(0.9), now, 0.0028, random.Random(seed))
+        totals = rollup(sites, "2026-09-25T19:45:00-05:00")
+        faulted = sum(1 for site in sites if site["fault"])
+        self.assertLessEqual(totals["alarms"], faulted)
+        self.assertLess(totals["alarms"] / len(sites), 0.05)
 
 
 if __name__ == "__main__":

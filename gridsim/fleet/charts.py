@@ -59,7 +59,12 @@ CHARTS = (
 
 
 def evaluate(spec: dict, measured: float, expected: float, sigma: float, history: list[float]) -> dict:
-    """Chart the residual measured - expected. Limits are ±3 sigma around 0."""
+    """Chart the residual measured - expected. Limits are ±3 sigma around 0.
+
+    `alarm` and `warning` are severity; `in_control` and `rules` are the statistics.
+    They differ on purpose: a run rule fires on about 1.6% of healthy charts, which
+    is noise on one battery and hundreds of false alarms across a fleet.
+    """
     value = measured - expected
     sigma = sigma if sigma else spec["sigma"]
     z = value / sigma if sigma else 0.0
@@ -93,5 +98,8 @@ def evaluate(spec: dict, measured: float, expected: float, sigma: float, history
         "z": round(z, 3),
         "rules": rules,
         "in_control": not rules,
-        "warning": abs(z) >= WARN_SIGMA and not rules,
+        # Only a point outside the limits raises an alarm. The run rules are
+        # advisory, because across a fleet of charts they fire on their own.
+        "alarm": "beyond_3sigma" in rules,
+        "warning": bool(rules) if rules else abs(z) >= WARN_SIGMA,
     }

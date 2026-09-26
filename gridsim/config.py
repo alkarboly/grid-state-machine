@@ -16,6 +16,11 @@ SOC_CEILING = 0.95
 ETA = 0.96
 SIM_TIME_SCALE = float(os.environ.get("SIM_TIME_SCALE", "1"))
 
+# Total simulated batteries, apportioned across the metros in data/anchors.json.
+FLEET_SIZE = int(os.environ.get("FLEET_SIZE", "3000"))
+# Batteries whose full component contract is written every tick. See docs/database.md.
+PERSIST_SAMPLE = int(os.environ.get("PERSIST_SAMPLE", "60"))
+
 ERCOT_USERNAME = os.environ.get("ERCOT_USERNAME", "").strip()
 ERCOT_PASSWORD = os.environ.get("ERCOT_PASSWORD", "").strip()
 ERCOT_SUBSCRIPTION_KEY = os.environ.get("ERCOT_SUBSCRIPTION_KEY", "").strip()

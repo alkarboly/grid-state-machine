@@ -23,18 +23,29 @@ ERCOT dashboard JSON
 
 There is no login. The map and `/api/scene` are the entry points. Official ERCOT credentials stay in the environment and are never returned by the API.
 
+## Two API shapes
+
+At 3000 batteries the old single payload would have been tens of megabytes, because it carried every component's metrics and every chart's history for every unit. So the API is split by what each view needs:
+
+- `GET /api/scene` is the map. One small row per battery — id, metro, position, state, state of charge, and the flagged families when there are any — plus the metro list, the fleet rollup, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
+- `GET /api/site/{id}` is one battery in full: every component's metrics, every chart with its residual history, and the unit's own profile. A few kilobytes, fetched when the modal opens and refreshed while it stays open.
+
 ## Map
 
 The state is a filled outline from `web/geo.js`, with longitude compressed by `cos(31°)` so Texas is not stretched.
 
-Each battery is a node: a dot in the dispatch color, a ring around it filled to state of charge, a red ring when a control chart is out of limits, and a pale ring on the selected one. Nodes sit on two service-territory rings around their city hub, so no two cities overlap and no node hides another. Those rings are layout, not addresses.
+Every battery is one dot, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, grey holding, red when a control chart is out of limits. The whole fleet is a single instanced draw call, with position and colour on the instance, so 3000 units cost about as much as one. A flagged unit gets a red ring; the selected unit gets a pale one.
+
+Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 
 Two kinds of arc are drawn, and they mean different things:
 
-- **Feeder arcs** connect a battery to its city hub. This is the modeled distribution relationship, the same grouping as `load_zone`. The arc takes the battery's dispatch color, so a glance shows which part of the fleet is exporting.
-- **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between city hubs, because ERCOT data does not support that topology.
+- **Exception arcs** connect a flagged battery, or the selected one, to its metro hub. One arc per battery would be a hairball at this scale and would say nothing, so arcs are reserved for the units that need a person. The arc takes the unit's colour.
+- **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between metro hubs, because ERCOT data does not support that topology.
 
-Choosing a maintenance family in the side panel dims every battery whose charts in that family are in control, so the map answers one question at a time.
+Choosing a maintenance family in the side panel dims every battery that is not out of limits in that family, so the map answers one question at a time. The side panel is an exception queue and a metro list rather than a roster of every unit; clicking a metro flies the camera to it.
+
+Hit testing projects all 3000 positions to screen space once per camera move and caches them, so hovering stays smooth.
 
 ## Unit view
 
@@ -45,6 +56,8 @@ The unit view is a one-line diagram of the chain in [contracts.md](contracts.md)
 Every box is a control. Clicking one shows that component's metrics and only the control charts that name it, which is why `component` is part of the chart contract. A box carries a red mark when one of its charts is out of limits and an amber one when a chart is only in warning, so the fault is visible on the hardware before anything is clicked.
 
 Metrics that a chart watches are themselves clickable and open that chart. Clicking a chart header expands it to the measured value, the expected operating point, sigma, and the limits.
+
+The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet.
 
 ## Persistence
 

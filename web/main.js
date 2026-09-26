@@ -14,7 +14,11 @@ const COLOR = {
 };
 
 const FAMILIES = ["all", "measurement", "thermal", "electrical", "energy", "response"];
-const NODE_Y = 0.035;
+const NODE_Y = 0.02;
+const UNIT_CAP = 20000;
+const FLAG_CAP = 3000;
+const LABEL_SHARE = 0.03;
+const LAND = new THREE.Color(COLOR.land);
 
 const canvas = document.getElementById("map");
 const tip = document.getElementById("tip");
@@ -32,7 +36,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.enablePan = false;
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 8;
+controls.minDistance = 1.2;
 controls.maxDistance = 34;
 controls.minPolarAngle = 0.12;
 controls.maxPolarAngle = 1.12;
@@ -40,7 +44,10 @@ controls.target.set(0, 0, 0.4);
 
 let payload = null;
 let selected = null;
+let unitDetail = null;
 let family = "all";
+let screen = null;
+let focusPoint = null;
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -67,7 +74,7 @@ function buildMap() {
   scene.add(border);
 }
 
-function labelSprite(text) {
+function labelSprite(text, share) {
   const size = 256;
   const element = document.createElement("canvas");
   element.width = size;
@@ -84,11 +91,12 @@ function labelSprite(text) {
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
   );
-  sprite.scale.set(1.9, 0.48, 1);
+  const scale = 1.5 + Math.min(0.9, share * 4);
+  sprite.scale.set(scale, scale * 0.25, 1);
   return sprite;
 }
 
-function ring(inner, outer, color, opacity) {
+function flatRing(inner, outer, color, opacity) {
   const mesh = new THREE.Mesh(
     new THREE.RingGeometry(inner, outer, 48),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide }),
@@ -97,12 +105,46 @@ function ring(inner, outer, color, opacity) {
   return mesh;
 }
 
-const nodes = new Map();
-const hubs = new Map();
+buildMap();
+
+// One draw call for the whole fleet. Position and colour ride on the instance.
+const units = new THREE.InstancedMesh(
+  new THREE.CircleGeometry(1, 10).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false }),
+  UNIT_CAP,
+);
+units.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+units.frustumCulled = false;
+units.renderOrder = 3;
+units.count = 0;
+scene.add(units);
+
+const flags = new THREE.InstancedMesh(
+  new THREE.RingGeometry(0.66, 1, 18).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({
+    color: COLOR.alarm,
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+  }),
+  FLAG_CAP,
+);
+flags.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+flags.frustumCulled = false;
+flags.renderOrder = 4;
+flags.count = 0;
+scene.add(flags);
+
+const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
+pick.renderOrder = 5;
+pick.visible = false;
+scene.add(pick);
+
 const arcs = new THREE.LineSegments(
   new THREE.BufferGeometry(),
-  new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8 }),
+  new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.75 }),
 );
+arcs.renderOrder = 2;
 scene.add(arcs);
 
 const constraintArcs = new THREE.LineSegments(
@@ -111,89 +153,58 @@ const constraintArcs = new THREE.LineSegments(
 );
 scene.add(constraintArcs);
 
-buildMap();
-
-function ensureNode(site) {
-  let node = nodes.get(site.id);
-  if (node) return node;
-  const group = new THREE.Group();
-  const core = new THREE.Mesh(
-    new THREE.CircleGeometry(0.026, 20),
-    new THREE.MeshBasicMaterial({ color: COLOR.hold, transparent: true }),
-  );
-  core.rotation.x = -Math.PI / 2;
-  core.userData.id = site.id;
-  const socRing = ring(0.044, 0.062, COLOR.hold, 0.95);
-  const alarmRing = ring(0.078, 0.088, COLOR.alarm, 0.9);
-  const selectRing = ring(0.104, 0.112, 0xe7e1d6, 0.8);
-  group.add(core, socRing, alarmRing, selectRing);
-  scene.add(group);
-  node = { group, core, socRing, alarmRing, selectRing };
-  nodes.set(site.id, node);
-  return node;
-}
-
+// Direction only. The distance scales with how far the metro's units spread.
 const LABEL_OFFSET = {
-  n: [0, -1.0],
-  s: [0, 1.0],
-  e: [1.35, 0],
-  w: [-1.35, 0],
-  sw: [-1.0, 0.72],
-  se: [1.0, 0.72],
+  n: [0, -1],
+  s: [0, 1],
+  e: [1, 0],
+  w: [-1, 0],
+  ne: [0.75, -0.75],
+  nw: [-0.75, -0.75],
+  sw: [-0.75, 0.75],
+  se: [0.75, 0.75],
 };
 
-function ensureHub(city, point, side) {
-  let hub = hubs.get(city);
+const hubs = new Map();
+
+function ensureHub(metro, share) {
+  let hub = hubs.get(metro.id);
   if (hub) return hub;
   const group = new THREE.Group();
+  const size = 0.014 + 0.028 * Math.sqrt(share);
   const dot = new THREE.Mesh(
-    new THREE.CircleGeometry(0.03, 18),
+    new THREE.CircleGeometry(size, 18),
     new THREE.MeshBasicMaterial({ color: COLOR.hub }),
   );
   dot.rotation.x = -Math.PI / 2;
-  const halo = ring(0.062, 0.068, COLOR.hub, 0.5);
-  const label = labelSprite(city);
-  const [dx, dz] = LABEL_OFFSET[side] || LABEL_OFFSET.n;
-  label.position.set(dx, 0.02, dz);
-  group.add(dot, halo, label);
-  group.position.copy(point);
+  group.add(dot, flatRing(size * 2.1, size * 2.3, COLOR.hub, 0.45));
+  if (share >= LABEL_SHARE) {
+    const label = labelSprite(metro.name, share);
+    const [dx, dz] = LABEL_OFFSET[metro.label] || LABEL_OFFSET.n;
+    // Clear the cloud: a Rayleigh scale reaches about 1.6 scales for most units.
+    const reach = 0.5 + (metro.radius_km || 15) / 110.574 * 1.9;
+    label.position.set(dx * reach * 1.1, 0.02, dz * reach);
+    group.add(label);
+  }
+  group.position.copy(project(metro.lat, metro.lon, 0.012));
   scene.add(group);
-  hub = { group };
-  hubs.set(city, hub);
+  hub = { group, point: project(metro.lat, metro.lon, 0.012) };
+  hubs.set(metro.id, hub);
   return hub;
 }
 
-function hubPoints(sites) {
-  const sums = new Map();
-  for (const site of sites) {
-    const entry = sums.get(site.city) || { lat: 0, lon: 0, n: 0, label: site.label };
-    entry.lat += site.lat;
-    entry.lon += site.lon;
-    entry.n += 1;
-    sums.set(site.city, entry);
-  }
-  const points = new Map();
-  for (const [city, entry] of sums) {
-    points.set(city, {
-      point: project(entry.lat / entry.n, entry.lon / entry.n, 0.012),
-      label: entry.label,
-    });
-  }
-  return points;
-}
-
-function modeOf(site) {
-  return site.alarm ? "alarm" : site.signal || "hold";
-}
-
-function chartsFor(site) {
-  const charts = site.charts || [];
-  return family === "all" ? charts : charts.filter((chart) => chart.family === family);
+function modeOf(item) {
+  if (!item) return "hold";
+  return item.alarm ? "alarm" : item.state || "hold";
 }
 
 function focused(site) {
   if (family === "all") return true;
-  return (site.charts || []).some((chart) => chart.family === family && !chart.in_control);
+  return (site.families || []).includes(family);
+}
+
+function unitRadius(count) {
+  return Math.max(0.008, Math.min(0.026, 0.62 / Math.sqrt(Math.max(count, 1))));
 }
 
 function arcCurve(from, to) {
@@ -202,33 +213,65 @@ function arcCurve(from, to) {
   return new THREE.QuadraticBezierCurve3(from, mid, to);
 }
 
-function renderArcs(sites, points) {
+const MATRIX = new THREE.Matrix4();
+const TINT = new THREE.Color();
+
+function renderUnits(data) {
+  const radius = unitRadius(data.sites.length);
+  let drawn = 0;
+  let flagged = 0;
+  for (const site of data.sites) {
+    const point = project(site.lat, site.lon, NODE_Y);
+    const dim = !focused(site);
+    TINT.setHex(COLOR[modeOf(site)]);
+    if (dim) TINT.lerp(LAND, 0.78);
+    MATRIX.makeScale(radius, 1, radius).setPosition(point);
+    units.setMatrixAt(drawn, MATRIX);
+    units.setColorAt(drawn, TINT);
+    drawn += 1;
+    if (site.alarm && !dim && flagged < FLAG_CAP) {
+      MATRIX.makeScale(radius * 3, 1, radius * 3).setPosition(point);
+      flags.setMatrixAt(flagged, MATRIX);
+      flagged += 1;
+    }
+    if (site.id === selected) {
+      pick.position.copy(point);
+      pick.visible = true;
+    }
+  }
+  units.count = drawn;
+  units.instanceMatrix.needsUpdate = true;
+  if (units.instanceColor) units.instanceColor.needsUpdate = true;
+  flags.count = flagged;
+  flags.instanceMatrix.needsUpdate = true;
+  if (!data.sites.some((site) => site.id === selected)) pick.visible = false;
+}
+
+// One arc, for the selected battery, tying it back to its metro. Thousands of
+// arcs is a hairball, and even one per flagged unit reads as noise rather than
+// information. The red rings already say which units need a person.
+function renderArcs(data) {
   const positions = [];
   const colors = [];
-  const tint = new THREE.Color();
-  const faded = new THREE.Color(COLOR.land);
-  for (const site of sites) {
-    const hub = points.get(site.city);
-    if (!hub) continue;
+  const site = data.sites.find((item) => item.id === selected);
+  const hub = site && hubs.get(site.metro);
+  if (site && hub) {
     const curve = arcCurve(hub.point, project(site.lat, site.lon, NODE_Y));
-    const samples = curve.getPoints(16);
-    tint.setHex(COLOR[modeOf(site)]);
-    const dim = !focused(site);
-    const head = dim ? tint.clone().lerp(faded, 0.72) : tint;
+    const samples = curve.getPoints(20);
+    const tint = new THREE.Color(COLOR[modeOf(site)]);
     for (let index = 0; index < samples.length - 1; index += 1) {
       for (const step of [index, index + 1]) {
         const point = samples[step];
         const along = step / (samples.length - 1);
-        const shade = head.clone().lerp(faded, (1 - along) * 0.55);
+        const shade = tint.clone().lerp(LAND, (1 - along) * 0.55);
         positions.push(point.x, point.y, point.z);
         colors.push(shade.r, shade.g, shade.b);
       }
     }
   }
-  const geometry = arcs.geometry;
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geometry.computeBoundingSphere();
+  arcs.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  arcs.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  arcs.geometry.computeBoundingSphere();
 }
 
 function renderConstraints(edges) {
@@ -248,40 +291,13 @@ function renderConstraints(edges) {
   constraintArcs.geometry.computeBoundingSphere();
 }
 
-function renderSites(data) {
-  const points = hubPoints(data.sites);
-  for (const [city, hub] of points) ensureHub(city, hub.point, hub.label);
-
-  const seen = new Set();
-  for (const site of data.sites) {
-    seen.add(site.id);
-    const node = ensureNode(site);
-    const dim = !focused(site);
-    const color = COLOR[modeOf(site)];
-    node.group.position.copy(project(site.lat, site.lon, NODE_Y));
-
-    node.core.material.color.setHex(color);
-    node.core.material.opacity = dim ? 0.3 : 1;
-    node.core.material.transparent = dim;
-
-    const soc = Math.min(1, Math.max(0.02, (site.soc_pct ?? 60) / 100));
-    node.socRing.geometry.dispose();
-    node.socRing.geometry = new THREE.RingGeometry(0.044, 0.062, 48, 1, Math.PI / 2, soc * Math.PI * 2);
-    node.socRing.material.color.setHex(color);
-    node.socRing.material.opacity = dim ? 0.24 : 0.95;
-
-    node.alarmRing.visible = Boolean(site.alarm);
-    node.alarmRing.material.opacity = dim ? 0.25 : 0.9;
-    node.selectRing.visible = site.id === selected;
-  }
-  for (const [id, node] of nodes) {
-    if (!seen.has(id)) {
-      scene.remove(node.group);
-      nodes.delete(id);
-    }
-  }
-  renderArcs(data.sites, points);
+function renderScene(data) {
+  const total = data.sites.length || 1;
+  for (const metro of data.metros || []) ensureHub(metro, metro.units / total);
+  renderUnits(data);
+  renderArcs(data);
   renderConstraints(data.edges);
+  screen = null;
 }
 
 function fmt(value, digits = 0) {
@@ -295,13 +311,15 @@ function fmt(value, digits = 0) {
 function renderStats(data) {
   const grid = data.grid || {};
   const ercot = data.ercot || {};
-  const alarms = data.sites.filter((site) => site.alarm).length;
+  const fleet = data.fleet || {};
+  const net = (fleet.discharge_kw || 0) - (fleet.charge_kw || 0);
   document.getElementById("stats").innerHTML = `
     <span>demand <b>${fmt(grid.demand_mw)} MW</b></span>
     <span>storage <b>${fmt(grid.storage_gen_mw)} MW</b></span>
-    <span>wind <b>${fmt(grid.wind_mw)} MW</b></span>
-    <span>fleet <b>${data.sites.length}</b></span>
-    <span>flagged <b>${alarms}</b></span>
+    <span>fleet <b>${fmt(fleet.units)}</b></span>
+    <span>net <b>${net >= 0 ? "+" : ""}${fmt(net / 1000, 2)} MW</b></span>
+    <span>soc <b>${fmt(fleet.mean_soc_pct, 0)}%</b></span>
+    <span>flagged <b>${fmt(fleet.alarms)}</b></span>
     <span>feed <b>${ercot.dashboard === "live" ? "live" : ercot.dashboard || "offline"}</b></span>
   `;
 }
@@ -332,39 +350,44 @@ function row(label, text) {
 }
 
 function renderPanel(data) {
-  if (!data.sites?.length) {
+  const sites = data.sites || [];
+  if (!sites.length) {
     panel.innerHTML = `<p class="muted">No batteries in this snapshot.</p>`;
     return;
   }
-  if (!selected || !data.sites.some((site) => site.id === selected)) {
-    selected = (data.sites.find((site) => site.alarm) || data.sites[0]).id;
-  }
+  const fleet = data.fleet || {};
   const chips = FAMILIES.map(
     (name) => `<button type="button" data-family="${name}" class="${name === family ? "on" : ""}">${name}</button>`,
   ).join("");
 
-  const cities = new Map();
-  for (const site of data.sites) {
-    if (!cities.has(site.city)) cities.set(site.city, []);
-    cities.get(site.city).push(site);
+  const flaggedByMetro = new Map();
+  const queue = [];
+  for (const site of sites) {
+    if (!site.alarm) continue;
+    flaggedByMetro.set(site.metro, (flaggedByMetro.get(site.metro) || 0) + 1);
+    if (focused(site)) queue.push(site);
   }
-  const groups = [...cities]
-    .map(([city, sites]) => {
-      const flagged = sites.filter((site) => site.alarm).length;
-      const rows = sites
-        .map((site) => {
-          const classes = [modeOf(site)];
-          if (!focused(site)) classes.push("dim");
-          if (site.id === selected) classes.push("on");
-          return `<button type="button" class="unit-row ${classes.join(" ")}" data-site="${site.id}">
-            <i></i><span>${site.id}</span><em>${fmt(site.soc_pct, 0)}%</em>
-          </button>`;
-        })
-        .join("");
-      return `<div class="group">
-        <h3>${city}${flagged ? `<span class="flag">${flagged} flagged</span>` : ""}</h3>
-        <div class="roster">${rows}</div>
-      </div>`;
+  const metroName = new Map((data.metros || []).map((metro) => [metro.id, metro.name]));
+
+  const queueHtml = queue.length
+    ? queue
+        .slice(0, 40)
+        .map(
+          (site) => `<button type="button" class="unit-row alarm" data-site="${site.id}">
+            <i></i><span>${site.id}</span><em>${(site.families || []).join(" ")}</em>
+          </button>`,
+        )
+        .join("")
+    : `<p class="muted">Every chart in this view is inside its limits.</p>`;
+
+  const metroHtml = (data.metros || [])
+    .map((metro) => {
+      const bad = flaggedByMetro.get(metro.id) || 0;
+      return `<button type="button" class="metro-row" data-metro="${metro.id}">
+        <span>${metro.name}</span>
+        <em>${fmt(metro.units)}</em>
+        <b class="${bad ? "flag" : "muted"}">${bad || "—"}</b>
+      </button>`;
     })
     .join("");
 
@@ -380,9 +403,20 @@ function renderPanel(data) {
 
   panel.innerHTML = `
     <h2>Fleet</h2>
-    <div class="sub">${data.sites.length} units · ${data.sites.filter((site) => site.alarm).length} flagged · click a unit for its one-line diagram</div>
+    <div class="sub">${fmt(fleet.units)} batteries · ${fmt(fleet.pushing)} pushing · ${fmt(fleet.pulling)} pulling · ${fmt(fleet.holding)} holding</div>
     <div class="chips">${chips}</div>
-    ${groups}
+    <div class="group">
+      <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>
+      <div class="roster">${queueHtml}</div>
+      ${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}
+    </div>
+    <div class="group">
+      <h3>Metros<span>units · flagged</span></h3>
+      <div class="metros">
+        <button type="button" class="metro-row" data-metro="all"><span>Whole state</span><em>${fmt(fleet.units)}</em><b class="muted">—</b></button>
+        ${metroHtml}
+      </div>
+    </div>
     <div class="constraints">
       <h3>Binding constraints</h3>
       ${constraintHtml}
@@ -518,7 +552,7 @@ function diagram(site) {
   const charts = site.charts || [];
   const state = (id) => {
     const mine = charts.filter((chart) => chart.component === id);
-    if (mine.some((chart) => !chart.in_control)) return "flagged";
+    if (mine.some((chart) => chart.alarm)) return "flagged";
     if (mine.some((chart) => chart.warning)) return "watch";
     return null;
   };
@@ -560,7 +594,7 @@ function metricRow(label, text, chartId) {
 function chartCard(chart) {
   const open = expanded.has(chart.chart_id);
   const status = chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ");
-  const tone = chart.in_control ? (chart.warning ? "watch" : "muted") : "flag";
+  const tone = chart.alarm ? "flag" : chart.warning ? "watch" : "muted";
   const detail = open
     ? `<div class="chart-facts">
         ${row("measured", `${fmt(chart.measured, 3)} ${chart.unit}`)}
@@ -581,13 +615,9 @@ function chartCard(chart) {
   </div>`;
 }
 
-function renderUnit(data) {
-  if (!modal.open) return;
-  const site = data.sites?.find((item) => item.id === selected);
-  if (!site) {
-    modal.close();
-    return;
-  }
+function renderUnit() {
+  const site = unitDetail;
+  if (!modal.open || !site) return;
   const spec = COMPONENTS.find((item) => item.id === component) || COMPONENTS[0];
   const metrics = (site.metrics || {})[component] || {};
   const charts = (site.charts || []).filter((chart) => chart.component === component);
@@ -595,7 +625,8 @@ function renderUnit(data) {
 
   document.getElementById("unit-id").textContent = site.id;
   document.getElementById("unit-sub").textContent =
-    `${site.city} · ${site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`;
+    `${site.city} · ${site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`
+    + (site.instrumented ? " · full-rate telemetry" : "");
   document.getElementById("unit-mode").className = `mode ${mode}`;
   document.getElementById("unit-mode").innerHTML = `<i></i>${mode}`;
   document.getElementById("unit-diagram").innerHTML = diagram(site);
@@ -618,47 +649,61 @@ function renderUnit(data) {
   `;
 }
 
-function openUnit(id) {
+async function loadUnit(id) {
+  try {
+    const response = await fetch(`/api/site/${encodeURIComponent(id)}`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+async function openUnit(id) {
   selected = id;
-  const site = payload?.sites?.find((item) => item.id === id);
-  const flagged = (site?.charts || []).find((chart) => !chart.in_control);
+  const detail = await loadUnit(id);
+  if (!detail) return;
+  unitDetail = detail;
+  const flagged = (detail.charts || []).find((chart) => chart.alarm) || (detail.charts || []).find((chart) => chart.warning);
   component = flagged ? flagged.component : "base";
   expanded = new Set(flagged ? [flagged.chart_id] : []);
   if (!modal.open) modal.showModal();
-  renderUnit(payload);
+  if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
+  renderUnit();
+  if (payload) renderScene(payload);
 }
 
-function nearestSite(clientX, clientY) {
-  if (!payload?.sites?.length) return null;
-  const rect = canvas.getBoundingClientRect();
-  const x = clientX - rect.left;
-  const y = clientY - rect.top;
-  let best = null;
-  let bestDist = 30;
-  for (const site of payload.sites) {
-    const ndc = project(site.lat, site.lon, NODE_Y).project(camera);
-    const sx = (ndc.x * 0.5 + 0.5) * rect.width;
-    const sy = (-ndc.y * 0.5 + 0.5) * rect.height;
-    const dist = Math.hypot(sx - x, sy - y);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = site.id;
-    }
-  }
-  return best;
-}
+modal.addEventListener("close", () => {
+  history.replaceState(null, "", location.pathname);
+});
 
 panel.addEventListener("click", (event) => {
   if (!payload) return;
   const chip = event.target.closest("[data-family]");
   if (chip) {
     family = chip.dataset.family;
-    renderSites(payload);
+    renderScene(payload);
     renderPanel(payload);
     return;
   }
   const unit = event.target.closest("[data-site]");
-  if (unit) openUnit(unit.dataset.site);
+  if (unit) {
+    openUnit(unit.dataset.site);
+    return;
+  }
+  const metroHit = event.target.closest("[data-metro]");
+  if (metroHit) {
+    const id = metroHit.dataset.metro;
+    if (id === "all") {
+      focusPoint = { x: 0, z: 0.4, distance: 20 };
+      return;
+    }
+    const metro = (payload.metros || []).find((item) => item.id === id);
+    if (metro) {
+      const point = project(metro.lat, metro.lon, 0);
+      focusPoint = { x: point.x, z: point.z, distance: 2.4 };
+    }
+  }
 });
 
 modal.addEventListener("click", (event) => {
@@ -669,7 +714,7 @@ modal.addEventListener("click", (event) => {
   const blockHit = event.target.closest("[data-component]");
   if (blockHit) {
     component = blockHit.dataset.component;
-    renderUnit(payload);
+    renderUnit();
     return;
   }
   const chartHit = event.target.closest("[data-chart]");
@@ -678,7 +723,7 @@ modal.addEventListener("click", (event) => {
     if (chartHit.dataset.scroll) expanded.add(id);
     else if (expanded.has(id)) expanded.delete(id);
     else expanded.add(id);
-    renderUnit(payload);
+    renderUnit();
     if (chartHit.dataset.scroll) {
       document.getElementById(`chart-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
@@ -691,25 +736,60 @@ modal.addEventListener("keydown", (event) => {
   if (!blockHit) return;
   event.preventDefault();
   component = blockHit.dataset.component;
-  renderUnit(payload);
-});
-
-modal.addEventListener("close", () => {
-  if (payload) renderPanel(payload);
+  renderUnit();
 });
 
 document.getElementById("unit-close").addEventListener("click", () => modal.close());
 
+// Screen positions are cached per camera move. At thousands of units, projecting
+// on every pointer event is the difference between smooth and not.
+function ensureScreen() {
+  if (screen || !payload?.sites?.length) return screen;
+  const rect = canvas.getBoundingClientRect();
+  const out = new Float32Array(payload.sites.length * 2);
+  const vector = new THREE.Vector3();
+  camera.updateMatrixWorld();
+  for (let index = 0; index < payload.sites.length; index += 1) {
+    const site = payload.sites[index];
+    vector
+      .set((site.lon - ORIGIN.lon) * LON_SCALE, NODE_Y, ORIGIN.lat - site.lat)
+      .project(camera);
+    out[index * 2] = (vector.x * 0.5 + 0.5) * rect.width;
+    out[index * 2 + 1] = (-vector.y * 0.5 + 0.5) * rect.height;
+  }
+  screen = out;
+  return screen;
+}
+
+function nearestSite(clientX, clientY) {
+  const points = ensureScreen();
+  if (!points) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let best = null;
+  let bestDist = 16;
+  for (let index = 0; index < payload.sites.length; index += 1) {
+    const dist = Math.hypot(points[index * 2] - x, points[index * 2 + 1] - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = payload.sites[index];
+    }
+  }
+  return best;
+}
+
 canvas.addEventListener("pointermove", (event) => {
-  const site = payload?.sites?.find((item) => item.id === nearestSite(event.clientX, event.clientY));
+  const site = nearestSite(event.clientX, event.clientY);
   if (!site) {
     tip.hidden = true;
     canvas.style.cursor = "grab";
     return;
   }
-  const flagged = site.metrics?.maintenance?.out_of_control || [];
   tip.hidden = false;
-  tip.innerHTML = `<b>${site.id}</b> ${site.signal} · ${fmt(site.soc_pct, 0)}%${flagged.length ? `<br>${flagged.join(", ")}` : ""}`;
+  tip.innerHTML = `<b>${site.id}</b> ${modeOf(site)} · ${fmt(site.soc_pct, 0)}%${
+    site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""
+  }`;
   tip.style.left = `${event.clientX + 14}px`;
   tip.style.top = `${event.clientY + 14}px`;
   canvas.style.cursor = "pointer";
@@ -720,12 +800,14 @@ canvas.addEventListener("pointerleave", () => {
 });
 
 canvas.addEventListener("click", (event) => {
-  const hit = nearestSite(event.clientX, event.clientY);
-  if (!hit || !payload) return;
+  const site = nearestSite(event.clientX, event.clientY);
+  if (!site) return;
   tip.hidden = true;
-  openUnit(hit);
-  renderSites(payload);
-  renderPanel(payload);
+  openUnit(site.id);
+});
+
+controls.addEventListener("change", () => {
+  screen = null;
 });
 
 function resize() {
@@ -735,6 +817,7 @@ function resize() {
     renderer.setSize(width, height, false);
     camera.aspect = width / Math.max(height, 1);
     camera.updateProjectionMatrix();
+    screen = null;
   }
 }
 
@@ -742,22 +825,42 @@ async function poll() {
   try {
     const response = await fetch("/api/scene");
     payload = await response.json();
-    renderSites(payload);
+    renderScene(payload);
     renderStats(payload);
     renderPanel(payload);
-    renderUnit(payload);
+    if (modal.open && selected) {
+      unitDetail = (await loadUnit(selected)) || unitDetail;
+      renderUnit();
+    }
   } catch (error) {
     panel.innerHTML = `<p class="muted">Scene unavailable. ${error.message}</p>`;
   }
 }
 
+const GOAL = new THREE.Vector3();
+
+function glide() {
+  if (!focusPoint) return;
+  GOAL.set(focusPoint.x, 0, focusPoint.z);
+  controls.target.lerp(GOAL, 0.1);
+  const offset = camera.position.clone().sub(controls.target).setLength(focusPoint.distance);
+  camera.position.lerp(controls.target.clone().add(offset), 0.1);
+  screen = null;
+  if (controls.target.distanceTo(GOAL) < 0.02) focusPoint = null;
+}
+
 function frame() {
   resize();
+  glide();
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
-poll();
+// A unit id in the hash opens that battery, so a link points at one cabinet.
+poll().then(() => {
+  const wanted = decodeURIComponent(location.hash.slice(1));
+  if (wanted) openUnit(wanted);
+});
 setInterval(poll, 5000);
 frame();

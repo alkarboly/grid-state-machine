@@ -20,13 +20,18 @@ HOUR_MEAN_KW = [
     4.20, 3.70, 2.90, 2.20, 1.70, 1.35,
 ]
 
-# Measured faults. The site row keeps the healthy baseline; the tick applies these.
-FAULTS = {
-    "aus-03": {"temp_c": 49.0},
-    "hou-02": {"voltage_v": 226.0, "disco_bias_kw": 1.4},
-    "sat-01": {"soc_bias_kwh": 2.5},
-    "dal-02": {"response_scale": 0.55},
+# Named demo faults, one per maintenance kind. The site row keeps the healthy
+# baseline; the tick applies these. Every other unit draws a fault at FAULT_RATE.
+DEMO_FAULTS = {
+    "aus-0003": {"temp_c": 49.0},
+    "hou-0002": {"voltage_v": 226.0, "disco_bias_kw": 1.4},
+    "sat-0001": {"soc_bias_kwh": 2.5},
+    "dal-0002": {"response_scale": 0.55},
 }
+FAULT_RATE = 0.015
+
+KM_PER_DEG_LAT = 110.574
+TAU = 2.0 * math.pi
 
 COMPONENTS = ("grid", "meter", "disco", "panel", "base", "maintenance")
 
@@ -68,47 +73,122 @@ def load_anchors(path: Path | None = None) -> list[dict]:
     return json.loads(target.read_text(encoding="utf-8"))
 
 
-def build_sites(anchors: list[dict] | None = None) -> list[dict]:
-    profile = random.Random(11)
+def apportion(total: int, weights: list[float], minimum: int = 2) -> list[int]:
+    """Largest remainder, so the metro counts sum to exactly `total`."""
+    size = len(weights)
+    if size == 0:
+        return []
+    minimum = min(minimum, max(total // size, 0))
+    remaining = total - minimum * size
+    if remaining <= 0:
+        return [total // size + (1 if index < total % size else 0) for index in range(size)]
+    share = sum(weights) or float(size)
+    exact = [weight / share * remaining for weight in weights]
+    counts = [int(value) for value in exact]
+    order = sorted(range(size), key=lambda index: exact[index] - counts[index], reverse=True)
+    for index in order[: remaining - sum(counts)]:
+        counts[index] += 1
+    return [minimum + count for count in counts]
+
+
+def _place(anchor: dict, rng: random.Random) -> tuple[float, float]:
+    """Rayleigh radius, so density peaks in the suburbs rather than downtown."""
+    scale = float(anchor.get("radius_km", 15.0))
+    radius = min(scale * math.sqrt(-2.0 * math.log(1.0 - rng.random())), scale * 2.8)
+    angle = rng.random() * TAU
+    axis = math.radians(float(anchor.get("axis_deg", 0.0)))
+    major = radius * math.cos(angle) * float(anchor.get("stretch", 1.0))
+    minor = radius * math.sin(angle)
+    east = major * math.cos(axis) - minor * math.sin(axis)
+    north = major * math.sin(axis) + minor * math.cos(axis)
+    lat = anchor["lat"] + north / KM_PER_DEG_LAT
+    lon = anchor["lon"] + east / (KM_PER_DEG_LAT * math.cos(math.radians(anchor["lat"])))
+    return round(lat, 5), round(lon, 5)
+
+
+def _fault(site_id: str, rng: random.Random, voltage_center: float) -> dict:
+    if site_id in DEMO_FAULTS:
+        return dict(DEMO_FAULTS[site_id])
+    if rng.random() >= FAULT_RATE:
+        return {}
+    kind = rng.choice(("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw"))
+    if kind == "temp_c":
+        return {"temp_c": round(44.0 + rng.random() * 9.0, 1)}
+    if kind == "voltage_v":
+        return {"voltage_v": round(voltage_center - (8.0 + rng.random() * 8.0), 1)}
+    if kind == "soc_bias_kwh":
+        return {"soc_bias_kwh": round(1.6 + rng.random() * 2.4, 2)}
+    if kind == "response_scale":
+        return {"response_scale": round(0.35 + rng.random() * 0.35, 2)}
+    return {"disco_bias_kw": round(0.8 + rng.random() * 1.2, 2)}
+
+
+def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None) -> list[dict]:
+    anchors = anchors or load_anchors()
+    total = config.FLEET_SIZE if fleet_size is None else fleet_size
+    weights = [
+        float(anchor.get("households_k", 1)) * float(anchor.get("adoption", 1.0))
+        for anchor in anchors
+    ]
+    counts = apportion(total, weights)
     sites = []
-    for anchor in anchors or load_anchors():
-        count = int(anchor["count"])
-        # Service-territory rings so each battery reads as its own node and
-        # neighbouring cities do not overlap.
-        inner = count if count <= 6 else count // 2
-        single = count <= 6
-        for index in range(count):
-            number = index + 1
-            site_id = f"{anchor['prefix']}-{number:02d}"
-            on_inner = index < inner
-            spokes = inner if on_inner else count - inner
-            radius = (0.36 if single else 0.30) if on_inner else 0.55
-            angle = 2 * math.pi * ((index if on_inner else index - inner) / spokes)
-            if not on_inner:
-                angle += math.pi / spokes
+    for anchor, count in zip(anchors, counts):
+        for number in range(1, count + 1):
+            site_id = f"{anchor['prefix']}-{number:04d}"
+            # Seeded per unit, so a restart puts every battery back where it was.
+            profile = random.Random(site_id)
+            lat, lon = _place(anchor, profile)
+            voltage_center = round(237.0 + profile.random() * 6.0, 2)
             sites.append(
                 {
                     "id": site_id,
                     "city": anchor["name"],
-                    "label": anchor.get("label", "n"),
+                    "metro": anchor["id"],
                     "load_zone": anchor["load_zone"],
-                    "lat": anchor["lat"] + radius * math.cos(angle) * 0.8,
-                    "lon": anchor["lon"] + radius * math.sin(angle),
+                    "lat": lat,
+                    "lon": lon,
                     "capacity_kwh": config.BASE_CAPACITY_KWH,
                     "power_limit_kw": config.BASE_POWER_KW,
                     "load_scale": round(0.72 + profile.random() * 0.56, 3),
                     "temp_center_c": round(29.0 + profile.random() * 6.0, 2),
                     "temp_sigma_c": round(1.15 + profile.random() * 0.7, 3),
-                    "voltage_center_v": round(237.0 + profile.random() * 6.0, 2),
+                    "voltage_center_v": voltage_center,
                     "voltage_sigma_v": round(1.1 + profile.random() * 0.6, 3),
                     "eta": round(0.94 + profile.random() * 0.035, 4),
-                    "physical_soc_kwh": config.BASE_CAPACITY_KWH * (0.55 + ((number * 5 + len(site_id)) % 35) / 100),
+                    # The customer's own backup floor, and where this unit sits in
+                    # the dispatch queue. Together they decide who answers a call.
+                    "reserve_frac": round(config.SOC_RESERVE + profile.random() * 0.25, 3),
+                    "duty": round(profile.random(), 3),
+                    "fault": _fault(site_id, profile, voltage_center),
+                    "physical_soc_kwh": round(
+                        config.BASE_CAPACITY_KWH * (0.22 + profile.random() * 0.70), 3
+                    ),
                     "energy_in_kwh": 0.0,
                     "energy_out_kwh": 0.0,
                     "chart_history": {},
                 }
             )
     return sites
+
+
+def metro_summary(anchors: list[dict], sites: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for site in sites:
+        counts[site["metro"]] = counts.get(site["metro"], 0) + 1
+    return [
+        {
+            "id": anchor["id"],
+            "name": anchor["name"],
+            "lat": anchor["lat"],
+            "lon": anchor["lon"],
+            "load_zone": anchor["load_zone"],
+            "label": anchor.get("label", "n"),
+            "radius_km": anchor.get("radius_km", 15),
+            "units": counts.get(anchor["id"], 0),
+        }
+        for anchor in anchors
+        if counts.get(anchor["id"], 0)
+    ]
 
 
 def _split(net_kw: float) -> tuple[float, float]:
@@ -118,15 +198,23 @@ def _split(net_kw: float) -> tuple[float, float]:
 
 
 def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: float | None) -> dict:
+    """The recent residuals stay on the site as chart_history; the API attaches them."""
     history = site["chart_history"].setdefault(spec["chart_id"], [])
     point = evaluate(spec, measured, expected, sigma if sigma is not None else spec["sigma"], history)
     history.append(point["value"])
     del history[:-HISTORY]
-    point["series"] = list(history)
     return point
 
 
-def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.Random | None = None):
+def tick_sites(
+    sites: list[dict],
+    grid: dict,
+    now,
+    dt_hours: float,
+    rng: random.Random | None = None,
+    persist: set[str] | None = None,
+):
+    """Advance every battery. `persist` limits which units emit full-rate rows."""
     rng = rng or random.Random()
     prices = grid.get("prices") or []
     lmp_mean = sum(item["lmp"] for item in prices) / len(prices) if prices else None
@@ -146,7 +234,7 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
     for raw_site in sites:
         site = dict(raw_site)
         site["chart_history"] = raw_site["chart_history"]
-        fault = FAULTS.get(site["id"], {})
+        fault = site["fault"]
         eta = site["eta"]
         lmp = by_location.get(site["load_zone"])
         signal = choose_signal(percentile, storage, lmp, lmp_mean)
@@ -155,16 +243,23 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
         load_kw = max(0.3, mean_kw * scale + rng.gauss(0, mean_kw * 0.04))
 
         command = site["power_limit_kw"] * level
-        floor = site["capacity_kwh"] * config.SOC_RESERVE
+        floor = site["capacity_kwh"] * site["reserve_frac"]
         ceiling = site["capacity_kwh"] * config.SOC_CEILING
         commanded_charge = 0.0
         commanded_discharge = 0.0
-        if signal == "push":
-            headroom_kw = max(0.0, (site["physical_soc_kwh"] - floor) * eta / dt) if dt else command
-            commanded_discharge = min(command, headroom_kw)
-        elif signal == "pull":
-            room_kw = max(0.0, (ceiling - site["physical_soc_kwh"]) / (eta * dt)) if dt else command
-            commanded_charge = min(command, room_kw)
+        # A call only reaches units whose place in the queue the call is deep enough to
+        # reach, and only as far as the customer's own reserve allows.
+        on_call = level >= site["duty"]
+        if on_call and signal == "push":
+            headroom_kw = (site["physical_soc_kwh"] - floor) * eta
+            commanded_discharge = min(command, max(0.0, headroom_kw / dt) if dt else command)
+            if site["physical_soc_kwh"] <= floor:
+                commanded_discharge = 0.0
+        elif on_call and signal == "pull":
+            room_kw = ceiling - site["physical_soc_kwh"]
+            commanded_charge = min(command, max(0.0, room_kw / (eta * dt)) if dt else command)
+            if site["physical_soc_kwh"] >= ceiling:
+                commanded_charge = 0.0
 
         response = float(fault.get("response_scale", 1.0))
         charge_kw = commanded_charge * response
@@ -173,7 +268,7 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
         if dt:
             site["physical_soc_kwh"] = min(
                 ceiling,
-                max(floor, site["physical_soc_kwh"] + charge_kw * dt * eta - discharge_kw * dt / eta),
+                max(0.0, site["physical_soc_kwh"] + charge_kw * dt * eta - discharge_kw * dt / eta),
             )
         reported_soc = site["physical_soc_kwh"] + float(fault.get("soc_bias_kwh", 0.0)) + rng.gauss(0, 0.04)
 
@@ -205,7 +300,7 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
             _chart(site, CHARTS[4], reported_soc, site["physical_soc_kwh"], None),
             _chart(site, CHARTS[5], achieved_net, commanded_net, None),
         ]
-        alarm = any(not chart["in_control"] for chart in charts)
+        alarm = any(chart["alarm"] for chart in charts)
         shown_soc = min(site["capacity_kwh"], max(0.0, reported_soc))
 
         metrics = {
@@ -251,11 +346,45 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
             },
             "maintenance": {
                 "alarm": alarm,
+                "alarming": [chart["chart_id"] for chart in charts if chart["alarm"]],
                 "out_of_control": [chart["chart_id"] for chart in charts if not chart["in_control"]],
                 "warning": [chart["chart_id"] for chart in charts if chart["warning"]],
             },
         }
-        observation = {
+        site["metrics"] = metrics
+        site["charts"] = charts
+        site["signal"] = signal
+        site["alarm"] = alarm
+        # What the battery actually did, which is not always what it was told.
+        if discharge_kw > 0.01:
+            site["state"] = "push"
+        elif charge_kw > 0.01:
+            site["state"] = "pull"
+        else:
+            site["state"] = "hold"
+        updated.append(site)
+
+        for chart in charts:
+            if chart["in_control"] and persist is not None and site["id"] not in persist:
+                continue
+            stored = dict(chart)
+            stored["ts"] = stamp
+            stored["site_id"] = site["id"]
+            points.append(stored)
+
+        if persist is not None and site["id"] not in persist:
+            continue
+
+        for component in COMPONENTS:
+            logs.append(
+                {
+                    "ts": stamp,
+                    "site_id": site["id"],
+                    "component": component,
+                    "metrics": metrics[component],
+                }
+            )
+        observations.append({
             "ts": stamp,
             "site_id": site["id"],
             "hour": hour,
@@ -287,25 +416,5 @@ def tick_sites(sites: list[dict], grid: dict, now, dt_hours: float, rng: random.
             "charge_kw": round(charge_kw, 3),
             "discharge_kw": round(discharge_kw, 3),
             "temp_c": round(temp_c, 2),
-        }
-        site["metrics"] = metrics
-        site["charts"] = charts
-        site["signal"] = signal
-        site["alarm"] = alarm
-        updated.append(site)
-        observations.append(observation)
-        for chart in charts:
-            stored = {key: value for key, value in chart.items() if key != "series"}
-            stored["ts"] = stamp
-            stored["site_id"] = site["id"]
-            points.append(stored)
-        for component in COMPONENTS:
-            logs.append(
-                {
-                    "ts": stamp,
-                    "site_id": site["id"],
-                    "component": component,
-                    "metrics": metrics[component],
-                }
-            )
+        })
     return updated, logs, observations, points

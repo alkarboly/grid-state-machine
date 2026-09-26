@@ -29,9 +29,19 @@ Evaluated in this order. More than one may fire on the same point.
 | `seven_same_side` | This point and the six before it are all on the same side of 0. A sustained shift. |
 | `two_of_three_2sigma` | Two of the last three points are beyond 2 sigma on the same side. |
 
-`warning` is true when the absolute z-score is at least 2 and no rule has fired. Warning does not set `alarm`.
+## Severity, and why it is not the same as the rules
 
-`alarm` on the maintenance component is true when any chart has `in_control` false.
+`in_control` and `rules` are the statistics. `alarm` and `warning` are what a person should do about them. They are separate fields because at fleet scale they have to be.
+
+A run rule fires on roughly 1.6% of perfectly healthy charts — that is what "seven points on the same side of centre" means when the residual is symmetric noise. On one battery that is a useful nudge. Across 3000 batteries with six charts each, it is about 280 false alarms, which buries the 50 units that are actually broken. Alarming on every rule turned the map solid red.
+
+So:
+
+- **`alarm`** is true only for `beyond_3sigma`. This is the send-someone signal. It is what turns a unit red on the map and puts it in the attention queue.
+- **`warning`** is true when a run rule fired without a limit breach, or when the absolute z-score is at least 2 and no rule fired at all. This is the watch-it signal, shown in the unit view and counted in the rollup.
+- **`in_control`** stays false whenever any rule fired, so nothing statistical is hidden or thrown away. The `control_points` table keeps every rule that fired on every point, which is what a training label needs.
+
+`alarm` on the maintenance component is true when any chart on that battery alarms. `alarming` lists those chart ids; `out_of_control` lists every chart where a rule fired.
 
 ## Point contract
 
@@ -52,17 +62,21 @@ One row per battery per chart per tick. `value` is the residual. `series` is the
   "lcl": -4.2,
   "z": 11.286,
   "rules": ["beyond_3sigma"],
-  "in_control": false
+  "in_control": false,
+  "alarm": true,
+  "warning": true
 }
 ```
 
 ## Scripted faults
 
-These four batteries are the demo of four different maintenance kinds. Their `sites` row stays the healthy baseline.
+These four batteries are the demo of four different maintenance kinds, always present at any fleet size. Their `sites` row stays the healthy baseline.
 
 | Site | Chart | Fault |
 | --- | --- | --- |
-| `aus-03` | `base_temp` | Measured temperature held at 49°C |
-| `hou-02` | `disco_voltage`, `disco_meter_delta` | Voltage held at 226 V and a +1.4 kW disco bias |
-| `sat-01` | `soc_tracking` | Reported state of charge is 2.5 kWh above the coulomb count |
-| `dal-02` | `dispatch_response` | The battery delivers 55% of the commanded kilowatts |
+| `aus-0003` | `base_temp` | Measured temperature held at 49°C |
+| `hou-0002` | `disco_voltage`, `disco_meter_delta` | Voltage held at 226 V and a +1.4 kW disco bias |
+| `sat-0001` | `soc_tracking` | Reported state of charge is 2.5 kWh above the coulomb count |
+| `dal-0002` | `dispatch_response` | The battery delivers 55% of the commanded kilowatts |
+
+Every other unit draws a fault at `FAULT_RATE` from the same five kinds with a randomised magnitude, so the exception queue is populated across the whole map rather than in four hand-picked places. See [simulation.md](simulation.md).

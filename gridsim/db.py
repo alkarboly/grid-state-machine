@@ -100,7 +100,27 @@ CREATE TABLE IF NOT EXISTS control_points (
   in_control INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS control_points_site ON control_points (site_id, chart_id, ts);
+CREATE TABLE IF NOT EXISTS fleet_rollups (
+  ts TEXT PRIMARY KEY,
+  units INTEGER NOT NULL,
+  pushing INTEGER NOT NULL,
+  pulling INTEGER NOT NULL,
+  holding INTEGER NOT NULL,
+  alarms INTEGER NOT NULL,
+  warnings INTEGER NOT NULL,
+  discharge_kw REAL NOT NULL,
+  charge_kw REAL NOT NULL,
+  load_kw REAL NOT NULL,
+  stored_kwh REAL NOT NULL,
+  capacity_kwh REAL NOT NULL,
+  mean_soc_pct REAL NOT NULL
+);
 """
+
+_ROLLUP_COLUMNS = (
+    "ts", "units", "pushing", "pulling", "holding", "alarms", "warnings",
+    "discharge_kw", "charge_kw", "load_kw", "stored_kwh", "capacity_kwh", "mean_soc_pct",
+)
 
 LOG_CAP = 20000
 OBSERVATION_CAP = 20000
@@ -213,6 +233,16 @@ def insert_grid(conn: sqlite3.Connection, grid: dict) -> None:
             grid.get("forecast_demand_mw"), grid.get("demand_percentile"), grid.get("storage_gen_mw"),
             grid.get("wind_mw"), grid.get("solar_mw"), grid.get("gas_mw"), grid.get("source"),
         ),
+    )
+    conn.commit()
+
+
+def insert_rollup(conn: sqlite3.Connection, rollup: dict) -> None:
+    columns = ", ".join(_ROLLUP_COLUMNS)
+    placeholders = ", ".join("?" for _ in _ROLLUP_COLUMNS)
+    conn.execute(
+        f"INSERT OR REPLACE INTO fleet_rollups ({columns}) VALUES ({placeholders})",
+        tuple(rollup[column] for column in _ROLLUP_COLUMNS),
     )
     conn.commit()
 

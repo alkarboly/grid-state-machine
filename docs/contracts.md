@@ -26,7 +26,7 @@ The chain is grid → meter → disco → panel → base.
 | `disco` | Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz`, `contactor`, `islanded` |
 | `panel` | House load downstream of the battery interconnect | `load_kw`, `voltage_v` |
 | `base` | Battery cabinet. `charge_kw` and `discharge_kw` are what the battery did. The commanded pair is what dispatch asked for. `soc_kwh` is the reported state of charge. | `capacity_kwh`, `power_limit_kw`, `soc_kwh`, `soc_pct`, `commanded_charge_kw`, `commanded_discharge_kw`, `charge_kw`, `discharge_kw`, `temp_c` |
-| `maintenance` | Which control charts are out of limits. The point shape is in [control-charts.md](control-charts.md). | `alarm`, `out_of_control`, `warning` |
+| `maintenance` | Which control charts need attention. The point shape and the severity rules are in [control-charts.md](control-charts.md). | `alarm`, `alarming`, `out_of_control`, `warning` |
 
 `signal` is `pull`, `push`, or `hold`. Pull charges the battery from the grid. Push discharges toward the grid. Hold does neither.
 
@@ -34,7 +34,7 @@ The chain is grid → meter → disco → panel → base.
 
 `lmp_usd_mwh` is JSON `null` until a settlement-point price exists for that home's load zone.
 
-`out_of_control` and `warning` are arrays of `chart_id`. `alarm` is true when `out_of_control` is not empty.
+`alarming`, `out_of_control`, and `warning` are arrays of `chart_id`. `alarm` is true when `alarming` is not empty, which means at least one chart is outside its limits. `out_of_control` is wider: it also holds charts where only a run rule fired.
 
 Every control chart names the component it belongs to. The mapping is in [control-charts.md](control-charts.md) and it is what lets the unit view hang each chart off its box in the chain.
 

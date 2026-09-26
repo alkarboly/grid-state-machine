@@ -6,7 +6,7 @@ import json
 import threading
 
 from gridsim import config
-from gridsim.db import connect, insert_grid, insert_raw, insert_tick, upsert_sites
+from gridsim.db import connect, insert_grid, insert_raw, insert_rollup, insert_tick, upsert_sites
 from gridsim.ercot.client import fetch_dashboards, fetch_official
 from gridsim.ercot.normalize import (
     constraints_from_rows,
@@ -14,7 +14,7 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     prices_from_rows,
 )
-from gridsim.fleet.simulate import build_sites, tick_sites
+from gridsim.fleet.simulate import DEMO_FAULTS, build_sites, load_anchors, metro_summary, tick_sites
 from gridsim.timeutil import iso, now_central
 
 
@@ -40,13 +40,63 @@ def load_station_geo() -> dict:
     return {item["station"].upper(): item for item in payload}
 
 
+def persist_sample(sites: list[dict], size: int) -> set[str]:
+    """The instrumented cohort: the demo faults plus an even spread of the rest."""
+    chosen = {site["id"] for site in sites if site["id"] in DEMO_FAULTS}
+    room = size - len(chosen)
+    if room > 0 and len(sites) > room:
+        step = len(sites) / room
+        chosen.update(sites[int(index * step)]["id"] for index in range(room))
+    elif room > 0:
+        chosen.update(site["id"] for site in sites)
+    return chosen
+
+
+def rollup(sites: list[dict], stamp: str) -> dict:
+    counts = {"push": 0, "pull": 0, "hold": 0}
+    alarms = warnings = 0
+    discharge = charge = load = stored = capacity = 0.0
+    for site in sites:
+        counts[site.get("state", "hold")] = counts.get(site.get("state", "hold"), 0) + 1
+        base = (site.get("metrics") or {}).get("base") or {}
+        care = (site.get("metrics") or {}).get("maintenance") or {}
+        if care.get("alarm"):
+            alarms += 1
+        if care.get("warning"):
+            warnings += 1
+        discharge += base.get("discharge_kw") or 0.0
+        charge += base.get("charge_kw") or 0.0
+        load += ((site.get("metrics") or {}).get("panel") or {}).get("load_kw") or 0.0
+        stored += base.get("soc_kwh") or 0.0
+        capacity += base.get("capacity_kwh") or 0.0
+    return {
+        "ts": stamp,
+        "units": len(sites),
+        "pushing": counts["push"],
+        "pulling": counts["pull"],
+        "holding": counts["hold"],
+        "alarms": alarms,
+        "warnings": warnings,
+        "discharge_kw": round(discharge, 2),
+        "charge_kw": round(charge, 2),
+        "load_kw": round(load, 2),
+        "stored_kwh": round(stored, 2),
+        "capacity_kwh": round(capacity, 2),
+        "mean_soc_pct": round(100.0 * stored / capacity, 2) if capacity else 0.0,
+    }
+
+
 class Fleet:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._conn = None
-        self.sites = build_sites()
+        self.anchors = load_anchors()
+        self.sites = build_sites(self.anchors)
+        self.metros = metro_summary(self.anchors, self.sites)
+        self.persist = persist_sample(self.sites, config.PERSIST_SAMPLE)
+        self.fleet = rollup([], iso(now_central()))
         self.grid = _neutral_grid()
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
@@ -155,47 +205,80 @@ class Fleet:
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
-            sites, logs, observations, points = tick_sites(self.sites, self.grid, now, dt_hours)
+            sites, logs, observations, points = tick_sites(
+                self.sites, self.grid, now, dt_hours, persist=self.persist
+            )
             self.sites = sites
+            self.fleet = rollup(sites, iso(now))
             self._last_tick = now
         if self._conn and logs:
             insert_tick(self._conn, logs, observations, points)
+            insert_rollup(self._conn, self.fleet)
 
     def scene(self) -> dict:
+        """Map payload. One row per battery, small enough to poll at fleet scale."""
         with self._lock:
             sites = []
             for site in self.sites:
                 metrics = site.get("metrics") or {}
                 base = metrics.get("base") or {}
-                panel = metrics.get("panel") or {}
-                sites.append(
-                    {
-                        "id": site["id"],
-                        "city": site["city"],
-                        "label": site.get("label", "n"),
-                        "load_zone": site["load_zone"],
-                        "lat": site["lat"],
-                        "lon": site["lon"],
-                        "signal": site.get("signal", "hold"),
-                        "alarm": site.get("alarm", False),
-                        "soc_pct": base.get("soc_pct"),
-                        "charge_kw": base.get("charge_kw"),
-                        "discharge_kw": base.get("discharge_kw"),
-                        "load_kw": panel.get("load_kw"),
-                        "load_scale": site.get("load_scale"),
-                        "temp_center_c": site.get("temp_center_c"),
-                        "eta": site.get("eta"),
-                        "metrics": metrics,
-                        "charts": site.get("charts") or [],
-                    }
-                )
+                care = metrics.get("maintenance") or {}
+                flagged = care.get("alarming") or []
+                row = {
+                    "id": site["id"],
+                    "metro": site["metro"],
+                    "lat": site["lat"],
+                    "lon": site["lon"],
+                    "state": site.get("state", "hold"),
+                    "soc_pct": base.get("soc_pct"),
+                    "alarm": bool(flagged),
+                }
+                if flagged:
+                    charts = {chart["chart_id"]: chart for chart in site.get("charts") or []}
+                    row["families"] = sorted(
+                        {charts[chart_id]["family"] for chart_id in flagged if chart_id in charts}
+                    )
+                    row["flagged"] = flagged
+                sites.append(row)
             return {
                 "grid": {key: value for key, value in self.grid.items() if key != "prices"},
                 "prices": self.grid.get("prices") or [],
                 "constraints": self.constraints,
                 "edges": self.edges,
+                "metros": self.metros,
+                "fleet": self.fleet,
                 "sites": sites,
                 "ercot": self.status,
+            }
+
+    def site_detail(self, site_id: str) -> dict | None:
+        """Everything behind one battery, including the chart history."""
+        with self._lock:
+            site = next((item for item in self.sites if item["id"] == site_id), None)
+            if site is None:
+                return None
+            history = site.get("chart_history") or {}
+            charts = []
+            for chart in site.get("charts") or []:
+                point = dict(chart)
+                point["series"] = list(history.get(chart["chart_id"]) or [])
+                charts.append(point)
+            return {
+                "id": site["id"],
+                "city": site["city"],
+                "metro": site["metro"],
+                "load_zone": site["load_zone"],
+                "lat": site["lat"],
+                "lon": site["lon"],
+                "state": site.get("state", "hold"),
+                "alarm": site.get("alarm", False),
+                "load_scale": site.get("load_scale"),
+                "temp_center_c": site.get("temp_center_c"),
+                "voltage_center_v": site.get("voltage_center_v"),
+                "eta": site.get("eta"),
+                "instrumented": site["id"] in self.persist,
+                "metrics": site.get("metrics") or {},
+                "charts": charts,
             }
 
 

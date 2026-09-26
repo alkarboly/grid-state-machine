@@ -1,6 +1,8 @@
 # Controller contract
 
-The model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
+A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
+
+The sim agent does sit in the tick. After the charts are written it audits them and appends the same kinds with `actor` `sim`. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). `LLM_URL` is still optional and is not that agent.
 
 The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
 
@@ -59,8 +61,11 @@ When `LLM_URL` is set, the bot POSTs this body at most once per `LLM_EVERY_S` se
 {
   "market": {},
   "units": [],
-  "usage": []
+  "usage": [],
+  "day": []
 }
 ```
+
+`day` is the same 24-hour demand and price trace the map draws. Each point is `{ts, demand_mw, rate_usd_mwh, rate_basis, kind}`. See [ercot-sources.md](ercot-sources.md).
 
 Respond with `{ "actions": [ { "site_id", "kind", "note", "payload" } ] }`. The bot turns each object into a pending `unit_actions` row.

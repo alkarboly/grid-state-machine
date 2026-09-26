@@ -6,8 +6,10 @@ from zoneinfo import ZoneInfo
 
 from gridsim.ercot.normalize import (
     constraints_from_rows,
+    day_points,
     edges_from_constraints,
     grid_from_dashboards,
+    price_day,
     prices_from_rows,
 )
 from gridsim.fleet.charts import CHARTS, evaluate
@@ -78,6 +80,32 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(grid["demand_percentile"], 1)
         self.assertEqual(grid["storage_gen_mw"], -320)
         self.assertEqual(grid["forecast_demand_mw"], 58000)
+
+    def test_day_trace_keeps_a_day_of_demand_and_a_short_forecast(self):
+        supply = {
+            "data": [
+                {"demand": 10000, "forecast": 0, "timestamp": "2026-09-23 01:00:00-0500"},
+                {"demand": 40000, "forecast": 0, "timestamp": "2026-09-25 01:00:00-0500"},
+                {"demand": 60000, "forecast": 0, "timestamp": "2026-09-25 19:00:00-0500"},
+                {"demand": 61000, "forecast": 0, "timestamp": "2026-09-25 19:05:00-0500"},
+                {"demand": 62000, "forecast": 1, "timestamp": "2026-09-25 20:00:00-0500"},
+            ],
+            "forecast": [
+                {"forecastedDemand": 58000, "timestamp": "2026-09-25 20:00:00-0500"},
+                {"forecastedDemand": 70000, "timestamp": "2026-09-28 00:00:00-0500"},
+            ],
+        }
+        points = price_day(day_points(supply), (42.0, "ercot"))
+        self.assertEqual([point["kind"] for point in points], ["actual", "actual", "forecast"])
+        self.assertEqual(points[1]["demand_mw"], 61000.0)
+        self.assertEqual((points[1]["rate_usd_mwh"], points[1]["rate_basis"]), (42.0, "ercot"))
+        self.assertEqual(points[0]["rate_usd_mwh"], 63.0)
+        self.assertEqual(points[2]["demand_mw"], 58000.0)
+        self.assertEqual(points[2]["rate_basis"], "simulated")
+        self.assertTrue(all("2026-09-23" not in point["ts"] and "2026-09-28" not in point["ts"] for point in points))
+        older = {"data": [{"demand": 45000, "forecast": 0, "timestamp": "2026-09-25 12:00:00-0500"}]}
+        filled = day_points(supply, extra=[older])
+        self.assertIn(45000.0, [point["demand_mw"] for point in filled if point["kind"] == "actual"])
 
     def test_constraint_columns_and_edges(self):
         rows = constraints_from_rows(

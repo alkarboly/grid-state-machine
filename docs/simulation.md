@@ -101,6 +101,22 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 
 `return_online` is written by the simulator, not by the controller.
 
+### Sim agent
+
+After the charts for a tick are written, the process audits them and appends `unit_actions` with `actor` `sim`. The following tick applies those rows. This is separate from `LLM_URL`, which stays outside the tick.
+
+An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. A code response outranks the price call below: while one is open, that home is not given a price signal.
+
+`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home. `GET /api/agent` lists homes that are armed or set to dispatch. `GET /api/site/{id}` includes `armed`, `dispatch`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, and `day`). The unit view has a trigger for each code on the open box, plus trigger-all and the dispatch switch. Those flags live in the process. A restart clears them.
+
+On a home with `dispatch` set, and with no open code response, the agent reads the [day trace](ercot-sources.md) and posts `set_signal`:
+
+- `push` when the rate is at least 70 $/MWh, or this hour's expected load is at least 1.25× a typical hour, or demand is at the peak of the trace (the newest actual is at or above the 75th percentile of the 24h actuals)
+- `pull` when this hour's expected load is at or below a typical hour and any of these hold: the rate is at most 40 $/MWh, demand is in the trough (at or below the 35th percentile), or the forecast is a ramp (its mean is at least 8% above the newest actual, and the hour is not already a peak or a trough)
+- `hold` only to replace an open price call that no longer matches. The choice is still stored on the home as `agent_call` and shown in the unit view. `agent_call.day` is `peak`, `trough`, `ramp`, `mid`, or null when the trace is empty.
+
+Expected load is the mean of that home's closed `usage_hours` for this hour of the day. With no closed hour yet, it is `HOUR_MEAN_KW[hour] × load_scale`. A typical hour is the mean of that profile times `load_scale`. The rate is [the market rate](#market-rate). Intensity is 1 on push and pull, so the call reaches the home, and 0 on hold. `payload.reason` is `price`. The note names the rate, the day shape when it is a peak, a trough, or a ramp, the expected kilowatts, and `usage` or `profile`.
+
 ### Add-ons
 
 Both are assumptions, tracked by the disco:

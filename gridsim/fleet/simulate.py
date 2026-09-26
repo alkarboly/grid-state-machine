@@ -425,6 +425,9 @@ def tick_sites(
     call that was actually applied and the interconnection frequency, for the
     dispatch row written after the tick.
     """
+    # Imported here so the chart catalog can load without a cycle through the agent.
+    from gridsim.fleet.agent import forced_measurement
+
     rng = rng or random.Random()
     prices = grid.get("prices") or []
     lmp_mean = sum(item["lmp"] for item in prices) / len(prices) if prices else None
@@ -575,12 +578,36 @@ def tick_sites(
         achieved_net = discharge_kw - charge_kw
 
         charts = [
-            _chart(site, CHARTS[0], disco_net - meter_net, 0.0, None),
-            _chart(site, CHARTS[1], temp_c, expected_temp, site["temp_sigma_c"]),
-            _chart(site, CHARTS[2], disco_voltage, expected_voltage, site["voltage_sigma_v"]),
-            _chart(site, CHARTS[3], frequency, 60.0, None),
-            _chart(site, CHARTS[4], reported_soc, site["physical_soc_kwh"], None),
-            _chart(site, CHARTS[5], achieved_net, commanded_net, None),
+            _chart(
+                site, CHARTS[0],
+                forced_measurement(site, CHARTS[0]["chart_id"], disco_net - meter_net, 0.0, CHARTS[0]["sigma"]),
+                0.0, None,
+            ),
+            _chart(
+                site, CHARTS[1],
+                forced_measurement(site, CHARTS[1]["chart_id"], temp_c, expected_temp, site["temp_sigma_c"]),
+                expected_temp, site["temp_sigma_c"],
+            ),
+            _chart(
+                site, CHARTS[2],
+                forced_measurement(site, CHARTS[2]["chart_id"], disco_voltage, expected_voltage, site["voltage_sigma_v"]),
+                expected_voltage, site["voltage_sigma_v"],
+            ),
+            _chart(
+                site, CHARTS[3],
+                forced_measurement(site, CHARTS[3]["chart_id"], frequency, 60.0, CHARTS[3]["sigma"]),
+                60.0, None,
+            ),
+            _chart(
+                site, CHARTS[4],
+                forced_measurement(site, CHARTS[4]["chart_id"], reported_soc, site["physical_soc_kwh"], CHARTS[4]["sigma"]),
+                site["physical_soc_kwh"], None,
+            ),
+            _chart(
+                site, CHARTS[5],
+                forced_measurement(site, CHARTS[5]["chart_id"], achieved_net, commanded_net, CHARTS[5]["sigma"]),
+                commanded_net, None,
+            ),
         ]
         alarm = any(chart["alarm"] for chart in charts)
         shown_soc = min(site["capacity_kwh"], max(0.0, reported_soc))

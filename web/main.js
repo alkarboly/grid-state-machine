@@ -439,6 +439,62 @@ function fmt(value, digits = 0) {
   });
 }
 
+function spark(points, key) {
+  const width = 210;
+  const height = 32;
+  const values = points.map((point) => Number(point[key]));
+  const times = points.map((point) => Date.parse(point.ts));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const start = Math.min(...times);
+  const end = Math.max(...times);
+  const spanT = end - start || 1;
+  const xAt = (index) => ((times[index] - start) / spanT) * width;
+  const yAt = (value) => height - 2 - ((value - min) / span) * (height - 4);
+  const actual = [];
+  const forecast = [];
+  points.forEach((point, index) => (point.kind === "forecast" ? forecast : actual).push(index));
+  const path = (indexes) => indexes
+    .map((index, step) => `${step ? "L" : "M"}${xAt(index).toFixed(1)},${yAt(values[index]).toFixed(1)}`)
+    .join(" ");
+  let forecastPath = "";
+  if (forecast.length && actual.length) {
+    const start = actual[actual.length - 1];
+    forecastPath = `M${xAt(start).toFixed(1)},${yAt(values[start]).toFixed(1)} ${forecast
+      .map((index) => `L${xAt(index).toFixed(1)},${yAt(values[index]).toFixed(1)}`)
+      .join(" ")}`;
+  }
+  const nowX = actual.length ? xAt(actual[actual.length - 1]) : null;
+  return { actual: path(actual), forecast: forecastPath, nowX, width, height };
+}
+
+function renderDay(data) {
+  const host = document.getElementById("day");
+  const points = (data && data.day) || [];
+  const actuals = points.filter((point) => point.kind !== "forecast");
+  const latest = actuals[actuals.length - 1];
+  if (!latest) {
+    host.innerHTML = `<p class="day-kicker">24h</p><p class="day-row"><span>demand</span><b>—</b></p>`;
+    return;
+  }
+  const demand = spark(points, "demand_mw");
+  const price = spark(points, "rate_usd_mwh");
+  const basis = latest.rate_basis === "ercot" ? `<span class="ercot">ERCOT</span>` : "";
+  const line = (drawn, tone) => `<svg class="day-svg" viewBox="0 0 ${drawn.width} ${drawn.height}" aria-hidden="true">
+      ${drawn.nowX === null ? "" : `<line class="day-now" x1="${drawn.nowX.toFixed(1)}" y1="0" x2="${drawn.nowX.toFixed(1)}" y2="${drawn.height}" />`}
+      <path class="${tone}" d="${drawn.actual}" />
+      ${drawn.forecast ? `<path class="day-forecast" d="${drawn.forecast}" />` : ""}
+    </svg>`;
+  host.innerHTML = `
+    <p class="day-kicker">24h</p>
+    <p class="day-row"><span>demand</span><b>${fmt(latest.demand_mw)} MW</b></p>
+    ${line(demand, "day-demand")}
+    <p class="day-row"><span>price</span><b>${fmt(latest.rate_usd_mwh, 0)} $/MWh ${basis}</b></p>
+    ${line(price, "day-price")}
+  `;
+}
+
 function renderStats(data) {
   const grid = data.grid || {};
   const ercot = data.ercot || {};
@@ -519,12 +575,13 @@ function actionBlock(data) {
     ? actions
         .map(
           (action) => `<button type="button" class="unit-row" data-site="${action.site_id}">
-            <span>${action.site_id}</span><em>${actionTitle(action)} · ${action.status}</em>
+            <span>${action.site_id}</span><em>${actionTitle(action)} · ${action.actor || "sim"} · ${action.status}</em>
           </button>`,
         )
         .join("")
     : `<p class="muted">No actions yet. A scheduled service takes that base offline and brings it back in one to two hours.</p>`;
   return `<div class="roster">${rows}</div>
+    <p class="muted note">The sim agent posts the registered step for an alarming code. Frequency is left alone. A unit set to dispatch gets push or pull from the price and its expected load.</p>
     <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>`;
 }
 
@@ -818,6 +875,66 @@ function patchDiagram(holder, view) {
   if (fill) fill.setAttribute("width", ((DIA.bw - 32) * view.soc).toFixed(1));
 }
 
+function agentControls(site) {
+  const rows = METRIC_ROWS[component] || [];
+  const ids = [];
+  for (const row of rows) {
+    if (row[3] && !ids.includes(row[3])) ids.push(row[3]);
+  }
+  const armed = site.armed || [];
+  const byId = {};
+  for (const chart of site.charts || []) byId[chart.chart_id] = chart;
+  const buttons = ids.map((id) => {
+    const on = armed.includes(id);
+    const title = ((byId[id] && byId[id].title) || id).toLowerCase();
+    return `<button type="button" class="arm${on ? " on" : ""}" data-arm="${id}" data-on="${on ? "1" : "0"}">${on ? "clear" : "trigger"} ${title}</button>`;
+  }).join("");
+  const allOn = (site.charts || []).length > 0 && (site.charts || []).every((chart) => armed.includes(chart.chart_id));
+  const dispatchOn = !!site.dispatch;
+  const price = (site.actions || []).find(
+    (row) => (row.payload || {}).reason === "price" && (row.status === "pending" || row.status === "active"),
+  );
+  const call = site.agent_call;
+  const place = call && call.day && call.day !== "mid" ? ` · ${call.day}` : "";
+  const callLine = call
+    ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>`
+    : "";
+  return `<div class="arms">
+      ${buttons}
+      <button type="button" class="arm${allOn ? " on" : ""}" data-arm="all" data-on="${allOn ? "1" : "0"}">${allOn ? "clear all codes" : "trigger all codes"}</button>
+      <button type="button" class="arm${dispatchOn ? " on" : ""}" data-dispatch="${dispatchOn ? "0" : "1"}">${dispatchOn ? "dispatch on" : "push or pull"}</button>
+    </div>
+    ${callLine}
+    ${price ? `<p class="muted note">${price.note}</p>` : ""}`;
+}
+
+async function postAgent(node) {
+  if (!unitDetail) return;
+  const body = { site_id: unitDetail.id };
+  if (node.hasAttribute("data-arm")) {
+    body.chart_id = node.dataset.arm;
+    body.armed = node.dataset.on !== "1";
+  }
+  if (node.hasAttribute("data-dispatch")) {
+    body.dispatch = node.dataset.dispatch === "1";
+  }
+  try {
+    const response = await fetch(api("/api/agent"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) return;
+    const detail = await loadUnit(unitDetail.id);
+    if (detail) {
+      unitDetail = detail;
+      renderUnit();
+    }
+  } catch (error) {
+    /* the next poll retries the view */
+  }
+}
+
 function metricRow(label, text, chartId) {
   if (!chartId) return row(label, text);
   const on = expanded.has(chartId) ? " on" : "";
@@ -875,6 +992,7 @@ function renderUnit() {
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>
+    ${agentControls(site)}
     <div class="stack">${rows
       .map(([label, source, format, chartId]) => metricRow(label, format(metrics[source] || {}), chartId))
       .join("")}</div>
@@ -949,6 +1067,11 @@ panel.addEventListener("click", (event) => {
 modal.addEventListener("click", (event) => {
   if (event.target === modal) {
     modal.close();
+    return;
+  }
+  const armHit = event.target.closest("[data-arm], [data-dispatch]");
+  if (armHit) {
+    postAgent(armHit);
     return;
   }
   const blockHit = event.target.closest("[data-component]");
@@ -1258,6 +1381,7 @@ async function poll() {
     payload = await response.json();
     renderScene(payload);
     renderStats(payload);
+    renderDay(payload);
     renderPanel(payload);
     if (modal.open && selected) {
       unitDetail = (await loadUnit(selected)) || unitDetail;

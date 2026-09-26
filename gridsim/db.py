@@ -247,6 +247,27 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def recent_supply(conn: sqlite3.Connection, cutoffs: list[str]) -> list[dict]:
+    """Older supply-demand payloads, newest first within each cutoff, ids unique."""
+    bodies = []
+    seen: set[int] = set()
+    for cutoff in cutoffs:
+        row = conn.execute(
+            """
+            SELECT id, body FROM raw_records
+            WHERE source = 'supply-demand' AND fetched_at <= ?
+            ORDER BY fetched_at DESC
+            LIMIT 1
+            """,
+            (cutoff,),
+        ).fetchone()
+        if row is None or row[0] in seen:
+            continue
+        seen.add(row[0])
+        bodies.append(json.loads(row[1]))
+    return bodies
+
+
 def insert_raw(conn: sqlite3.Connection, source: str, fetched_at: str, body: Any) -> None:
     conn.execute(
         "INSERT INTO raw_records (source, fetched_at, body) VALUES (?, ?, ?)",

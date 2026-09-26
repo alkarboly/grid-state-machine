@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import timedelta
 
 from gridsim import config
 from gridsim.db import (
@@ -12,6 +13,7 @@ from gridsim.db import (
     insert_grid,
     insert_market,
     insert_raw,
+    recent_supply,
     insert_rollup,
     insert_tick,
     insert_usage,
@@ -45,10 +47,13 @@ from gridsim.sync import (
 from gridsim.ercot.client import fetch_dashboards, fetch_official
 from gridsim.ercot.normalize import (
     constraints_from_rows,
+    day_points,
     edges_from_constraints,
     grid_from_dashboards,
+    price_day,
     prices_from_rows,
 )
+from gridsim.fleet.agent import audit
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import (
     DEMO_FAULTS,
@@ -244,6 +249,7 @@ class Fleet:
         self.supabase = "disabled"
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
+        self.day: list[dict] = []
         self.status = {
             "dashboard": "unavailable",
             "dashboard_error": None,
@@ -292,9 +298,11 @@ class Fleet:
         grid = None
         constraints: list[dict] = []
         prices: list[dict] = []
+        supply = None
 
         try:
             raw = fetch_dashboards()
+            supply = raw["supply_demand"]
             if self._conn:
                 insert_raw(self._conn, "supply-demand", fetched_at, raw["supply_demand"])
                 insert_raw(self._conn, "fuel-mix", fetched_at, raw["fuel_mix"])
@@ -326,10 +334,17 @@ class Fleet:
         else:
             official = "disabled"
 
+        extra = []
+        if self._conn and supply is not None:
+            moment = now_central()
+            midnight = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+            extra = recent_supply(self._conn, [iso(moment - timedelta(minutes=30)), iso(midnight)])
         stored_grid = None
         with self._lock:
             if grid is not None:
                 grid["prices"] = prices
+                if supply is not None:
+                    self.day = price_day(day_points(supply, self.day, extra), market_rate(grid))
                 self.grid = grid
                 stored_grid = {key: value for key, value in grid.items() if key != "prices"}
             elif prices:
@@ -378,6 +393,46 @@ class Fleet:
             action = new_action(site_id, kind, now, note=note, payload=payload, actor=actor)
             self.actions.append(action)
         return action
+
+    def arm(self, site_id: str, chart_id: str | None, armed: bool | None, dispatch: bool | None) -> dict:
+        """Arm a chart so the next tick drives it past the limits, or turn on price dispatch."""
+        known = [spec["chart_id"] for spec in CHARTS]
+        with self._lock:
+            site = next((item for item in self.sites if item["id"] == site_id), None)
+            if site is None:
+                raise KeyError(site_id)
+            if chart_id is not None:
+                if armed is None:
+                    raise ValueError("armed is required with chart_id")
+                if chart_id != "all" and chart_id not in known:
+                    raise ValueError("unknown chart_id")
+                current = [item for item in (site.get("armed") or []) if item in known]
+                if chart_id == "all":
+                    site["armed"] = list(known) if armed else []
+                elif armed and chart_id not in current:
+                    current.append(chart_id)
+                    site["armed"] = current
+                elif not armed:
+                    site["armed"] = [item for item in current if item != chart_id]
+                else:
+                    site["armed"] = current
+            if dispatch is not None:
+                site["agent_dispatch"] = bool(dispatch)
+            return {
+                "site_id": site_id,
+                "armed": list(site.get("armed") or []),
+                "dispatch": bool(site.get("agent_dispatch")),
+            }
+
+    def agent_view(self) -> dict:
+        with self._lock:
+            rows = []
+            for site in self.sites:
+                armed = list(site.get("armed") or [])
+                dispatch = bool(site.get("agent_dispatch"))
+                if armed or dispatch:
+                    rows.append({"site_id": site["id"], "armed": armed, "dispatch": dispatch})
+            return {"sites": rows}
 
     def tick(self) -> None:
         remote, remote_error = pull_order()
@@ -450,6 +505,12 @@ class Fleet:
             self.snapshot = row
             self._last_tick = now
             self._keep_usage(note.get("usage") or [])
+            grid = dict(self.grid)
+            grid["day"] = self.day
+            fresh = audit(self.sites, self.actions, grid, self.usage, now)
+            if fresh:
+                self.actions.extend(fresh)
+                self._trim_actions()
             market = _market(self.grid, self.fleet, self.applied, note["frequency_hz"], sites)
             self.market = market
             publish = self._publish_sites()
@@ -512,7 +573,7 @@ class Fleet:
         usage = []
         for site_id in wanted:
             usage.extend(self.usage.get(site_id, [])[-6:])
-        return {"market": self.market, "units": units, "usage": usage}
+        return {"market": self.market, "units": units, "usage": usage, "day": list(self.day)}
 
     def _publish_sites(self) -> list[dict]:
         """Instrumented homes, plus any home an action or add-on has touched."""
@@ -589,6 +650,7 @@ class Fleet:
                 ],
                 "sites": sites,
                 "ercot": self.status,
+                "day": list(self.day),
             }
 
     def site_detail(self, site_id: str) -> dict | None:
@@ -623,6 +685,9 @@ class Fleet:
                 "charts": charts,
                 "usage": list(self.usage.get(site_id, [])[-24:]),
                 "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
+                "armed": list(site.get("armed") or []),
+                "dispatch": bool(site.get("agent_dispatch")),
+                "agent_call": site.get("agent_call"),
             }
 
 

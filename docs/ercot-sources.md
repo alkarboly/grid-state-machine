@@ -27,6 +27,16 @@ Normalized grid snapshot fields:
 | `wind_mw`, `solar_mw`, `gas_mw` | Latest fuel `gen` |
 | `source` | `ercot-dashboard`, `cached`, or `unavailable` |
 
+## Day trace
+
+`day` on `GET /api/scene`, and on the model request in [llm.md](llm.md), is the series behind the top-left overlay. The sim agent reads the same points.
+
+Each point is `{ts, demand_mw, rate_usd_mwh, rate_basis, kind}`. `kind` is `actual` or `forecast`.
+
+Actuals are the dashboard `data[]` rows with `forecast` 0, kept for the 24 hours before the newest actual and bucketed to 15 minutes. The newest sample in a bucket wins. A restart also reads two stored payloads: the latest one at least 30 minutes old, and the latest one from before midnight, so the trace still covers the day those responses published. The forecast is `forecast[]` (`forecastedDemand`), which replaces a `data[]` row with `forecast` 1 at the same time, and only the next 6 hours are kept. The rest of that multi-day forecast is dropped.
+
+`rate_usd_mwh` on every point except the newest actual is `18 + 90 × percentile`, where the percentile is that point's demand against the actuals in the window. `rate_basis` there is `simulated`. The newest actual uses [the market rate](simulation.md): a live mean of `LZ_*` and `HB_*` LMPs when those prices exist (`ercot`), otherwise the same curve (`simulated`). Settlement prices are not a 24-hour history in this feed.
+
 ## Official Public API
 
 Base URL: `https://api.ercot.com/api/public-reports`

@@ -79,6 +79,11 @@ def addon_power(addon_ids: list[str], hour: int) -> list[dict]:
     return rows
 
 
+def simulated_rate(percentile: float) -> float:
+    """The demand curve used when no settlement price is present. 18 + 90 × percentile."""
+    return round(18.0 + 90.0 * float(percentile), 2)
+
+
 def market_rate(grid: dict) -> tuple[float, str]:
     """The rate a controller reads. A real LMP when one exists, otherwise a curve of demand."""
     prices = []
@@ -91,7 +96,7 @@ def market_rate(grid: dict) -> tuple[float, str]:
     if prices:
         return round(sum(prices) / len(prices), 2), "ercot"
     percentile = float(grid.get("demand_percentile") or 0.5)
-    return round(18.0 + 90.0 * percentile, 2), "simulated"
+    return simulated_rate(percentile), "simulated"
 
 
 def new_action(

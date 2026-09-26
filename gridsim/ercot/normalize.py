@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+from gridsim.fleet.actions import simulated_rate
 from gridsim.timeutil import iso, parse_ercot_ts
+
+# The overlay and the sim agent share this window: trailing actuals, then the
+# short forecast. The dashboard's forecast array runs for days; we keep six hours.
+HISTORY = timedelta(hours=24)
+FORECAST = timedelta(hours=6)
 
 
 def _key(name: str) -> str:
@@ -175,3 +183,115 @@ def edges_from_constraints(constraints: list[dict], geo_by_station: dict) -> lis
             }
         )
     return edges
+
+
+def _quarter(moment):
+    return moment.replace(minute=(moment.minute // 15) * 15, second=0, microsecond=0)
+
+
+def _demand_rows(supply: dict) -> tuple[list[tuple], list[tuple]]:
+    """Actuals and the forward forecast from one supply-demand payload."""
+    actuals = []
+    forecast = {}
+    for row in supply.get("data") or []:
+        if "demand" not in row or "timestamp" not in row:
+            continue
+        try:
+            moment = parse_ercot_ts(row["timestamp"])
+            demand = float(row["demand"])
+        except (TypeError, ValueError):
+            continue
+        if int(row.get("forecast", 1)) == 0:
+            actuals.append((moment, demand))
+        else:
+            forecast[moment] = demand
+    for row in supply.get("forecast") or []:
+        if "forecastedDemand" not in row or "timestamp" not in row:
+            continue
+        try:
+            moment = parse_ercot_ts(row["timestamp"])
+            demand = float(row["forecastedDemand"])
+        except (TypeError, ValueError):
+            continue
+        forecast[moment] = demand
+    return actuals, list(forecast.items())
+
+
+def day_points(supply: dict, previous: list[dict] | None = None, extra: list[dict] | None = None) -> list[dict]:
+    """Trailing 24 hours of demand plus the next 6 hours of forecast.
+
+    Actuals are bucketed to 15 minutes. The newest sample in a bucket wins.
+    `extra` payloads are older copies of the same feed, so a cold start still
+    has the day those responses already published. Forecast comes from `supply`.
+    Points are `{ts, demand_mw, kind}` with `kind` of `actual` or `forecast`.
+    """
+    actuals = []
+    for source in extra or []:
+        found, _forecast = _demand_rows(source)
+        actuals.extend(found)
+    live, forecast = _demand_rows(supply)
+    actuals.extend(live)
+    kept: dict = {}
+    for point in previous or []:
+        if point.get("kind") != "actual" or not point.get("ts") or point.get("demand_mw") is None:
+            continue
+        try:
+            moment = parse_ercot_ts(point["ts"])
+        except (TypeError, ValueError):
+            continue
+        kept[_quarter(moment)] = (moment, float(point["demand_mw"]))
+    for moment, demand in actuals:
+        bucket = _quarter(moment)
+        current = kept.get(bucket)
+        if current is None or moment >= current[0]:
+            kept[bucket] = (moment, demand)
+    if not kept:
+        return []
+    latest = max(item[0] for item in kept.values())
+    start = latest - HISTORY
+    end = latest + FORECAST
+    rows = [
+        {"ts": iso(moment), "demand_mw": round(demand, 1), "kind": "actual"}
+        for moment, demand in kept.values()
+        if start <= moment <= latest
+    ]
+    forward_kept: dict = {}
+    for moment, demand in forecast:
+        if moment <= latest or moment > end:
+            continue
+        bucket = _quarter(moment)
+        current = forward_kept.get(bucket)
+        if current is None or moment >= current[0]:
+            forward_kept[bucket] = (moment, demand)
+    forward = [
+        {"ts": iso(moment), "demand_mw": round(demand, 1), "kind": "forecast"}
+        for moment, demand in sorted(forward_kept.values(), key=lambda item: item[0])
+    ]
+    rows.sort(key=lambda point: point["ts"])
+    return rows + forward
+
+
+def price_day(points: list[dict], live_rate: tuple[float, str] | None = None) -> list[dict]:
+    """Attach the simulated demand curve. The newest actual uses the live market rate."""
+    pool = [float(point["demand_mw"]) for point in points if point.get("kind") == "actual"]
+    priced = []
+    last_actual = None
+    for point in points:
+        if pool:
+            share = sum(value <= float(point["demand_mw"]) for value in pool) / len(pool)
+        else:
+            share = 0.5
+        row = {
+            "ts": point["ts"],
+            "demand_mw": point["demand_mw"],
+            "kind": point["kind"],
+            "rate_usd_mwh": simulated_rate(share),
+            "rate_basis": "simulated",
+        }
+        priced.append(row)
+        if row["kind"] == "actual":
+            last_actual = row
+    if live_rate and last_actual is not None:
+        last_actual["rate_usd_mwh"] = live_rate[0]
+        last_actual["rate_basis"] = live_rate[1]
+    return priced

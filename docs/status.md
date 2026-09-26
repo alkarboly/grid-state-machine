@@ -18,15 +18,17 @@ Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `in
 
 Feeder lines from homes to substations are gone. The pale ring marks the selected unit. The right panel collapses, and its ledger sums every unit. Inside a city or a substation, **back** sits on the map. Opening a battery draws no line back to its city.
 
+The sim agent runs after each tick's charts. An alarming code gets the registered `steps` (`actor` `sim`) on the next tick. Frequency is left alone. A warning is left alone. `POST /api/agent` arms any chart, or all of them, so the residual is forced to +4 sigma. The same route sets dispatch on one home: push or pull from the simulated (or ERCOT) rate and that home's expected load, using closed usage hours when they exist. The unit view has the triggers and shows the call the agent chose, including a hold. A card in the top left draws 24 hours of ERCOT demand and the price, including a 6-hour forecast. The sim agent reads that same trace when it chooses push or pull.
+
 ## In the working tree
 
-The unit view is grid, disco, panel, and base. A metric opens its chart, which draws the 1σ, 2σ, and 3σ lines. The elsewhere list is gone.
+Nothing uncommitted.
 
 ## Not standing yet
 
 The bot and the web service are described in `render.yaml` and [deploy.md](deploy.md). The Supabase project and the two Render services have not been created from this repo. Until they are, the map people open is the local process, and a model has nowhere to write except `POST /api/actions` on that process.
 
-`LLM_URL` is unset. With it empty, the tick applies only the action rows a person inserts or posts. The request and response shapes are already in [llm.md](llm.md).
+`LLM_URL` is unset, so no remote model is called. The sim agent still resolves alarming codes and a home set to dispatch. The remote request and response shapes are in [llm.md](llm.md).
 
 `rate_basis` on the local map is `simulated` until the official price reports return rows. The public dashboard is already live.
 
@@ -36,11 +38,10 @@ A `scheduled_service` on `aus-0004` was inserted only to check the Actions list.
 
 ## Next
 
-1. Commit the working tree when asked, then push `main`. Leave `.env` and `data/gridsim.db` out.
-2. Create the Supabase project and run the three SQL files in [deploy.md](deploy.md), in filename order. Create `gridsim-bot` and `gridsim-web` from `render.yaml`. Set `API_BASE` in `web/config.js` to the bot origin before the static site is published. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `WEB_ORIGIN` on the bot only. Do not paste those keys, or the ERCOT password, into chat.
-3. Confirm the deploy check in [deploy.md](deploy.md): the fleet appears, the Market block has a rate, and a `scheduled_service` row takes `aus-0004` offline and the bot writes `return_online` when the window ends.
-4. Point a model at that bus. Either set `LLM_URL` or let the model insert `unit_actions`. The tick still applies rows on the next pass. It does not call the model inline.
-5. When the ERCOT subscription key is available, set the three credentials on the bot so `rate_basis` can be `ercot`.
-6. Add a station pair to `data/station_geo.json` only for codes a live constraint actually names, with a source note. That is what draws a constraint arc.
+1. Create the Supabase project and run the three SQL files in [deploy.md](deploy.md), in filename order. Create `gridsim-bot` and `gridsim-web` from `render.yaml`. Set `API_BASE` in `web/config.js` to the bot origin before the static site is published. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `WEB_ORIGIN` on the bot only. Do not paste those keys, or the ERCOT password, into chat. Leave `.env` and `data/gridsim.db` out of git.
+2. Confirm the deploy check in [deploy.md](deploy.md): the fleet appears, the Market block has a rate, and a `scheduled_service` row takes `aus-0004` offline and the bot writes `return_online` when the window ends.
+3. Point a model at that bus. Either set `LLM_URL` or let the model insert `unit_actions`. The tick still applies rows on the next pass. It does not call the model inline.
+4. When the ERCOT subscription key is available, set the three credentials on the bot so `rate_basis` can be `ercot`.
+5. Add a station pair to `data/station_geo.json` only for codes a live constraint actually names, with a source note. That is what draws a constraint arc.
 
 After the bus is up, the open joins in [gaps.md](gaps.md) are the settlement-point to electrical-bus report, then replacing the assumed kilowatts, load shape, and neighborhood positions with real territory data. Leave those numbers alone until the data exists.

@@ -54,6 +54,33 @@ def post_dispatch(body: dict):
     return fleet.dispatch_view()
 
 
+@app.get("/api/agent")
+def agent():
+    return fleet.agent_view()
+
+
+@app.post("/api/agent")
+def post_agent(body: dict):
+    site_id = body.get("site_id")
+    if not isinstance(site_id, str) or not site_id:
+        raise HTTPException(status_code=400, detail="site_id is required")
+    chart_id = body.get("chart_id")
+    armed = body.get("armed") if "armed" in body else None
+    dispatch = body.get("dispatch") if "dispatch" in body else None
+    if chart_id is not None and not isinstance(chart_id, str):
+        raise HTTPException(status_code=400, detail="chart_id must be a string")
+    if armed is not None and not isinstance(armed, bool):
+        raise HTTPException(status_code=400, detail="armed must be true or false")
+    if dispatch is not None and not isinstance(dispatch, bool):
+        raise HTTPException(status_code=400, detail="dispatch must be true or false")
+    try:
+        return fleet.arm(site_id, chart_id, armed, dispatch)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown site") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @app.post("/api/actions")
 def post_action(body: dict):
     site_id = body.get("site_id")

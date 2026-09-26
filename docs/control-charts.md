@@ -34,6 +34,19 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 
 `action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`.
 
+Each code also has `steps`, the rows the sim agent posts when that chart's `alarm` is true. A warning does not post them. `frequency` has no steps.
+
+| Code | `steps` |
+| --- | --- |
+| `disco_meter_delta` | `scheduled_service` |
+| `base_temp` | `set_signal` hold, then `scheduled_service` |
+| `disco_voltage` | `scheduled_service` |
+| `frequency` | none |
+| `soc_tracking` | `scheduled_service` |
+| `dispatch_response` | `set_signal` hold, then `scheduled_service` |
+
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the agent posts `steps`. `armed: false` clears it. The scripted faults on this page stay in place either way. An armed chart replaces the measured value for that tick.
+
 ## Rules
 
 Evaluated in this order. More than one may fire on the same point.

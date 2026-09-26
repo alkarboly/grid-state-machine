@@ -26,7 +26,7 @@ python -m unittest discover -s tests -t .
 
 ## Credentials
 
-Leave `.env` empty and the map still runs on the live dashboard. Deploy steps for Supabase and the two Render services are in [docs/deploy.md](docs/deploy.md). To add constraints and prices, register at the [ERCOT API Explorer](https://apiexplorer.ercot.com/), subscribe, and copy the primary key:
+Leave `.env` empty and the map still runs on the live dashboard. Deploy steps for Supabase and the Render web service are in [docs/deploy.md](docs/deploy.md). To add constraints and prices, register at the [ERCOT API Explorer](https://apiexplorer.ercot.com/), subscribe, and copy the primary key:
 
 ```
 ERCOT_USERNAME=you@email.com

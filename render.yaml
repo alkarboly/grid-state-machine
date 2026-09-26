@@ -1,9 +1,9 @@
-# Two services. The bot holds the simulation and the Supabase service-role key.
-# The web service is the map. Set web/config.js API_BASE to the bot origin
-# before the static site is published. See docs/deploy.md.
+# One dynamic web service. It runs the simulation and serves the map
+# from the same origin, so API_BASE stays empty and CORS is unnecessary.
+# See docs/deploy.md.
 services:
   - type: web
-    name: gridsim-bot
+    name: gridsim
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -12,13 +12,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.11"
-      - key: SERVE_STATIC
-        value: "0"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: WEB_ORIGIN
         sync: false
       - key: LLM_URL
         sync: false
@@ -28,7 +24,3 @@ services:
         sync: false
       - key: ERCOT_SUBSCRIPTION_KEY
         sync: false
-  - type: web
-    name: gridsim-web
-    runtime: static
-    staticPublishPath: web

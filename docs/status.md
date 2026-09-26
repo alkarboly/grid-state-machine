@@ -14,7 +14,7 @@ The map is one particle draw. Homes sit on a hex around a modeled distribution s
 
 One fleet call per tick. `POST /api/dispatch` or the newest Supabase `dispatch_orders` row is applied on the next tick. The tick does not wait on a model.
 
-Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`. The bot writes `return_online` when a service window ends. The disco tracks `solar` (5 kW source) and `ev_charger` (7.2 kW load). The read model is `market_ticks`, `unit_latest`, and `usage_hours`. The contract is [llm.md](llm.md). The SQL files and the two Render services are [deploy.md](deploy.md).
+Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`. The bot writes `return_online` when a service window ends. The disco tracks `solar` (5 kW source) and `ev_charger` (7.2 kW load). The read model is `market_ticks`, `unit_latest`, and `usage_hours`. The contract is [llm.md](llm.md). The SQL files and the Render web service are [deploy.md](deploy.md).
 
 Feeder lines from homes to substations are gone. The pale ring marks the selected unit. The right panel collapses, and its ledger sums every unit. Inside a city or a substation, **back** sits on the map. Opening a battery draws no line back to its city.
 
@@ -30,7 +30,7 @@ The in-tick writer is two managers. The maintenance manager posts alarm steps wi
 
 ## Not standing yet
 
-The bot and the web service are described in `render.yaml` and [deploy.md](deploy.md). The Supabase project and the two Render services have not been created from this repo. Until they are, the map people open is the local process, and a model has nowhere to write except `POST /api/actions` on that process.
+The web service is described in `render.yaml` and [deploy.md](deploy.md). It serves the map and the API from one process. The Supabase project and that Render service have not been created from this repo. Until they are, the map people open is the local process, and a model has nowhere to write except `POST /api/actions` on that process.
 
 `LLM_URL` is unset, so no remote model is called. The maintenance manager still resolves alarming codes, and the fleet manager still resolves a home set to dispatch. The remote request and response shapes are in [llm.md](llm.md).
 
@@ -42,7 +42,7 @@ A `scheduled_service` on `aus-0004` was inserted only to check the Agent list. I
 
 ## Next
 
-1. Create the Supabase project and run the three SQL files in [deploy.md](deploy.md), in filename order. Create `gridsim-bot` and `gridsim-web` from `render.yaml`. Set `API_BASE` in `web/config.js` to the bot origin before the static site is published. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `WEB_ORIGIN` on the bot only. Do not paste those keys, or the ERCOT password, into chat. Leave `.env` and `data/gridsim.db` out of git.
+1. Create the Supabase project and run the three SQL files in [deploy.md](deploy.md), in filename order. Create `gridsim` from `render.yaml`. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` on that service only. Leave `API_BASE` empty. Do not paste those keys, or the ERCOT password, into chat. Leave `.env` and `data/gridsim.db` out of git.
 2. Confirm the deploy check in [deploy.md](deploy.md): the fleet appears, the Now block has a rate, and a `scheduled_service` row takes `aus-0004` offline and the bot writes `return_online` when the window ends.
 3. Point a model at that bus. Either set `LLM_URL` or let the model insert `unit_actions`. The tick still applies rows on the next pass. It does not call the model inline.
 4. When the ERCOT subscription key is available, set the three credentials on the bot so `rate_basis` can be `ercot`.

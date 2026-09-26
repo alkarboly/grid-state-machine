@@ -1,6 +1,6 @@
 # Deploy
 
-Two Render services and one Supabase project. The bot runs the simulation. The web service is the map. Supabase is the table the controller reads and writes. The browser talks only to the bot.
+One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table a controller reads and writes. The browser talks only to that service. The service-role key stays in the service environment.
 
 Do not paste the service-role key, the ERCOT password, or the subscription key into chat. Set them in the Render dashboard.
 
@@ -20,33 +20,28 @@ Copy the project URL and the service-role key into the bot's environment only. R
 
 ## 2. Render
 
-`render.yaml` describes both services. From the Render dashboard, create a blueprint that points at this repo, or create the two services by hand with the same commands.
+`render.yaml` describes one Python web service named `gridsim`. From the Render dashboard, create a blueprint that points at this repo, or create that service by hand with the same commands.
 
-**gridsim-bot** (Python web service)
+**gridsim** (Python web service)
 
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn gridsim.api:app --host 0.0.0.0 --port $PORT`
 - Health check: `/api/scene`
 - Environment:
-  - `SERVE_STATIC=0`
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_ROLE_KEY`
-  - `WEB_ORIGIN` = the web service origin, for example `https://gridsim-web.onrender.com`
   - `LLM_URL` if a model endpoint is ready. Leave it empty until then.
   - `ERCOT_USERNAME`, `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY` if you want official prices. The public dashboard works without them.
 
-The bot's disk is ephemeral. Supabase is the record of actions, market rows, and usage hours. A restart rebuilds the fleet in memory and then catches up from `unit_actions`.
+Leave `SERVE_STATIC` unset. The default serves `web/` from this same process, and `API_BASE` in `web/config.js` stays empty so the page calls its own origin. Set `SERVE_STATIC=0` and `WEB_ORIGIN` only if a different origin must host the map.
 
-**gridsim-web** (static site)
+The service disk is ephemeral. Supabase is the record of actions, market rows, and usage hours. A restart rebuilds the fleet in memory and then catches up from `unit_actions`.
 
-- Publish directory: `web`
-- Before publishing, set `API_BASE` in `web/config.js` to the bot origin with no trailing slash, for example `https://gridsim-bot.onrender.com`.
-
-The map then polls `API_BASE/api/scene`. The side panel starts open. It shows the price and day shape, Fleet manager and Maintenance manager with the latest step and a timer, and Maintenance alerts for homes past a limit.
+The map polls `/api/scene` on that same origin. The side panel starts open. It shows the price and day shape, Fleet manager and Maintenance manager with the latest step and a timer, and Maintenance alerts for homes past a limit.
 
 ## 3. Check
 
-Open the web origin. The fleet should appear, and the Now block should show a rate. Insert a service from the Supabase SQL editor:
+Open the service URL. The fleet should appear, and the Now block should show a rate. Insert a service from the Supabase SQL editor:
 
 ```sql
 insert into unit_actions (id, site_id, kind, status, actor, note)

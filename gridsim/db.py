@@ -115,6 +115,26 @@ CREATE TABLE IF NOT EXISTS fleet_rollups (
   capacity_kwh REAL NOT NULL,
   mean_soc_pct REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dispatch_ticks (
+  ts TEXT PRIMARY KEY,
+  demand_mw REAL,
+  demand_percentile REAL,
+  storage_gen_mw REAL,
+  frequency_hz REAL NOT NULL,
+  signal TEXT NOT NULL,
+  intensity REAL NOT NULL,
+  source TEXT NOT NULL,
+  zones_json TEXT NOT NULL,
+  pushing INTEGER NOT NULL,
+  pulling INTEGER NOT NULL,
+  holding INTEGER NOT NULL,
+  discharge_kw REAL NOT NULL,
+  charge_kw REAL NOT NULL,
+  load_kw REAL NOT NULL,
+  mean_soc_pct REAL NOT NULL,
+  stored_kwh REAL NOT NULL,
+  alarms INTEGER NOT NULL
+);
 """
 
 _ROLLUP_COLUMNS = (
@@ -243,6 +263,38 @@ def insert_rollup(conn: sqlite3.Connection, rollup: dict) -> None:
     conn.execute(
         f"INSERT OR REPLACE INTO fleet_rollups ({columns}) VALUES ({placeholders})",
         tuple(rollup[column] for column in _ROLLUP_COLUMNS),
+    )
+    conn.commit()
+
+
+_DISPATCH_COLUMNS = (
+    "ts",
+    "demand_mw",
+    "demand_percentile",
+    "storage_gen_mw",
+    "frequency_hz",
+    "signal",
+    "intensity",
+    "source",
+    "zones_json",
+    "pushing",
+    "pulling",
+    "holding",
+    "discharge_kw",
+    "charge_kw",
+    "load_kw",
+    "mean_soc_pct",
+    "stored_kwh",
+    "alarms",
+)
+
+
+def insert_dispatch(conn: sqlite3.Connection, row: dict) -> None:
+    columns = ", ".join(_DISPATCH_COLUMNS)
+    placeholders = ", ".join("?" for _ in _DISPATCH_COLUMNS)
+    conn.execute(
+        f"INSERT OR REPLACE INTO dispatch_ticks ({columns}) VALUES ({placeholders})",
+        tuple(row[column] for column in _DISPATCH_COLUMNS),
     )
     conn.commit()
 

@@ -18,11 +18,13 @@ The metro list is ERCOT only. El Paso is in WECC, Amarillo is in SPP, and Beaumo
 
 ### Where inside a metro
 
-A metro is a handful of neighborhoods, not a smooth ellipse. Big metros get up to eight centres; a small town gets one. Each centre is a Rayleigh draw at about 0.85 of `radius_km`, stretched by `stretch` along `axis_deg` east of north, so the clumps follow the built-up area: the Valley runs east-west, Austin runs up and down I-35. Houses then scatter a few kilometres around their centre, which is a district rather than a downtown or a uniform fog.
+A metro is a handful of neighborhoods, not a smooth ellipse. Big metros get up to eight centres; a small town gets one. Each centre is a Rayleigh draw at about 0.85 of `radius_km`, stretched by `stretch` along `axis_deg` east of north, so the clumps follow the built-up area: the Valley runs east-west, Austin runs up and down I-35. The homes around a centre sit on a hex lattice turned to that same axis, a few kilometres across, so the station's service area reads as a grid rather than a pile. A cell that would fall in the water is pulled back onto land.
+
+Each centre is also the distribution substation those houses supply. The id looks like `aus-s03` and the name looks like `Austin 3`. A home keeps that station for the life of the process. These stations are modeled. They are not ERCOT station codes, they are not electrical buses, and they are not rows in `data/station_geo.json`.
 
 Any draw that falls outside the Texas outline in `web/geo.js` is rejected. That outline is the same one the map draws, so a battery cannot sit in the Gulf or past the border. Coastal metros lose the samples that would have landed in the water, and the rest stay on the land side.
 
-These are modelled addresses. They are not customer locations and they are not tied to a real feeder.
+These are modelled addresses. They are not customer locations.
 
 ### Faults
 
@@ -32,7 +34,9 @@ Four named batteries carry scripted faults, one per maintenance kind, listed in 
 
 Hour-of-day mean kilowatts are a late-summer central-air profile. The daily total is about 54 kWh. That is a modeling assumption until real meter samples replace it.
 
-The mean is multiplied by that battery's `load_scale`, then by `0.85 + 0.30 * demand_percentile`, so a larger home sits higher and every home sits a bit higher when ERCOT demand is in the top of today's range. A small gaussian draws the tick-to-tick sensor noise.
+The mean is multiplied by that battery's `load_scale`, then by `0.85 + 0.30 * demand_percentile`, so a larger home sits higher and every home sits a bit higher when ERCOT demand is in the top of today's range.
+
+Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own.
 
 ## Interchange
 
@@ -46,7 +50,13 @@ The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count pl
 
 ## Dispatch
 
-Evaluated in this order:
+The call is what the fleet was asked to do. An external order is one call for every home. With no order, the ladder below runs per home.
+
+An external order is `{signal, intensity}` with `signal` of `push`, `pull`, or `hold`. It arrives on `POST /api/dispatch` and is applied on the next tick, or it is the newest row in Supabase `dispatch_orders`, which the tick reads when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set. `auto` clears the order and the ladder takes over. Intensity is optional: when it is omitted, the ladder's own intensity for that signal is used. Hold always has intensity 0. While an order is in force, every home receives it. Load-zone prices do not split the fleet.
+
+`source` on the grid component is `external` for an order and `rules` for the ladder. The values the controller sees are one `dispatch_ticks` row per tick: demand, storage, frequency, the call that was applied, and what the fleet then did. `GET /api/dispatch` returns that row, the order waiting for the next tick, and whether the Supabase write succeeded. The browser does not receive the service-role key.
+
+The ladder, used whenever no order is set, is evaluated in this order:
 
 1. If the home's load-zone LMP is present and outside the middle band, it decides: `push` when LMP is at least the greater of 40 $/MWh and 1.1× the mean LMP of that interval; `pull` when LMP is at most the lesser of 25 $/MWh and 0.9× that mean. The mean is load zones and hubs only (`LZ_*`, `HB_*`).
 2. Otherwise `push` when `demand_percentile` ≥ 0.75.
@@ -55,7 +65,7 @@ Evaluated in this order:
 5. Else `pull` when storage generation ≤ −200 MW (the ERCOT storage fleet is charging).
 6. Else `hold`.
 
-Steps 1 to 6 pick one signal for the whole fleet. Intensity is 0 on hold, and otherwise at least 0.35, rising as the percentile moves further into the push or pull region.
+Steps 1 to 6 run per home, so two load zones can be given different calls when their prices disagree. Intensity is 0 on hold, and otherwise at least 0.35, rising as the percentile moves further into the push or pull region.
 
 ### Who actually answers
 

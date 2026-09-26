@@ -6,7 +6,16 @@ import json
 import threading
 
 from gridsim import config
-from gridsim.db import connect, insert_grid, insert_raw, insert_rollup, insert_tick, upsert_sites
+from gridsim.db import (
+    connect,
+    insert_dispatch,
+    insert_grid,
+    insert_raw,
+    insert_rollup,
+    insert_tick,
+    upsert_sites,
+)
+from gridsim.sync import pull_order, push_tick
 from gridsim.ercot.client import fetch_dashboards, fetch_official
 from gridsim.ercot.normalize import (
     constraints_from_rows,
@@ -14,7 +23,14 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     prices_from_rows,
 )
-from gridsim.fleet.simulate import DEMO_FAULTS, build_sites, load_anchors, metro_summary, tick_sites
+from gridsim.fleet.simulate import (
+    DEMO_FAULTS,
+    build_sites,
+    load_anchors,
+    metro_summary,
+    station_summary,
+    tick_sites,
+)
 from gridsim.timeutil import iso, now_central
 
 
@@ -86,6 +102,36 @@ def rollup(sites: list[dict], stamp: str) -> dict:
     }
 
 
+def _newer(remote: dict, pending: dict | None) -> bool:
+    if pending is None:
+        return True
+    return (remote.get("ts") or "") >= (pending.get("ts") or "")
+
+
+def _snapshot(grid: dict, fleet: dict, applied: dict, frequency_hz: float) -> dict:
+    """One row per tick. This is the object a controller reads."""
+    return {
+        "ts": fleet["ts"],
+        "demand_mw": grid.get("demand_mw"),
+        "demand_percentile": grid.get("demand_percentile"),
+        "storage_gen_mw": grid.get("storage_gen_mw"),
+        "frequency_hz": frequency_hz,
+        "signal": applied["signal"],
+        "intensity": applied["intensity"],
+        "source": applied["source"],
+        "zones_json": json.dumps(applied.get("zones") or {}, sort_keys=True),
+        "pushing": fleet["pushing"],
+        "pulling": fleet["pulling"],
+        "holding": fleet["holding"],
+        "discharge_kw": fleet["discharge_kw"],
+        "charge_kw": fleet["charge_kw"],
+        "load_kw": fleet["load_kw"],
+        "mean_soc_pct": fleet["mean_soc_pct"],
+        "stored_kwh": fleet["stored_kwh"],
+        "alarms": fleet["alarms"],
+    }
+
+
 class Fleet:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -95,9 +141,14 @@ class Fleet:
         self.anchors = load_anchors()
         self.sites = build_sites(self.anchors)
         self.metros = metro_summary(self.anchors, self.sites)
+        self.stations = station_summary(self.sites)
         self.persist = persist_sample(self.sites, config.PERSIST_SAMPLE)
         self.fleet = rollup([], iso(now_central()))
         self.grid = _neutral_grid()
+        self._pending: dict | None = None
+        self.applied = {"signal": "hold", "intensity": 0.0, "source": "rules", "zones": {}}
+        self.snapshot: dict | None = None
+        self.supabase = "disabled"
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
         self.status = {
@@ -199,21 +250,75 @@ class Fleet:
         if self._conn and stored_grid:
             insert_grid(self._conn, stored_grid)
 
-    def tick(self) -> None:
-        now = now_central()
+    def set_order(self, signal: str, intensity: float | None) -> None:
+        """The call applied on the next tick. `auto` hands the decision back to the ladder."""
         with self._lock:
+            if signal == "auto":
+                self._pending = None
+                return
+            self._pending = {
+                "signal": signal,
+                "intensity": intensity,
+                "source": "external",
+                "ts": iso(now_central()),
+            }
+
+    def dispatch_view(self) -> dict:
+        with self._lock:
+            return {
+                "applied": self.applied,
+                "pending": self._pending,
+                "snapshot": self.snapshot,
+                "supabase": self.supabase,
+            }
+
+    def tick(self) -> None:
+        remote, remote_error = pull_order()
+        now = now_central()
+        note: dict = {}
+        row = None
+        with self._lock:
+            if remote is not None and _newer(remote, self._pending):
+                self._pending = None if remote["signal"] == "auto" else remote
+            order = None if self._pending is None else dict(self._pending)
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
             sites, logs, observations, points = tick_sites(
-                self.sites, self.grid, now, dt_hours, persist=self.persist
+                self.sites,
+                self.grid,
+                now,
+                dt_hours,
+                persist=self.persist,
+                order=order,
+                note=note,
             )
             self.sites = sites
             self.fleet = rollup(sites, iso(now))
+            self.applied = {
+                "signal": note["signal"],
+                "intensity": note["intensity"],
+                "source": note["source"],
+                "zones": note["zones"],
+            }
+            row = _snapshot(self.grid, self.fleet, self.applied, note["frequency_hz"])
+            self.snapshot = row
             self._last_tick = now
-        if self._conn and logs:
-            insert_tick(self._conn, logs, observations, points)
+        publish_error = None
+        if self._conn and row:
+            if logs:
+                insert_tick(self._conn, logs, observations, points)
             insert_rollup(self._conn, self.fleet)
+            insert_dispatch(self._conn, row)
+        if row:
+            publish_error = push_tick(row)
+        with self._lock:
+            if not config.supabase_configured():
+                self.supabase = "disabled"
+            elif remote_error or publish_error:
+                self.supabase = "error"
+            else:
+                self.supabase = "live"
 
     def scene(self) -> dict:
         """Map payload. One row per battery, small enough to poll at fleet scale."""
@@ -227,6 +332,7 @@ class Fleet:
                 row = {
                     "id": site["id"],
                     "metro": site["metro"],
+                    "station": site.get("station", ""),
                     "lat": site["lat"],
                     "lon": site["lon"],
                     "state": site.get("state", "hold"),
@@ -246,7 +352,13 @@ class Fleet:
                 "constraints": self.constraints,
                 "edges": self.edges,
                 "metros": self.metros,
+                "stations": self.stations,
                 "fleet": self.fleet,
+                "dispatch": {
+                    "signal": self.applied["signal"],
+                    "intensity": self.applied["intensity"],
+                    "source": self.applied["source"],
+                },
                 "sites": sites,
                 "ercot": self.status,
             }
@@ -268,6 +380,8 @@ class Fleet:
                 "city": site["city"],
                 "metro": site["metro"],
                 "load_zone": site["load_zone"],
+                "station": site.get("station", ""),
+                "station_name": site.get("station_name", ""),
                 "lat": site["lat"],
                 "lon": site["lon"],
                 "state": site.get("state", "hold"),

@@ -2,7 +2,7 @@
 
 Each battery keeps six individuals charts. The charted number is the residual `measured - expected`. The center line is 0. The limits are `±3 * sigma` for that battery and that chart. A chart is `in_control` when no rule has fired.
 
-`expected` is the operating point, not a fleet-wide constant. Cabinet temperature is expected to rise while the battery is working. A hot reading during discharge is in control when it matches that rise.
+`expected` is the operating point, not a fleet-wide constant. Cabinet temperature is the lagged temperature the thermal model predicts for this unit at the power it is actually moving. A hot reading during discharge is in control when it matches that lag. A reading that jumps to the steady-state value in one tick is ahead of the model.
 
 ## Families
 

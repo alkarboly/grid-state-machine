@@ -10,7 +10,7 @@ from pathlib import Path
 
 from gridsim import config
 from gridsim.fleet.charts import CHARTS, HISTORY, evaluate
-from gridsim.fleet.policy import choose_signal, intensity
+from gridsim.fleet.policy import choose_signal, intensity, resolve_order
 from gridsim.timeutil import iso
 
 # Late-summer central-air hour means, kW. Daily sum is about 54 kWh before load_scale.
@@ -177,14 +177,56 @@ def _neighborhoods(anchor: dict, count: int, rng: random.Random) -> list[tuple[f
     return [(31.0, -99.2)]
 
 
-def _place(rng: random.Random, centers: list[tuple[float, float]]) -> tuple[float, float]:
-    """A house inside one neighborhood. Offsets that leave Texas are retried."""
-    centre_lat, centre_lon = centers[int(rng.random() * len(centers))]
+def _hex_slots(count: int, spacing_km: float) -> list[tuple[float, float]]:
+    """Ring order around the station, so the homes fill a hex patch instead of a pile."""
+    if count <= 0:
+        return []
+    axial = [(0, 0)]
+    ring = 1
+    directions = ((0, -1), (-1, 0), (-1, 1), (0, 1), (1, 0), (1, -1))
+    while len(axial) < count:
+        q, r = ring, 0
+        for dq, dr in directions:
+            for _ in range(ring):
+                if len(axial) >= count:
+                    break
+                axial.append((q, r))
+                q += dq
+                r += dr
+        ring += 1
+    slots = []
+    for q, r in axial[:count]:
+        east = spacing_km * (q + r / 2.0)
+        north = spacing_km * (math.sqrt(3.0) / 2.0) * r
+        slots.append((north, east))
+    return slots
+
+
+def _cell_spacing(count: int, radius_km: float) -> float:
+    """Wide enough that the patch reads as an area, short of the next station."""
+    rings = max(1.0, math.sqrt(max(count, 1) / 3.0))
+    reach = min(7.0, max(2.0, float(radius_km) * 0.28))
+    return max(0.45, reach / rings)
+
+
+def _burn_scatter(rng: random.Random, lat: float, lon: float) -> None:
+    """Walk the old house-scatter draws so later numbers on this seed stay put.
+
+    Reserve, queue position, and starting charge are drawn after this. The
+    scripted faults were checked against those values.
+    """
     for _ in range(16):
-        lat, lon = _shift(centre_lat, centre_lon, rng.gauss(0.0, 2.6), rng.gauss(0.0, 2.6))
-        if inside_texas(lat, lon):
-            return round(lat, 5), round(lon, 5)
-    return round(centre_lat, 5), round(centre_lon, 5)
+        placed_lat, placed_lon = _shift(lat, lon, rng.gauss(0.0, 2.6), rng.gauss(0.0, 2.6))
+        if inside_texas(placed_lat, placed_lon):
+            return
+
+
+def _on_land(lat: float, lon: float, north_km: float, east_km: float) -> tuple[float, float]:
+    for scale in (1.0, 0.75, 0.5, 0.25, 0.0):
+        placed_lat, placed_lon = _shift(lat, lon, north_km * scale, east_km * scale)
+        if inside_texas(placed_lat, placed_lon):
+            return round(placed_lat, 5), round(placed_lon, 5)
+    return round(lat, 5), round(lon, 5)
 
 
 def _magnitude(kind: str, rng: random.Random, voltage_center: float) -> dict:
@@ -231,13 +273,41 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
     sites = []
     for anchor, count in zip(anchors, counts):
         centers = _neighborhoods(anchor, count, random.Random("nbh:" + anchor["id"]))
+        # One modeled distribution substation per neighborhood. These are not
+        # ERCOT station codes and they are not rows in station_geo.json.
+        station_rows = [
+            {
+                "id": f"{anchor['prefix']}-s{index:02d}",
+                "name": f"{anchor['name']} {index}",
+                "lat": round(lat, 5),
+                "lon": round(lon, 5),
+            }
+            for index, (lat, lon) in enumerate(centers, start=1)
+        ]
+        buckets: list[list[tuple[str, random.Random]]] = [[] for _ in centers]
         for number in range(1, count + 1):
             site_id = f"{anchor['prefix']}-{number:04d}"
             # Seeded per unit, so a restart puts every battery back where it was.
             profile = random.Random(site_id)
-            lat, lon = _place(profile, centers)
-            voltage_center = round(237.0 + profile.random() * 6.0, 2)
-            sites.append(
+            served = int(profile.random() * len(centers))
+            _burn_scatter(profile, *centers[served])
+            buckets[served].append((site_id, profile))
+        axis = math.radians(float(anchor.get("axis_deg", 0.0)))
+        cos_axis = math.cos(axis)
+        sin_axis = math.sin(axis)
+        for served, bucket in enumerate(buckets):
+            if not bucket:
+                continue
+            station = station_rows[served]
+            centre_lat, centre_lon = centers[served]
+            slots = _hex_slots(len(bucket), _cell_spacing(len(bucket), anchor.get("radius_km", 15)))
+            for (site_id, profile), (north, east) in zip(bucket, slots):
+                # Turn the patch so it follows the metro's long axis, the way a street grid does.
+                east_rot = east * cos_axis - north * sin_axis
+                north_rot = east * sin_axis + north * cos_axis
+                lat, lon = _on_land(centre_lat, centre_lon, north_rot, east_rot)
+                voltage_center = round(237.0 + profile.random() * 6.0, 2)
+                sites.append(
                 {
                     "id": site_id,
                     "city": anchor["name"],
@@ -245,6 +315,10 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     "load_zone": anchor["load_zone"],
                     "lat": lat,
                     "lon": lon,
+                    "station": station["id"],
+                    "station_name": station["name"],
+                    "station_lat": station["lat"],
+                    "station_lon": station["lon"],
                     "capacity_kwh": config.BASE_CAPACITY_KWH,
                     "power_limit_kw": config.BASE_POWER_KW,
                     "load_scale": round(0.72 + profile.random() * 0.56, 3),
@@ -268,6 +342,25 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
             )
     _scatter_faults(sites)
     return sites
+
+
+def station_summary(sites: list[dict]) -> list[dict]:
+    """One row per modeled distribution substation, with the homes that supply it."""
+    found: dict[str, dict] = {}
+    for site in sites:
+        row = found.get(site["station"])
+        if row is None:
+            row = {
+                "id": site["station"],
+                "name": site["station_name"],
+                "metro": site["metro"],
+                "lat": site["station_lat"],
+                "lon": site["station_lon"],
+                "units": 0,
+            }
+            found[site["station"]] = row
+        row["units"] += 1
+    return list(found.values())
 
 
 def metro_summary(anchors: list[dict], sites: list[dict]) -> list[dict]:
@@ -305,6 +398,15 @@ def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: floa
     return point
 
 
+def _approach(previous: float, target: float, dt_hours: float, tau_hours: float, noise: float) -> float:
+    """Move part of the way to `target`. The lag is what makes the next tick depend on this one."""
+    if dt_hours <= 0:
+        alpha = min(1.0, 0.15)
+    else:
+        alpha = min(1.0, dt_hours / tau_hours)
+    return previous + alpha * (target - previous) + noise
+
+
 def tick_sites(
     sites: list[dict],
     grid: dict,
@@ -312,8 +414,16 @@ def tick_sites(
     dt_hours: float,
     rng: random.Random | None = None,
     persist: set[str] | None = None,
+    order: dict | None = None,
+    note: dict | None = None,
 ):
-    """Advance every battery. `persist` limits which units emit full-rate rows."""
+    """Advance every battery. `persist` limits which units emit full-rate rows.
+
+    `order` is a fleet-wide call, `{signal, intensity}`. When it is set, every
+    home is given that call and the ladder does not run. `note` receives the
+    call that was actually applied and the interconnection frequency, for the
+    dispatch row written after the tick.
+    """
     rng = rng or random.Random()
     prices = grid.get("prices") or []
     lmp_mean = sum(item["lmp"] for item in prices) / len(prices) if prices else None
@@ -329,6 +439,10 @@ def tick_sites(
     storage = grid.get("storage_gen_mw")
     scale = 0.85 + 0.30 * percentile
     dt = max(dt_hours, 0.0)
+    fleet_call = resolve_order(order, percentile)
+    # One frequency for the interconnection. Homes only add a local measurement error.
+    frequency_hz = 60.0 + rng.gauss(0, 0.006)
+    zone_signals: dict[str, str] = {}
 
     for raw_site in sites:
         site = dict(raw_site)
@@ -336,10 +450,25 @@ def tick_sites(
         fault = site["fault"]
         eta = site["eta"]
         lmp = by_location.get(site["load_zone"])
-        signal = choose_signal(percentile, storage, lmp, lmp_mean)
-        level = intensity(signal, percentile)
-        mean_kw = HOUR_MEAN_KW[hour] * site["load_scale"]
-        load_kw = max(0.3, mean_kw * scale + rng.gauss(0, mean_kw * 0.04))
+        if fleet_call:
+            signal, level, source = fleet_call
+        else:
+            signal = choose_signal(percentile, storage, lmp, lmp_mean)
+            level = intensity(signal, percentile)
+            source = "rules"
+        zone_signals[site["load_zone"]] = signal
+        target_kw = max(0.3, HOUR_MEAN_KW[hour] * site["load_scale"] * scale)
+        load_kw = max(
+            0.3,
+            _approach(
+                site.get("load_kw_state", target_kw),
+                target_kw,
+                dt,
+                0.20,
+                rng.gauss(0, target_kw * 0.025),
+            ),
+        )
+        site["load_kw_state"] = load_kw
 
         command = site["power_limit_kw"] * level
         floor = site["capacity_kwh"] * site["reserve_frac"]
@@ -379,12 +508,36 @@ def tick_sites(
         site["energy_in_kwh"] += meter_in * dt
         site["energy_out_kwh"] += meter_out * dt
 
-        expected_temp = site["temp_center_c"] + 4.0 * level
-        temp_c = float(fault["temp_c"]) if "temp_c" in fault else expected_temp + rng.gauss(0, 0.35)
+        # Cabinet temperature lags the power it is actually moving, on a
+        # quarter-hour time constant. The chart expected value is that lag,
+        # so a healthy cabinet is not punished for being slow.
+        power_frac = (charge_kw + discharge_kw) / site["power_limit_kw"] if site["power_limit_kw"] else 0.0
+        target_temp = site["temp_center_c"] + 4.0 * min(1.0, power_frac)
+        expected_temp = _approach(
+            site.get("temp_c_state", site["temp_center_c"]),
+            target_temp,
+            dt,
+            0.25,
+            0.0,
+        )
+        if "temp_c" in fault:
+            temp_c = float(fault["temp_c"])
+            site["temp_c_state"] = expected_temp
+        else:
+            temp_c = expected_temp + rng.gauss(0, 0.08)
+            site["temp_c_state"] = temp_c
+        service_voltage = _approach(
+            site.get("voltage_state", site["voltage_center_v"]),
+            site["voltage_center_v"],
+            dt,
+            0.05,
+            rng.gauss(0, 0.08),
+        )
+        site["voltage_state"] = service_voltage
         expected_voltage = site["voltage_center_v"]
-        disco_voltage = float(fault["voltage_v"]) if "voltage_v" in fault else expected_voltage + rng.gauss(0, 0.45)
-        meter_voltage = expected_voltage + rng.gauss(0, 0.25)
-        frequency = 60.0 + rng.gauss(0, 0.008)
+        disco_voltage = float(fault["voltage_v"]) if "voltage_v" in fault else service_voltage + rng.gauss(0, 0.12)
+        meter_voltage = service_voltage + rng.gauss(0, 0.08)
+        frequency = frequency_hz + rng.gauss(0, 0.002)
 
         meter_net = meter_in - meter_out
         disco_net = disco_in - disco_out
@@ -411,6 +564,7 @@ def tick_sites(
                 "storage_gen_mw": storage,
                 "lmp_usd_mwh": lmp,
                 "signal": signal,
+                "source": source,
                 "grid_as_of": grid.get("as_of"),
             },
             "meter": {
@@ -516,4 +670,16 @@ def tick_sites(
             "discharge_kw": round(discharge_kw, 3),
             "temp_c": round(temp_c, 2),
         })
+    if note is not None:
+        if fleet_call:
+            applied_signal, applied_level, applied_source = fleet_call
+        else:
+            applied_signal = choose_signal(percentile, storage, None, None)
+            applied_level = intensity(applied_signal, percentile)
+            applied_source = "rules"
+        note["frequency_hz"] = round(frequency_hz, 4)
+        note["signal"] = applied_signal
+        note["intensity"] = round(applied_level, 3)
+        note["source"] = applied_source
+        note["zones"] = zone_signals
     return updated, logs, observations, points

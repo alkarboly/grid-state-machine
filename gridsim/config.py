@@ -36,6 +36,15 @@ SUPPLY_DEMAND_URL = "https://www.ercot.com/api/1/services/read/dashboards/supply
 
 TICK_SECONDS = 10
 
+# Optional. When both are set, each tick is written to Supabase and the latest
+# dispatch_orders row is read back. The service-role key stays in this process.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
 
 def official_api_configured() -> bool:
     return bool(ERCOT_USERNAME and ERCOT_PASSWORD and ERCOT_SUBSCRIPTION_KEY)
+
+
+def supabase_configured() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)

@@ -5,7 +5,7 @@ gridsim is a hackathon prototype. It joins a live ERCOT snapshot with a simulate
 ## Layers
 
 1. **ERCOT grid.** Public dashboard JSON is fetched with no key: system demand, the short demand forecast, and five-minute generation by fuel, including power-storage megawatts. When `ERCOT_USERNAME`, `ERCOT_PASSWORD`, and `ERCOT_SUBSCRIPTION_KEY` are set, the official Public API adds binding transmission constraints, settlement-point LMPs, and a capped page of electrical-bus LMPs. Raw payloads are stored in SQLite before they are normalized.
-2. **Geographic network.** Homes are placed around four city anchors in `data/anchors.json`. Those anchors are city coordinates used only to lay out the synthetic fleet. They are not ERCOT buses. A transmission edge is drawn only when a constraint names both `from_station` and `to_station` and both codes exist in `data/station_geo.json`.
+2. **Geographic network.** Homes are placed around the ERCOT metros in `data/anchors.json`. Those anchors are city coordinates used only to lay out the synthetic fleet. They are not ERCOT buses. Each neighborhood centre is a modeled distribution substation that the homes around it supply. A transmission edge is drawn only when a constraint names both `from_station` and `to_station` and both codes exist in `data/station_geo.json`. The two kinds of station are not the same thing.
 3. **Synthetic distribution / VPP.** Each home is the chain grid → meter → disco → panel → base. The disco stands in for a Raspberry Pi at the disconnect, measuring power in and power out. Load, battery dispatch, and sensor noise come from the statistical model in [simulation.md](simulation.md).
 
 ## Path
@@ -16,9 +16,12 @@ ERCOT dashboard JSON
     → raw_records (SQLite)
     → normalized grid snapshot, constraints, prices
     → fleet tick (one battery at a time: load, dispatch, sensor noise, control charts)
-    → metric_logs, observations, control_points (SQLite)
-    → GET /api/scene
+    → metric_logs, observations, control_points, dispatch_ticks (SQLite)
+    → when configured, the same dispatch row is inserted in Supabase
+    → GET /api/scene and GET /api/dispatch
     → Three.js map and the selected battery's charts
+    → a controller reads the dispatch row and writes the next call
+      (POST /api/dispatch, or a row in Supabase dispatch_orders)
 ```
 
 There is no login. The map and `/api/scene` are the entry points. Official ERCOT credentials stay in the environment and are never returned by the API.
@@ -27,16 +30,19 @@ There is no login. The map and `/api/scene` are the entry points. Official ERCOT
 
 At 3000 batteries the old single payload would have been tens of megabytes, because it carried every component's metrics and every chart's history for every unit. So the API is split by what each view needs:
 
-- `GET /api/scene` is the map. One small row per battery — id, metro, position, state, state of charge, and the flagged families when there are any — plus the metro list, the fleet rollup, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
+- `GET /api/scene` is the map. One small row per battery — id, metro, the distribution substation it supplies, position, state, state of charge, and the flagged families when there are any — plus the metro list, the substation list, the fleet rollup, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
 - `GET /api/site/{id}` is one battery in full: every component's metrics, every chart with its residual history, and the unit's own profile. A few kilobytes, fetched when the modal opens and refreshed while it stays open.
+- `GET /api/dispatch` is the real-time control row: the call that was just applied, the order waiting for the next tick, and the snapshot a controller reads (demand, storage, frequency, fleet totals). `POST /api/dispatch` with `{"signal": "push", "intensity": 0.8}` sets that waiting order. `{"signal": "auto"}` returns the decision to the ladder. The next tick applies it. The tick does not wait on a model.
 
 ## Map
 
 The state is a filled outline from `web/geo.js`, with longitude compressed by `cos(31°)` so Texas is not stretched.
 
-Every battery is one dot, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, green holding, red when a control chart is out of limits. Push and pull are drawn larger than hold, so the units that moved this tick read at a glance and the idle majority stays quiet. The whole fleet is a single instanced draw call, with position and colour on the instance, so 3000 units cost about as much as one. A flagged unit gets a red ring; the selected unit gets a pale one.
+Every battery is one particle, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, green holding, red when a control chart is out of limits. The fleet is a single particle draw, position and colour on the point, so 3000 units cost about as much as one. The particles keep a fixed size on screen. Zooming in opens the gaps between them, and each station's homes are a hex patch, so the service area stays readable instead of collapsing into one speck. The selected unit gets a pale ring.
 
 Left-drag orbits the camera, the wheel zooms, and right-drag pans the orbit target. The target stays inside a box around the state, so a long drag cannot lose Texas.
+
+Past a city-scale distance a flat line runs from each particle in view to the distribution substation it supplies. That substation is a diamond. Clicking a metro in the side panel, or opening `/#metro/austin`, flies to that distance. The lines are distribution feeders. They are not the exception arc and they are not an ERCOT constraint.
 
 Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 

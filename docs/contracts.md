@@ -21,7 +21,7 @@ The chain is grid → meter → disco → panel → base.
 
 | Component | Role | Metrics |
 | --- | --- | --- |
-| `grid` | Utility interchange at the site, plus the ERCOT context that drove dispatch | `in_kw`, `out_kw`, `demand_mw`, `demand_percentile`, `storage_gen_mw`, `lmp_usd_mwh`, `signal`, `grid_as_of` |
+| `grid` | Utility interchange at the site, plus the ERCOT context that drove dispatch | `in_kw`, `out_kw`, `demand_mw`, `demand_percentile`, `storage_gen_mw`, `lmp_usd_mwh`, `signal`, `source`, `grid_as_of` |
 | `meter` | Service meter | `in_kw`, `out_kw`, `voltage_v`, `energy_in_kwh`, `energy_out_kwh` |
 | `disco` | Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz`, `contactor`, `islanded` |
 | `panel` | House load downstream of the battery interconnect | `load_kw`, `voltage_v` |
@@ -29,6 +29,8 @@ The chain is grid → meter → disco → panel → base.
 | `maintenance` | Which control charts need attention. The point shape and the severity rules are in [control-charts.md](control-charts.md). | `alarm`, `alarming`, `out_of_control`, `warning` |
 
 `signal` is `pull`, `push`, or `hold`. Pull charges the battery from the grid. Push discharges toward the grid. Hold does neither.
+
+`source` on the grid component is `rules` or `external`. `rules` means the ladder in [simulation.md](simulation.md) chose the call. `external` means a fleet-wide order, posted to `/api/dispatch` or written to Supabase `dispatch_orders`, chose it. The order replaces the ladder for every home until it is cleared with `auto`.
 
 `contactor` is `closed` or `open`. `islanded` is a boolean. This slice keeps the contactor closed and the home grid-tied.
 

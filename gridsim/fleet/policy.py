@@ -32,3 +32,25 @@ def intensity(signal: str, demand_percentile: float) -> float:
     if signal == "pull":
         return min(1.0, max(0.35, 0.4 + (0.35 - demand_percentile) * 2))
     return 0.0
+
+
+def resolve_order(order: dict | None, demand_percentile: float) -> tuple[str, float, str] | None:
+    """A fleet-wide call from outside the ladder.
+
+    None means each home still follows the ladder, including its own load-zone
+    price. `auto` is the same as no order. Hold carries intensity 0.
+    """
+    if not order:
+        return None
+    signal = order.get("signal")
+    if signal in (None, "", "auto", "rules"):
+        return None
+    if signal not in ("push", "pull", "hold"):
+        return None
+    if signal == "hold":
+        level = 0.0
+    elif order.get("intensity") is None:
+        level = intensity(signal, demand_percentile)
+    else:
+        level = min(1.0, max(0.0, float(order["intensity"])))
+    return signal, level, "external"

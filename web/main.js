@@ -16,7 +16,6 @@ const COLOR = {
 const FAMILIES = ["all", "measurement", "thermal", "electrical", "energy", "response"];
 const NODE_Y = 0.02;
 const UNIT_CAP = 20000;
-const FLAG_CAP = 3000;
 const LABEL_SHARE = 0.03;
 const LAND = new THREE.Color(COLOR.land);
 
@@ -113,33 +112,55 @@ function flatRing(inner, outer, color, opacity) {
 
 buildMap();
 
-// One draw call for the whole fleet. Position and colour ride on the instance.
-const units = new THREE.InstancedMesh(
-  new THREE.CircleGeometry(1, 10).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false }),
-  UNIT_CAP,
-);
-units.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-units.frustumCulled = false;
-units.renderOrder = 3;
-units.count = 0;
-scene.add(units);
+// One particle draw for the whole fleet. Screen-space size, so a zoom opens
+// the gaps in the station grid instead of enlarging every dot into its neighbour.
+const particlePositions = new Float32Array(UNIT_CAP * 3);
+const particleColors = new Float32Array(UNIT_CAP * 3);
+const particleGeo = new THREE.BufferGeometry();
+particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+particleGeo.setAttribute("color", new THREE.BufferAttribute(particleColors, 3));
+function particleTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  const fill = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  fill.addColorStop(0, "rgba(255,255,255,1)");
+  fill.addColorStop(0.65, "rgba(255,255,255,0.95)");
+  fill.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.arc(32, 32, 30, 0, Math.PI * 2);
+  ctx.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
-const flags = new THREE.InstancedMesh(
-  new THREE.RingGeometry(0.66, 1, 18).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({
-    color: COLOR.alarm,
+const particles = new THREE.Points(
+  particleGeo,
+  new THREE.PointsMaterial({
+    size: 6,
+    sizeAttenuation: false,
+    map: particleTexture(),
+    vertexColors: true,
     transparent: true,
-    opacity: 0.8,
     depthWrite: false,
   }),
-  FLAG_CAP,
 );
-flags.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-flags.frustumCulled = false;
-flags.renderOrder = 4;
-flags.count = 0;
-scene.add(flags);
+particles.frustumCulled = false;
+particles.renderOrder = 3;
+scene.add(particles);
+
+const feeders = new THREE.LineSegments(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xd5dbe3, transparent: true, opacity: 0.9 }),
+);
+feeders.frustumCulled = false;
+feeders.renderOrder = 2;
+scene.add(feeders);
+
+const stationMarks = new Map();
 
 const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
 pick.renderOrder = 5;
@@ -209,8 +230,8 @@ function focused(site) {
   return (site.families || []).includes(family);
 }
 
-function unitRadius(count) {
-  return Math.max(0.008, Math.min(0.026, 0.78 / Math.sqrt(Math.max(count, 1))));
+function viewDistance() {
+  return camera.position.distanceTo(controls.target);
 }
 
 function arcCurve(from, to) {
@@ -219,42 +240,92 @@ function arcCurve(from, to) {
   return new THREE.QuadraticBezierCurve3(from, mid, to);
 }
 
-const MATRIX = new THREE.Matrix4();
 const TINT = new THREE.Color();
 
 function renderUnits(data) {
-  const radius = unitRadius(data.sites.length);
+  const positions = particles.geometry.attributes.position;
+  const colors = particles.geometry.attributes.color;
   let drawn = 0;
-  let flagged = 0;
   for (const site of data.sites) {
     const point = project(site.lat, site.lon, NODE_Y);
-    const dim = !focused(site);
-    const mode = modeOf(site);
-    // Hold is the quiet majority. Push and pull are drawn larger so they read
-    // at state scale instead of disappearing into the green.
-    const scale = radius * (mode === "hold" ? 1 : mode === "alarm" ? 1.35 : 2.15);
-    TINT.setHex(COLOR[mode]);
-    if (dim) TINT.lerp(LAND, 0.78);
-    MATRIX.makeScale(scale, 1, scale).setPosition(point);
-    units.setMatrixAt(drawn, MATRIX);
-    units.setColorAt(drawn, TINT);
+    positions.setXYZ(drawn, point.x, point.y, point.z);
+    TINT.setHex(COLOR[modeOf(site)]);
+    if (!focused(site)) TINT.lerp(LAND, 0.78);
+    colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
     drawn += 1;
-    if (site.alarm && !dim && flagged < FLAG_CAP) {
-      MATRIX.makeScale(radius * 3, 1, radius * 3).setPosition(point);
-      flags.setMatrixAt(flagged, MATRIX);
-      flagged += 1;
-    }
     if (site.id === selected) {
       pick.position.copy(point);
       pick.visible = true;
     }
   }
-  units.count = drawn;
-  units.instanceMatrix.needsUpdate = true;
-  if (units.instanceColor) units.instanceColor.needsUpdate = true;
-  flags.count = flagged;
-  flags.instanceMatrix.needsUpdate = true;
+  particles.geometry.setDrawRange(0, drawn);
+  positions.needsUpdate = true;
+  colors.needsUpdate = true;
   if (!data.sites.some((site) => site.id === selected)) pick.visible = false;
+}
+
+function ensureStation(station) {
+  let entry = stationMarks.get(station.id);
+  if (entry) return entry;
+  const group = new THREE.Group();
+  const mark = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 4),
+    new THREE.MeshBasicMaterial({ color: 0xd5dbe2, side: THREE.DoubleSide }),
+  );
+  mark.rotation.x = -Math.PI / 2;
+  mark.rotation.z = Math.PI / 4;
+  group.add(mark);
+  const label = labelSprite(station.name, 0.04);
+  label.scale.set(0.42, 0.1, 1);
+  label.position.set(0, 0.04, 0.06);
+  label.visible = false;
+  group.add(label);
+  group.position.copy(project(station.lat, station.lon, 0.025));
+  group.visible = false;
+  scene.add(group);
+  entry = { group, mark, label };
+  stationMarks.set(station.id, entry);
+  return entry;
+}
+
+// Flat feeders, only around the point the camera is looking at. A line for
+// every battery in the state is the same hairball the metro arcs used to be.
+function renderFeeders(data) {
+  const dist = viewDistance();
+  const show = dist < 8;
+  feeders.visible = show;
+  // The metro hub is the state-scale mark. Up close it sits on empty downtown
+  // and the city name fills the view, so the substations take over.
+  for (const hub of hubs.values()) hub.group.visible = !show;
+  const target = controls.target;
+  const reach = 0.28 + dist * 0.08;
+  for (const station of data.stations || []) {
+    const entry = ensureStation(station);
+    const near = Math.hypot(entry.group.position.x - target.x, entry.group.position.z - target.z);
+    entry.group.visible = show && near < reach + 0.15;
+    const size = Math.max(0.006, Math.min(0.014, 0.004 * dist));
+    entry.mark.scale.set(size, size, 1);
+    const labelWidth = Math.min(0.26, 0.06 * dist);
+    entry.label.scale.set(labelWidth, labelWidth * 0.24, 1);
+    entry.label.visible = show && dist < 4.5 && near < reach;
+  }
+  if (!show) {
+    feeders.geometry.setDrawRange(0, 0);
+    return;
+  }
+  const byStation = new Map((data.stations || []).map((station) => [station.id, station]));
+  const positions = [];
+  for (const site of data.sites) {
+    const station = byStation.get(site.station);
+    if (!station) continue;
+    const home = project(site.lat, site.lon, 0.012);
+    if (Math.hypot(home.x - target.x, home.z - target.z) > reach) continue;
+    const hub = project(station.lat, station.lon, 0.012);
+    positions.push(home.x, home.y, home.z, hub.x, 0.018, hub.z);
+  }
+  feeders.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  feeders.geometry.computeBoundingSphere();
+  feeders.geometry.setDrawRange(0, Infinity);
 }
 
 // One arc, for the selected battery, tying it back to its metro. Thousands of
@@ -305,6 +376,7 @@ function renderScene(data) {
   const total = data.sites.length || 1;
   for (const metro of data.metros || []) ensureHub(metro, metro.units / total);
   renderUnits(data);
+  renderFeeders(data);
   renderArcs(data);
   renderConstraints(data.edges);
   screen = null;
@@ -413,7 +485,11 @@ function renderPanel(data) {
 
   panel.innerHTML = `
     <h2>Fleet</h2>
-    <div class="sub">${fmt(fleet.units)} batteries · <span class="key push"><i></i>${fmt(fleet.pushing)} pushing</span> · <span class="key pull"><i></i>${fmt(fleet.pulling)} pulling</span> · <span class="key hold"><i></i>${fmt(fleet.holding)} holding</span></div>
+    <div class="sub">${fmt(fleet.units)} batteries · <span class="key push"><i></i>${fmt(fleet.pushing)} pushing</span> · <span class="key pull"><i></i>${fmt(fleet.pulling)} pulling</span> · <span class="key hold"><i></i>${fmt(fleet.holding)} holding</span>${
+      data.dispatch
+        ? ` · <span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
+        : ""
+    }</div>
     <div class="chips">${chips}</div>
     <div class="group">
       <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>
@@ -718,7 +794,7 @@ function renderUnit() {
 
   document.getElementById("unit-id").textContent = site.id;
   document.getElementById("unit-sub").textContent =
-    `${site.city} · ${site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`
+    `${site.city} · ${site.station_name || site.station || site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`
     + (site.instrumented ? " · full-rate telemetry" : "");
   document.getElementById("unit-mode").className = `mode ${mode}`;
   document.getElementById("unit-mode").innerHTML = `<i></i>${mode}`;
@@ -815,7 +891,7 @@ panel.addEventListener("click", (event) => {
     const metro = (payload.metros || []).find((item) => item.id === id);
     if (metro) {
       const point = project(metro.lat, metro.lon, 0);
-      focusPoint = { x: point.x, z: point.z, distance: 2.4 };
+      focusPoint = { x: point.x, z: point.z, distance: 1.7 };
     }
   }
 });
@@ -904,9 +980,10 @@ canvas.addEventListener("pointermove", (event) => {
     return;
   }
   tip.hidden = false;
+  const station = (payload.stations || []).find((item) => item.id === site.station);
   tip.innerHTML = `<b>${site.id}</b> ${modeOf(site)} · ${fmt(site.soc_pct, 0)}%${
-    site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""
-  }`;
+    station ? `<br>supplies ${station.name}` : ""
+  }${site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""}`;
   tip.style.left = `${event.clientX + 14}px`;
   tip.style.top = `${event.clientY + 14}px`;
   canvas.style.cursor = "pointer";
@@ -925,6 +1002,10 @@ canvas.addEventListener("click", (event) => {
 
 controls.addEventListener("change", () => {
   screen = null;
+  if (payload) {
+    renderUnits(payload);
+    renderFeeders(payload);
+  }
 });
 
 function resize() {
@@ -976,8 +1057,17 @@ function frame() {
 
 // A unit id in the hash opens that battery, so a link points at one cabinet.
 // Add a block, as in #hou-0002/disco, and it opens on that block.
+// #metro/austin flies the camera to that city, close enough to see feeders.
 poll().then(() => {
   const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (wanted === "metro" && block) {
+    const metro = (payload.metros || []).find((item) => item.id === block);
+    if (metro) {
+      const point = project(metro.lat, metro.lon, 0);
+      focusPoint = { x: point.x, z: point.z, distance: 1.7 };
+    }
+    return;
+  }
   if (wanted) openUnit(wanted, block);
 });
 setInterval(poll, 5000);

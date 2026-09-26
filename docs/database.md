@@ -62,6 +62,49 @@ One row per tick for the whole fleet, so aggregate history survives even though 
 
 `pushing`, `pulling`, and `holding` count what the batteries did, not what they were told. They sum to `units`.
 
+## `dispatch_ticks`
+
+One row per tick. This is the object a controller reads in order to decide the next call. It is written on every tick, not only for the instrumented cohort.
+
+`ts`, `demand_mw`, `demand_percentile`, `storage_gen_mw`, `frequency_hz`, `signal`, `intensity`, `source`, `zones_json`, `pushing`, `pulling`, `holding`, `discharge_kw`, `charge_kw`, `load_kw`, `mean_soc_pct`, `stored_kwh`, `alarms`.
+
+`signal` and `intensity` are the call that was applied on this tick. `source` is `rules` or `external`. `zones_json` is a JSON object of load zone to the signal that zone actually ran. Under an external order every zone has the same signal. Under the ladder, a zone with a price can differ.
+
+`dispatch_orders` is not a local table. It lives in Supabase, and the tick reads the newest row:
+
+```sql
+create table dispatch_orders (
+  ts timestamptz primary key default now(),
+  signal text not null check (signal in ('push', 'pull', 'hold', 'auto')),
+  intensity double precision
+);
+
+create table dispatch_ticks (
+  ts timestamptz primary key,
+  demand_mw double precision,
+  demand_percentile double precision,
+  storage_gen_mw double precision,
+  frequency_hz double precision not null,
+  signal text not null,
+  intensity double precision not null,
+  source text not null,
+  zones_json text not null,
+  pushing integer not null,
+  pulling integer not null,
+  holding integer not null,
+  discharge_kw double precision not null,
+  charge_kw double precision not null,
+  load_kw double precision not null,
+  mean_soc_pct double precision not null,
+  stored_kwh double precision not null,
+  alarms integer not null
+);
+
+alter publication supabase_realtime add table dispatch_ticks;
+```
+
+Add `dispatch_ticks` to the realtime publication so a subscriber sees each tick as it is inserted. The service-role key used by this process must not be placed in the browser.
+
 ## Caps
 
 `metric_logs` and `observations` keep the latest 20,000 rows. `control_points` keeps the latest 60,000. Older rows are deleted.

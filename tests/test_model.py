@@ -11,7 +11,7 @@ from gridsim.ercot.normalize import (
     prices_from_rows,
 )
 from gridsim.fleet.charts import CHARTS, evaluate
-from gridsim.fleet.policy import choose_signal
+from gridsim.fleet.policy import choose_signal, resolve_order
 from gridsim.fleet.simulate import (
     COMPONENTS,
     DEMO_FAULTS,
@@ -23,6 +23,7 @@ from gridsim.fleet.simulate import (
     build_sites,
     load_anchors,
     metro_summary,
+    station_summary,
     tick_sites,
 )
 from gridsim.state import persist_sample, rollup
@@ -144,6 +145,48 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(choose_signal(0.5, -400, None, None), "pull")
         self.assertEqual(choose_signal(0.5, 0, None, None), "hold")
         self.assertEqual(choose_signal(0.5, 0, 80, 40), "push")
+        self.assertIsNone(resolve_order(None, 0.5))
+        self.assertIsNone(resolve_order({"signal": "auto"}, 0.5))
+        self.assertEqual(resolve_order({"signal": "hold"}, 0.9), ("hold", 0.0, "external"))
+        signal, level, source = resolve_order({"signal": "push", "intensity": 0.4}, 0.2)
+        self.assertEqual((signal, source), ("push", "external"))
+        self.assertEqual(level, 0.4)
+
+    def test_external_call_overrides_the_ladder(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        held, *_ = tick_sites(FLEET(), _grid(0.5), now, 0.0028, random.Random(4))
+        pushed, *_ = tick_sites(
+            FLEET(),
+            _grid(0.5),
+            now,
+            0.0028,
+            random.Random(4),
+            order={"signal": "push", "intensity": 1},
+        )
+        held_push = sum(site["state"] == "push" for site in held)
+        pushed_push = sum(site["state"] == "push" for site in pushed)
+        self.assertGreater(pushed_push, held_push)
+        self.assertTrue(all(site["metrics"]["grid"]["source"] == "external" for site in pushed))
+        self.assertTrue(all(site["signal"] == "push" for site in pushed))
+        base = pushed[0]["metrics"]["disco"]["frequency_hz"]
+        self.assertTrue(
+            all(abs(site["metrics"]["disco"]["frequency_hz"] - base) < 0.05 for site in pushed)
+        )
+
+    def test_load_and_temperature_carry_across_ticks(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        rng = random.Random(8)
+        first, *_ = tick_sites(FLEET(), _grid(0.9), now, 0.005, rng)
+        second, *_ = tick_sites(first, _grid(0.9), now, 0.005, rng)
+        before = first[0]
+        after = next(site for site in second if site["id"] == before["id"])
+        self.assertLess(abs(before["load_kw_state"] - after["load_kw_state"]), 1.0)
+        self.assertLess(abs(before["temp_c_state"] - after["temp_c_state"]), 1.0)
+        note = {}
+        tick_sites(FLEET(), _grid(0.5), now, 0.0, random.Random(1), order={"signal": "hold"}, note=note)
+        self.assertEqual(note["source"], "external")
+        self.assertEqual(note["signal"], "hold")
+        self.assertEqual(note["intensity"], 0.0)
 
     def test_tick_writes_every_component_and_flags_faults(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
@@ -242,7 +285,28 @@ class ScaleTests(unittest.TestCase):
                 )
             )
         nearest.sort()
+        self.assertGreater(nearest[0], 0.002)
         self.assertLess(nearest[len(nearest) // 2], 0.03)
+
+    def test_each_unit_supplies_a_nearby_station_on_land(self):
+        sites = build_sites(fleet_size=3000)
+        stations = station_summary(sites)
+        self.assertGreater(len(stations), 20)
+        self.assertLess(len(stations), 160)
+        by_id = {station["id"]: station for station in stations}
+        self.assertEqual(len(by_id), len(stations))
+        stray = 0
+        for site in sites:
+            station = by_id[site["station"]]
+            self.assertEqual(station["metro"], site["metro"])
+            self.assertTrue(inside_texas(station["lat"], station["lon"]), station["id"])
+            km = math.hypot(
+                (site["lat"] - station["lat"]) * 110.574,
+                (site["lon"] - station["lon"]) * 110.574 * 0.86,
+            )
+            if km > 14:
+                stray += 1
+        self.assertLess(stray / len(sites), 0.02)
 
     def test_only_a_few_faults_of_each_kind(self):
         sites = build_sites(fleet_size=3000)

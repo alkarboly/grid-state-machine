@@ -53,6 +53,8 @@ header {
   margin-left: 5px;
 }
 
+.stats .flagged b { color: var(--alarm); }
+
 .clock {
   flex: none;
   color: var(--muted);
@@ -176,21 +178,15 @@ main {
 }
 
 #decisions {
-  position: absolute;
-  z-index: 3;
-  right: 414px;
-  bottom: 16px;
-  width: min(300px, 38vw);
-  max-height: 168px;
-  padding: 8px 10px;
-  background: rgba(16, 17, 20, 0.9);
-  border: 1px solid var(--line);
+  flex: none;
+  padding: 8px 22px 14px;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-main.collapsed #decisions { right: 54px; }
+main.collapsed #decisions { display: none; }
 
 #decision-log {
   overflow: auto;
@@ -203,9 +199,6 @@ main.collapsed #decisions { right: 54px; }
   font-size: 11px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .decision b { color: var(--ink); font-weight: 500; }
@@ -804,8 +797,6 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-template-rows: 1fr 320px; }
   main.collapsed { grid-template-columns: 1fr; grid-template-rows: 1fr 40px; }
-  #decisions, main.collapsed #decisions { right: 14px; bottom: 336px; }
-  main.collapsed #decisions { bottom: 56px; }
   main.collapsed #panel-toggle { writing-mode: horizontal-tb; height: auto; }
   aside { border-left: 0; border-top: 1px solid var(--line); }
   .roster { grid-template-columns: 1fr 1fr 1fr; }

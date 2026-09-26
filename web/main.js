@@ -496,18 +496,21 @@ function renderDay(data) {
 }
 
 function renderStats(data) {
-  const grid = data.grid || {};
   const ercot = data.ercot || {};
   const fleet = data.fleet || {};
-  const interchange = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
+  const netKw = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
+  const mw = Math.abs(netKw) / 1000;
+  const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
+  const feedDown = ercot.dashboard && ercot.dashboard !== "live";
+  const feed = feedDown ? `<span>feed <b>${ercot.dashboard}</b></span>` : "";
+  const flagged = fleet.alarms
+    ? `<span class="flagged">flagged <b>${fmt(fleet.alarms)}</b></span>`
+    : `<span>flagged <b>0</b></span>`;
   document.getElementById("stats").innerHTML = `
-    <span>demand <b>${fmt(grid.demand_mw)} MW</b></span>
-    <span>storage <b>${fmt(grid.storage_gen_mw)} MW</b></span>
-    <span>fleet <b>${fmt(fleet.units)}</b></span>
-    <span>grid <b>${interchange >= 0 ? "+" : ""}${fmt(interchange / 1000, 2)} MW</b></span>
+    <span>${flow} <b>${fmt(mw, 2)} MW</b></span>
     <span>soc <b>${fmt(fleet.mean_soc_pct, 0)}%</b></span>
-    <span>flagged <b>${fmt(fleet.alarms)}</b></span>
-    <span>feed <b>${ercot.dashboard === "live" ? "live" : ercot.dashboard || "offline"}</b></span>
+    ${flagged}
+    ${feed}
   `;
   const stamp = fleet.ts || "";
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1703,11 +1706,6 @@ function ingestDecisions(data) {
   else return;
   paintDecisions();
 }
-
-decisionBox.addEventListener("click", (event) => {
-  const unit = event.target.closest("[data-site]");
-  if (unit) openUnit(unit.dataset.site);
-});
 
 async function poll() {
   try {

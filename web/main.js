@@ -830,8 +830,57 @@ function fold(name, title, body) {
 
 let logOpen = true;
 
+function snapState(node) {
+  if (!node) return null;
+  const top = node.scrollTop;
+  const height = node.scrollHeight;
+  const view = node.clientHeight;
+  const bodyTop = node.getBoundingClientRect().top;
+  let anchorKey = "";
+  let anchorOffset = 0;
+  for (const row of node.querySelectorAll(".log-line")) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom <= bodyTop + 2) continue;
+    anchorKey = row.dataset.logKey || "";
+    anchorOffset = rect.top - bodyTop;
+    break;
+  }
+  return {
+    top,
+    height,
+    nearTop: top < 6,
+    nearBottom: top + view >= height - 6,
+    anchorKey,
+    anchorOffset,
+  };
+}
+
+function restoreState(node, snap) {
+  if (!node || !snap) return;
+  if (snap.nearTop) {
+    node.scrollTop = 0;
+    return;
+  }
+  if (snap.nearBottom) {
+    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+    return;
+  }
+  if (snap.anchorKey) {
+    const bodyTop = node.getBoundingClientRect().top;
+    for (const row of node.querySelectorAll(".log-line")) {
+      if ((row.dataset.logKey || "") !== snap.anchorKey) continue;
+      const offset = row.getBoundingClientRect().top - bodyTop;
+      node.scrollTop += offset - snap.anchorOffset;
+      return;
+    }
+  }
+  const shift = node.scrollHeight - snap.height;
+  node.scrollTop = Math.max(0, snap.top + shift);
+}
+
 function logLine(row) {
   const time = (row.ts || "").slice(11, 19);
+  const key = `${row.ts || ""}:${row.state || ""}:${row.signal || ""}`;
   const moved = row.discharge_kw > 0.01
     ? `${fmt(row.discharge_kw, 2)} kW out`
     : row.charge_kw > 0.01
@@ -839,7 +888,7 @@ function logLine(row) {
       : "idle";
   const codes = (row.out_of_control || row.alarming || []).join(" ");
   const word = row.availability === "offline" ? "offline" : row.state;
-  return `<p class="log-line ${word}">
+  return `<p class="log-line ${word}" data-log-key="${escapeHtml(key)}">
     <span>${time}</span>
     <b>${word}</b>
     <em>${row.signal || "hold"} · ${row.source || "rules"}</em>
@@ -1309,6 +1358,7 @@ function renderUnit() {
 
   const detail = document.getElementById("unit-detail");
   const scrolled = detail.scrollTop;
+  const logSnap = snapState(detail.querySelector(".log-body"));
   detail.innerHTML = `
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
@@ -1322,6 +1372,7 @@ function renderUnit() {
     ${usageBlock(site)}
   `;
   detail.scrollTop = scrolled;
+  restoreState(detail.querySelector(".log-body"), logSnap);
 }
 
 async function loadUnit(id) {

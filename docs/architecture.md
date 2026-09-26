@@ -74,7 +74,7 @@ Grid can turn the grid off, trigger a meter agreement, or force push, pull, or h
 
 A metric that a chart watches opens that one chart. The chart draws the center line and the 1σ, 2σ, and 3σ lines, and its x-axis is the last 30 hours. The trace is red when that chart is out of control. Other charts on the unit stay closed. The grid box shows the price and the day shape, the inputs to a push or pull call.
 
-The state log sits under the metrics. Each line is one log-state row: the time, what the battery did, the call and its source, state of charge, house load, the kilowatts it moved, grid off when the contactor was open, and any chart codes out of control. Newest is first. The shape is the log state in [contracts.md](contracts.md).
+The state log sits under the metrics. Each line is one log-state row: the time, what the battery did, the call and its source, state of charge, house load, the kilowatts it moved, grid off when the contactor was open, and any chart codes out of control. Newest is first. While new ticks arrive, the log keeps its scroll position so reading older rows does not jump. The shape is the log state in [contracts.md](contracts.md).
 
 The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet. Append a block, as in `/#hou-0002/disco`, to open on that block. `/#hou-0002/meter` opens Grid. `/#hou-0002/panel` opens the electrical panel.
 

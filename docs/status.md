@@ -2,7 +2,7 @@
 
 Handoff for the next session. Names and shapes stay in the other pages. This page says what already runs, what is only on this machine, and the slice to build next.
 
-`main` is at `b4cf64d`, “Add chart code key and actions.” Do not commit `.env` or `data/gridsim.db`.
+`main` is at `5b270bf`, “List service areas and collapse actions.” Do not commit `.env` or `data/gridsim.db`.
 
 ## Built and on `main`
 
@@ -20,7 +20,9 @@ Feeder lines from homes to substations are gone. The pale ring marks the selecte
 
 ## In the working tree
 
-The panel no longer offers the maintenance-family chips or a binding-constraints list. Actions start collapsed. The old metro list is the service-area list: one row per modeled distribution substation, and a click flies to that substation.
+Opening a substation is its own presentation. The camera comes down over the hex, the homes rise into the patch, a ring marks the service area, and a card shows that substation's pushing, pulling, holding, and flagged counts. The rest of the fleet drops back into the land.
+
+The fleet panel no longer lists the power split or the market footnote. State counts, stored energy, and the market rate stay. Grid interchange stays in the header.
 
 ## Not standing yet
 

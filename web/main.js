@@ -62,6 +62,9 @@ let actionsOpen = false;
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
+let stageStarted = 0;
+let stageRadius = 0.05;
+let stageT = 1;
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -171,6 +174,20 @@ scene.add(particles);
 
 const stationMarks = new Map();
 
+const stagePad = new THREE.Mesh(
+  new THREE.CircleGeometry(1, 64),
+  new THREE.MeshBasicMaterial({ color: 0x22262e, transparent: true, opacity: 0.9, depthWrite: false }),
+);
+stagePad.rotation.x = -Math.PI / 2;
+stagePad.visible = false;
+stagePad.renderOrder = 1;
+scene.add(stagePad);
+
+const stageRing = flatRing(0.9, 1, 0xf4f0e8, 0.75);
+stageRing.visible = false;
+stageRing.renderOrder = 2;
+scene.add(stageRing);
+
 const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
 pick.renderOrder = 5;
 pick.visible = false;
@@ -249,6 +266,11 @@ function viewDistance() {
   return camera.position.distanceTo(controls.target);
 }
 
+function easeOut(value) {
+  const t = Math.min(1, Math.max(0, value));
+  return 1 - (1 - t) ** 3;
+}
+
 function arcCurve(from, to) {
   const mid = from.clone().add(to).multiplyScalar(0.5);
   mid.y += from.distanceTo(to) * 0.7 + 0.04;
@@ -263,9 +285,17 @@ function renderUnits(data) {
   let drawn = 0;
   for (const site of data.sites) {
     const point = project(site.lat, site.lon, NODE_Y);
-    positions.setXYZ(drawn, point.x, point.y, point.z);
+    let y = point.y;
     TINT.setHex(COLOR[modeOf(site)]);
-    if (focusedStation && site.station !== focusedStation) TINT.lerp(LAND, 0.9);
+    if (focusedStation && site.station !== focusedStation) {
+      TINT.setHex(0x101114);
+    } else if (focusedStation) {
+      const delay = (drawn % 20) / 20 * 0.5;
+      const local = easeOut((stageT - delay) / 0.5);
+      y += (1 - local) * 0.11;
+      TINT.lerp(LAND, 1 - local);
+    }
+    positions.setXYZ(drawn, point.x, y, point.z);
     colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
     drawn += 1;
     if (site.id === selected) {
@@ -307,22 +337,29 @@ function ensureStation(station) {
 // hub is the state-scale mark; up close it sits on empty downtown.
 function renderStations(data) {
   const dist = viewDistance();
-  const show = dist < 8;
+  const show = dist < 8 || Boolean(focusedStation);
   for (const hub of hubs.values()) hub.group.visible = !show;
   const target = controls.target;
   const reach = 0.28 + dist * 0.08;
   for (const station of data.stations || []) {
     const entry = ensureStation(station);
-    const near = Math.hypot(entry.group.position.x - target.x, entry.group.position.z - target.z);
     const chosen = station.id === focusedStation;
-    entry.group.visible = show && (chosen || near < reach + 0.15);
-    const size = chosen
-      ? Math.max(0.012, Math.min(0.028, 0.012 * dist))
-      : Math.max(0.006, Math.min(0.014, 0.004 * dist));
+    if (focusedStation) {
+      entry.group.visible = chosen;
+      entry.label.visible = false;
+      if (chosen) {
+        entry.mark.scale.set(0.018, 0.018, 1);
+        entry.mark.material.color.setHex(0xf4f0e8);
+      }
+      continue;
+    }
+    const near = Math.hypot(entry.group.position.x - target.x, entry.group.position.z - target.z);
+    entry.group.visible = show && near < reach + 0.15;
+    const size = Math.max(0.006, Math.min(0.014, 0.004 * dist));
     entry.mark.scale.set(size, size, 1);
-    entry.mark.material.color.setHex(chosen ? 0xf4f0e8 : 0xd5dbe2);
-    fitLabel(entry.label, chosen ? Math.min(0.16, 0.04 * dist) : Math.min(0.11, 0.028 * dist));
-    entry.label.visible = show && (chosen || (dist < 4.5 && near < reach));
+    entry.mark.material.color.setHex(0xd5dbe2);
+    fitLabel(entry.label, Math.min(0.11, 0.028 * dist));
+    entry.label.visible = show && dist < 4.5 && near < reach;
   }
 }
 
@@ -358,10 +395,6 @@ function fmt(value, digits = 0) {
     maximumFractionDigits: digits,
     minimumFractionDigits: digits,
   });
-}
-
-function mw(kw) {
-  return `${fmt((kw || 0) / 1000, 2)} MW`;
 }
 
 function renderStats(data) {
@@ -412,7 +445,6 @@ function marketBlock(data) {
   return `<div class="group">
     <h3>Market</h3>
     <p class="market">${fmt(market.rate_usd_mwh, 1)} $/MWh <span>${basis}</span></p>
-    <p class="muted note">Mean state of charge ${fmt(market.mean_soc_pct, 0)}%. ${fmt(market.offline)} offline.</p>
   </div>`;
 }
 
@@ -498,7 +530,6 @@ function renderPanel(data) {
     })
     .join("");
 
-  const gridNet = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
   panelBody.innerHTML = `
     <h2>Fleet</h2>
     <div class="sub">${
@@ -512,21 +543,9 @@ function renderPanel(data) {
       ${row("pulling", fmt(fleet.pulling))}
       ${row("holding", fmt(fleet.holding))}
       ${row("offline", fmt(fleet.offline))}
-    </div>
-    <p class="muted note">${fmt(fleet.pushing)} + ${fmt(fleet.pulling)} + ${fmt(fleet.holding)} = ${fmt(fleet.units)}. Offline units are holding.</p>
-    <div class="stack ledger">
-      <h3>Power</h3>
-      ${row("grid in", mw(fleet.grid_in_kw))}
-      ${row("grid out", mw(fleet.grid_out_kw))}
-      ${row("house load", mw(fleet.load_kw))}
-      ${row("solar", mw(fleet.solar_kw))}
-      ${row("car chargers", mw(fleet.ev_kw))}
-      ${row("charge", mw(fleet.charge_kw))}
-      ${row("discharge", mw(fleet.discharge_kw))}
-      ${row("solar into batteries", mw(fleet.solar_charge_kw))}
       ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
     </div>
-    <p class="muted note">Grid in − out is ${mw(gridNet)}. That is load + chargers − solar + solar into batteries + charge − discharge.</p>
+    <p class="muted note">${fmt(fleet.pushing)} + ${fmt(fleet.pulling)} + ${fmt(fleet.holding)} = ${fmt(fleet.units)}. Offline units are holding.</p>
     ${marketBlock(data)}
     ${actionBlock(data)}
     <div class="group">
@@ -1059,10 +1078,29 @@ function stepBack() {
   focusMetro(null);
 }
 
+function patchRadius(station) {
+  const origin = project(station.lat, station.lon, 0);
+  let radius = 0.012;
+  for (const site of payload?.sites || []) {
+    if (site.station !== station.id) continue;
+    const point = project(site.lat, site.lon, 0);
+    radius = Math.max(radius, Math.hypot(point.x - origin.x, point.z - origin.z));
+  }
+  return radius;
+}
+
 function focusStation(station) {
   focusedStation = station.id;
+  stageStarted = performance.now();
+  stageT = 0;
   const point = project(station.lat, station.lon, 0);
-  focusPoint = { x: point.x, z: point.z, distance: 0.36 };
+  stageRadius = patchRadius(station);
+  focusPoint = {
+    x: point.x,
+    z: point.z,
+    distance: Math.min(0.95, Math.max(0.42, stageRadius * 6)),
+    overhead: true,
+  };
   if (payload) renderScene(payload);
   placeHash(`#station/${station.id}`);
 }
@@ -1182,15 +1220,101 @@ async function poll() {
 }
 
 const GOAL = new THREE.Vector3();
+const DESIRED = new THREE.Vector3();
+const stageCard = document.getElementById("stage");
+const stageTitle = document.getElementById("stage-title");
+const stageSub = document.getElementById("stage-sub");
+const stageCounts = document.getElementById("stage-counts");
 
 function glide() {
   if (!focusPoint) return;
   GOAL.set(focusPoint.x, 0, focusPoint.z);
-  controls.target.lerp(GOAL, 0.1);
-  const offset = camera.position.clone().sub(controls.target).setLength(focusPoint.distance);
-  camera.position.lerp(controls.target.clone().add(offset), 0.1);
+  const pace = focusPoint.overhead ? 0.065 : 0.1;
+  controls.target.lerp(GOAL, pace);
+  if (focusPoint.overhead) {
+    DESIRED.set(0, focusPoint.distance * 0.97, focusPoint.distance * 0.18);
+  } else {
+    DESIRED.copy(camera.position).sub(controls.target).setLength(focusPoint.distance);
+  }
+  camera.position.lerp(controls.target.clone().add(DESIRED), pace);
   screen = null;
-  if (controls.target.distanceTo(GOAL) < 0.02) focusPoint = null;
+  const offset = camera.position.clone().sub(controls.target);
+  const posed = !focusPoint.overhead || offset.y > offset.length() * 0.85;
+  if (
+    controls.target.distanceTo(GOAL) < 0.015
+    && Math.abs(offset.length() - focusPoint.distance) < 0.03
+    && posed
+  ) {
+    focusPoint = null;
+  }
+}
+
+function renderStage(station) {
+  if (!station) {
+    stageCard.hidden = true;
+    return;
+  }
+  if (stageCard.hidden || stageCard.dataset.id !== station.id) {
+    stageCard.dataset.id = station.id;
+    stageCard.hidden = false;
+    stageCard.classList.remove("in");
+    void stageCard.offsetWidth;
+    stageCard.classList.add("in");
+  }
+  const metro = (payload.metros || []).find((item) => item.id === station.metro);
+  let pushing = 0;
+  let pulling = 0;
+  let holding = 0;
+  let flagged = 0;
+  for (const site of payload.sites) {
+    if (site.station !== station.id) continue;
+    if (site.alarm) flagged += 1;
+    if (site.state === "push") pushing += 1;
+    else if (site.state === "pull") pulling += 1;
+    else holding += 1;
+  }
+  stageTitle.textContent = station.name;
+  stageSub.textContent = `${metro ? metro.name : "ERCOT"} · ${fmt(station.units)} homes`;
+  stageCounts.innerHTML = `
+    <span class="key push"><i></i>${fmt(pushing)} pushing</span>
+    <span class="key pull"><i></i>${fmt(pulling)} pulling</span>
+    <span class="key hold"><i></i>${fmt(holding)} holding</span>
+    <span class="key alarm"><i></i>${fmt(flagged)} flagged</span>
+  `;
+}
+
+function present() {
+  const station = focusedStation && payload
+    ? (payload.stations || []).find((item) => item.id === focusedStation)
+    : null;
+  controls.minDistance = station ? 0.26 : 1.2;
+  if (!station) {
+    stageT = 1;
+    if (stagePad.visible) {
+      stagePad.visible = false;
+      stageRing.visible = false;
+      stageCard.hidden = true;
+      particles.material.size = 6;
+      if (payload) renderUnits(payload);
+    }
+    return;
+  }
+  stageT = Math.min(1, (performance.now() - stageStarted) / 1200);
+  const eased = easeOut(stageT);
+  particles.material.size = 6 + 12 * eased;
+  const origin = project(station.lat, station.lon, 0.01);
+  const radius = Math.max(stageRadius, 0.02);
+  const pulse = 1 + Math.sin(performance.now() / 680) * 0.012;
+  stagePad.position.copy(origin);
+  stagePad.scale.setScalar(radius * 1.2 * (0.2 + 0.8 * eased));
+  stagePad.visible = true;
+  stageRing.position.set(origin.x, 0.02, origin.z);
+  stageRing.scale.setScalar(radius * 1.28 * (0.15 + 0.85 * eased) * pulse);
+  stageRing.material.opacity = 0.2 + 0.55 * eased;
+  stageRing.visible = true;
+  renderUnits(payload);
+  renderStations(payload);
+  renderStage(station);
 }
 
 const backButton = document.getElementById("back");
@@ -1212,6 +1336,7 @@ backButton.addEventListener("click", stepBack);
 function frame() {
   resize();
   glide();
+  present();
   renderBack();
   controls.update();
   renderer.render(scene, camera);

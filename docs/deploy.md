@@ -40,7 +40,7 @@ The bot's disk is ephemeral. Supabase is the record of actions, market rows, and
 - Publish directory: `web`
 - Before publishing, set `API_BASE` in `web/config.js` to the bot origin with no trailing slash, for example `https://gridsim-bot.onrender.com`.
 
-The map then polls `API_BASE/api/scene`. The side panel starts open. It shows the price and day shape, the Decisions list with the clause that fired, and the homes past a limit.
+The map then polls `API_BASE/api/scene`. The side panel starts open. It shows the price and day shape, Agent cases with a status on each row, and Maintenance alerts for homes past a limit.
 
 ## 3. Check
 
@@ -51,4 +51,4 @@ insert into unit_actions (id, site_id, kind, status, actor, note)
 values ('service-aus-0004', 'aus-0004', 'scheduled_service', 'pending', 'llm', 'Cabinet inspection');
 ```
 
-Within one tick the bot marks it active, `aus-0004` goes grey on the map, and the Decisions list shows the row and its note. One to two hours later the bot writes `return_online` and the base is online again.
+Within one tick the bot marks it active, `aus-0004` goes grey on the map, and Agent cases shows the row with status active and its note. One to two hours later the bot writes `return_online` and the base is online again.

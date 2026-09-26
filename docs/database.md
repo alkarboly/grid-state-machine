@@ -38,7 +38,7 @@ The component contract from [contracts.md](contracts.md). One row per battery pe
 
 That is about 830 rows a tick instead of 39,000, and the unit view still reads live values for any battery because the simulation state lives in memory. `instrumented` on `/api/site/{id}` says whether a unit is in the cohort.
 
-Every home also keeps a `state_log` in that same memory: one short row per tick, last 180, described in [simulation.md](simulation.md). The unit view shows it. It is not written to SQLite. The control-chart trace is the same kind of memory: the last 30 hours at one residual per minute, described in [control-charts.md](control-charts.md). Startup fills both with simulated rows. Neither is a table.
+Every home also keeps a `state_log` in that same memory: one log-state row per tick, last 180. The row shape, and the current `snapshot` that adds the live flags, are in [contracts.md](contracts.md). The unit view shows the log. It is not written to SQLite. The control-chart trace is the same kind of memory: the last 30 hours at one residual per minute, described in [control-charts.md](control-charts.md). Startup fills both with simulated rows. Neither is a table. `chart_history` on the snapshot is the short run-rule memory, not the 30-hour trace.
 
 ## `observations`
 

@@ -26,11 +26,13 @@ from gridsim.fleet.simulate import (
     DEMO_FAULTS,
     EXTRAS_PER_KIND,
     FAULT_KINDS,
+    LOG_STATE_KEYS,
     inside_texas,
     OBSERVATION_FIELDS,
     apportion,
     build_sites,
     load_anchors,
+    machine_snapshot,
     metro_summary,
     seed_history,
     station_summary,
@@ -266,22 +268,45 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(set(observations[0]), {"ts", "site_id", *OBSERVATION_FIELDS})
         self.assertEqual({point["chart_id"] for point in points}, {spec["chart_id"] for spec in CHARTS})
 
+    def test_grid_off_stops_interchange_and_covers_the_house(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        site = build_sites(fleet_size=8)[0]
+        site["fault"] = {}
+        site["grid_off"] = True
+        site["physical_soc_kwh"] = 30.0
+        site["reserve_frac"] = 0.2
+        current, *_ = tick_sites([site], _grid(0.1), now, 0.25, random.Random(1))
+        home = current[0]
+        disco = home["metrics"]["disco"]
+        self.assertEqual(disco["contactor"], "open")
+        self.assertTrue(disco["islanded"])
+        self.assertEqual(home["metrics"]["grid"]["in_kw"], 0.0)
+        self.assertEqual(home["metrics"]["grid"]["out_kw"], 0.0)
+        self.assertEqual(home["metrics"]["meter"]["in_kw"], 0.0)
+        self.assertEqual(home["metrics"]["base"]["charge_kw"], 0.0)
+        self.assertGreater(home["metrics"]["base"]["discharge_kw"], 0.2)
+        self.assertEqual(home["state_log"][-1]["grid"], "off")
+        self.assertEqual(machine_snapshot(home)["grid"], "off")
+
     def test_state_log_keeps_one_row_per_tick(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
         site = build_sites(fleet_size=40)[0]
-        fields = {
-            "ts", "state", "signal", "source", "availability",
-            "soc_pct", "load_kw", "charge_kw", "discharge_kw", "alarming",
-        }
         current = [site]
         for _ in range(3):
             current, *_ = tick_sites(current, _grid(0.9), now, 0.0, random.Random(1))
         log = current[0]["state_log"]
         self.assertEqual(len(log), 3)
-        self.assertEqual(set(log[-1]), fields)
+        self.assertEqual(set(log[-1]), set(LOG_STATE_KEYS))
         self.assertEqual(log[-1]["state"], current[0]["state"])
         self.assertEqual(log[-1]["signal"], current[0]["metrics"]["grid"]["signal"])
+        self.assertEqual(log[-1]["grid"], "on")
         self.assertIsInstance(log[-1]["alarming"], list)
+        self.assertIsInstance(log[-1]["out_of_control"], list)
+        snap = machine_snapshot(current[0])
+        self.assertTrue(set(LOG_STATE_KEYS) <= set(snap))
+        for key in ("offline", "signal_override", "armed", "addons", "chart_history"):
+            self.assertIn(key, snap)
+        self.assertEqual(snap["physical_soc_kwh"], round(current[0]["physical_soc_kwh"], 4))
         for _ in range(STATE_LOG):
             current, *_ = tick_sites(current, _grid(0.5), now, 0.0, random.Random(2))
         self.assertEqual(len(current[0]["state_log"]), STATE_LOG)
@@ -317,10 +342,8 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(len(sites[0]["chart_trace"]["frequency"]), CHART_POINTS)
         self.assertLess(max(abs(value) for value in sites[0]["chart_trace"]["frequency"]), 0.025 * 2)
         self.assertEqual(len(sites[0]["state_log"]), STATE_LOG)
-        self.assertEqual(set(sites[0]["state_log"][-1]), {
-            "ts", "state", "signal", "source", "availability",
-            "soc_pct", "load_kw", "charge_kw", "discharge_kw", "alarming",
-        })
+        self.assertEqual(set(sites[0]["state_log"][-1]), set(LOG_STATE_KEYS))
+        self.assertEqual(sites[0]["state_log"][-1]["grid"], "on")
         self.assertIn("base_temp", sites[0]["state_log"][-1]["alarming"])
         current, *_rest = tick_sites(sites, _grid(0.5), now, 0.0, random.Random(1))
         self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), CHART_POINTS)

@@ -67,14 +67,17 @@ def post_agent(body: dict):
     chart_id = body.get("chart_id")
     armed = body.get("armed") if "armed" in body else None
     dispatch = body.get("dispatch") if "dispatch" in body else None
+    grid = body.get("grid") if "grid" in body else None
     if chart_id is not None and not isinstance(chart_id, str):
         raise HTTPException(status_code=400, detail="chart_id must be a string")
     if armed is not None and not isinstance(armed, bool):
         raise HTTPException(status_code=400, detail="armed must be true or false")
     if dispatch is not None and not isinstance(dispatch, bool):
         raise HTTPException(status_code=400, detail="dispatch must be true or false")
+    if grid is not None and not isinstance(grid, bool):
+        raise HTTPException(status_code=400, detail="grid must be true or false")
     try:
-        return fleet.arm(site_id, chart_id, armed, dispatch)
+        return fleet.arm(site_id, chart_id, armed, dispatch, grid)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown site") from None
     except ValueError as exc:

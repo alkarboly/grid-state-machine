@@ -36,6 +36,32 @@ DEMO_FAULTS = {
 FAULT_KINDS = ("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw")
 # One row per tick on every home, newest kept. 180 ticks is about 30 minutes at the default interval.
 STATE_LOG = 180
+# Log state. The current snapshot on the site detail adds the live control flags.
+LOG_STATE_KEYS = (
+    "ts",
+    "state",
+    "signal",
+    "source",
+    "availability",
+    "grid",
+    "soc_pct",
+    "physical_soc_kwh",
+    "load_kw",
+    "load_kw_state",
+    "charge_kw",
+    "discharge_kw",
+    "in_kw",
+    "out_kw",
+    "voltage_v",
+    "voltage_state",
+    "frequency_hz",
+    "temp_c",
+    "temp_c_state",
+    "energy_in_kwh",
+    "energy_out_kwh",
+    "alarming",
+    "out_of_control",
+)
 EXTRAS_PER_KIND = 2
 
 KM_PER_DEG_LAT = 110.574
@@ -445,6 +471,109 @@ def _trace_level(site: dict, chart_id: str, hour: int) -> tuple[float, float]:
     return center, sigma
 
 
+def log_state(
+    ts,
+    state,
+    signal,
+    source,
+    availability,
+    grid,
+    soc_pct,
+    physical_soc_kwh,
+    load_kw,
+    load_kw_state,
+    charge_kw,
+    discharge_kw,
+    in_kw,
+    out_kw,
+    voltage_v,
+    voltage_state,
+    frequency_hz,
+    temp_c,
+    temp_c_state,
+    energy_in_kwh,
+    energy_out_kwh,
+    alarming,
+    out_of_control,
+) -> dict:
+    """One tick of the log-state contract. Field names match the state snapshot."""
+    return {
+        "ts": ts,
+        "state": state,
+        "signal": signal,
+        "source": source,
+        "availability": availability,
+        "grid": grid,
+        "soc_pct": soc_pct,
+        "physical_soc_kwh": physical_soc_kwh,
+        "load_kw": load_kw,
+        "load_kw_state": load_kw_state,
+        "charge_kw": charge_kw,
+        "discharge_kw": discharge_kw,
+        "in_kw": in_kw,
+        "out_kw": out_kw,
+        "voltage_v": voltage_v,
+        "voltage_state": voltage_state,
+        "frequency_hz": frequency_hz,
+        "temp_c": temp_c,
+        "temp_c_state": temp_c_state,
+        "energy_in_kwh": energy_in_kwh,
+        "energy_out_kwh": energy_out_kwh,
+        "alarming": list(alarming),
+        "out_of_control": list(out_of_control),
+    }
+
+
+def machine_snapshot(site: dict) -> dict:
+    """Current state snapshot: the log fields plus what the next tick still needs."""
+    metrics = site.get("metrics") or {}
+    grid_m = metrics.get("grid") or {}
+    meter = metrics.get("meter") or {}
+    disco = metrics.get("disco") or {}
+    panel = metrics.get("panel") or {}
+    base = metrics.get("base") or {}
+    maint = metrics.get("maintenance") or {}
+    log = site.get("state_log") or []
+    override = site.get("signal_override")
+    history = {
+        chart_id: [round(float(value), 4) for value in values]
+        for chart_id, values in (site.get("chart_history") or {}).items()
+    }
+    snap = log_state(
+        ts=log[-1]["ts"] if log else None,
+        state=site.get("state", "hold"),
+        signal=site.get("signal", grid_m.get("signal", "hold")),
+        source=grid_m.get("source", "rules"),
+        availability="offline" if site.get("offline") else "online",
+        grid="off" if site.get("grid_off") else "on",
+        soc_pct=base.get("soc_pct"),
+        physical_soc_kwh=round(float(site.get("physical_soc_kwh") or 0.0), 4),
+        load_kw=panel.get("load_kw"),
+        load_kw_state=round(float(site.get("load_kw_state") or 0.0), 4),
+        charge_kw=base.get("charge_kw"),
+        discharge_kw=base.get("discharge_kw"),
+        in_kw=meter.get("in_kw"),
+        out_kw=meter.get("out_kw"),
+        voltage_v=disco.get("voltage_v"),
+        voltage_state=round(float(site.get("voltage_state") or site.get("voltage_center_v") or 0.0), 3),
+        frequency_hz=disco.get("frequency_hz"),
+        temp_c=base.get("temp_c"),
+        temp_c_state=round(float(site.get("temp_c_state") or site.get("temp_center_c") or 0.0), 3),
+        energy_in_kwh=round(float(site.get("energy_in_kwh") or 0.0), 4),
+        energy_out_kwh=round(float(site.get("energy_out_kwh") or 0.0), 4),
+        alarming=list(maint.get("alarming") or []),
+        out_of_control=list(maint.get("out_of_control") or []),
+    )
+    snap["offline"] = bool(site.get("offline"))
+    snap["signal_override"] = (
+        None if not override else {"signal": override[0], "intensity": override[1]}
+    )
+    snap["armed"] = list(site.get("armed") or [])
+    snap["addons"] = list(site.get("addons") or [])
+    snap["chart_history"] = history
+    return snap
+
+
 def seed_history(sites: list[dict], now: datetime) -> None:
     """Fill the chart trace and the state log before the first live tick.
 
@@ -507,19 +636,36 @@ def seed_history(sites: list[dict], now: datetime) -> None:
             alarming = list(codes)
             if state == "push" and fault.get("response_scale") is not None:
                 alarming.append("dispatch_response")
+            load_kw = round(HOUR_MEAN_KW[hour] * scale, 3)
+            net = load_kw + charge - discharge
+            voltage = float(fault["voltage_v"]) if "voltage_v" in fault else site["voltage_center_v"]
+            temp = float(fault["temp_c"]) if "temp_c" in fault else site["temp_center_c"]
             log.append(
-                {
-                    "ts": iso(moment),
-                    "state": state,
-                    "signal": signal,
-                    "source": "rules",
-                    "availability": "online",
-                    "soc_pct": soc,
-                    "load_kw": round(HOUR_MEAN_KW[hour] * scale, 3),
-                    "charge_kw": charge,
-                    "discharge_kw": discharge,
-                    "alarming": alarming,
-                }
+                log_state(
+                    ts=iso(moment),
+                    state=state,
+                    signal=signal,
+                    source="rules",
+                    availability="online",
+                    grid="on",
+                    soc_pct=soc,
+                    physical_soc_kwh=round(site["physical_soc_kwh"], 4),
+                    load_kw=load_kw,
+                    load_kw_state=load_kw,
+                    charge_kw=charge,
+                    discharge_kw=discharge,
+                    in_kw=round(max(net, 0.0), 3),
+                    out_kw=round(max(-net, 0.0), 3),
+                    voltage_v=round(voltage, 2),
+                    voltage_state=round(site["voltage_center_v"], 3),
+                    frequency_hz=60.0,
+                    temp_c=round(temp, 2),
+                    temp_c_state=round(site["temp_center_c"], 3),
+                    energy_in_kwh=0.0,
+                    energy_out_kwh=0.0,
+                    alarming=alarming,
+                    out_of_control=alarming,
+                )
             )
         site["state_log"] = log
 
@@ -656,6 +802,22 @@ def tick_sites(
             spare = max(0.0, site["power_limit_kw"] - charge_kw)
             solar_to_battery = min(solar_left, room_kw, spare)
         solar_export = solar_left - solar_to_battery
+        # An open contactor cannot import or export. The cabinet covers the house
+        # until the reserve, and surplus solar stays on site.
+        if site.get("grid_off"):
+            solar_export = 0.0
+            commanded_charge = 0.0
+            charge_kw = 0.0
+            house_kw = max(0.0, load_kw + ev_kw - solar_to_house)
+            if site.get("offline") or not dt:
+                commanded_discharge = 0.0
+                discharge_kw = 0.0
+            else:
+                headroom_kw = max(0.0, (site["physical_soc_kwh"] - floor) * eta / dt)
+                spare = max(0.0, site["power_limit_kw"] - solar_to_battery)
+                cover = min(house_kw, spare, headroom_kw)
+                commanded_discharge = cover
+                discharge_kw = cover * response
 
         if dt:
             site["physical_soc_kwh"] = min(
@@ -674,6 +836,10 @@ def tick_sites(
         meter_in, meter_out = _split(true_net + rng.gauss(0, 0.02))
         disco_bias = float(fault.get("disco_bias_kw", 0.0))
         disco_in, disco_out = _split(true_net + disco_bias + rng.gauss(0, 0.06))
+        if site.get("grid_off"):
+            grid_in = grid_out = 0.0
+            meter_in = meter_out = 0.0
+            disco_in = disco_out = 0.0
         site["energy_in_kwh"] += meter_in * dt
         site["energy_out_kwh"] += meter_out * dt
 
@@ -747,7 +913,13 @@ def tick_sites(
             ),
         ]
         alarm = any(chart["alarm"] for chart in charts)
+        alarming = [chart["chart_id"] for chart in charts if chart["alarm"]]
+        out_of_control = [chart["chart_id"] for chart in charts if not chart["in_control"]]
         shown_soc = min(site["capacity_kwh"], max(0.0, reported_soc))
+        contactor = "open" if site.get("grid_off") else "closed"
+        islanded = bool(site.get("grid_off"))
+        availability = "offline" if site.get("offline") else "online"
+        soc_pct = round(100.0 * shown_soc / site["capacity_kwh"], 1)
 
         metrics = {
             "grid": {
@@ -773,8 +945,8 @@ def tick_sites(
                 "out_kw": round(disco_out, 3),
                 "voltage_v": round(disco_voltage, 2),
                 "frequency_hz": round(frequency, 3),
-                "contactor": "closed",
-                "islanded": False,
+                "contactor": contactor,
+                "islanded": islanded,
                 "addons": metered,
             },
             "panel": {
@@ -785,19 +957,19 @@ def tick_sites(
                 "capacity_kwh": site["capacity_kwh"],
                 "power_limit_kw": site["power_limit_kw"],
                 "soc_kwh": round(shown_soc, 3),
-                "soc_pct": round(100.0 * shown_soc / site["capacity_kwh"], 1),
+                "soc_pct": soc_pct,
                 "commanded_charge_kw": round(commanded_charge, 3),
                 "commanded_discharge_kw": round(commanded_discharge, 3),
                 "charge_kw": round(charge_kw, 3),
                 "discharge_kw": round(discharge_kw, 3),
                 "solar_charge_kw": round(solar_to_battery, 3),
-                "availability": "offline" if site.get("offline") else "online",
+                "availability": availability,
                 "temp_c": round(temp_c, 2),
             },
             "maintenance": {
                 "alarm": alarm,
-                "alarming": [chart["chart_id"] for chart in charts if chart["alarm"]],
-                "out_of_control": [chart["chart_id"] for chart in charts if not chart["in_control"]],
+                "alarming": alarming,
+                "out_of_control": out_of_control,
                 "warning": [chart["chart_id"] for chart in charts if chart["warning"]],
             },
         }
@@ -819,18 +991,31 @@ def tick_sites(
             site["state"] = "hold"
         history = site.setdefault("state_log", [])
         history.append(
-            {
-                "ts": stamp,
-                "state": site["state"],
-                "signal": signal,
-                "source": source,
-                "availability": "offline" if site.get("offline") else "online",
-                "soc_pct": round(100.0 * shown_soc / site["capacity_kwh"], 1),
-                "load_kw": round(load_kw, 3),
-                "charge_kw": round(charge_kw, 3),
-                "discharge_kw": round(discharge_kw, 3),
-                "alarming": [chart["chart_id"] for chart in charts if chart["alarm"]],
-            }
+            log_state(
+                ts=stamp,
+                state=site["state"],
+                signal=signal,
+                source=source,
+                availability=availability,
+                grid="off" if site.get("grid_off") else "on",
+                soc_pct=soc_pct,
+                physical_soc_kwh=round(site["physical_soc_kwh"], 4),
+                load_kw=round(load_kw, 3),
+                load_kw_state=round(site["load_kw_state"], 4),
+                charge_kw=round(charge_kw, 3),
+                discharge_kw=round(discharge_kw, 3),
+                in_kw=round(meter_in, 3),
+                out_kw=round(meter_out, 3),
+                voltage_v=round(disco_voltage, 2),
+                voltage_state=round(site["voltage_state"], 3),
+                frequency_hz=round(frequency, 3),
+                temp_c=round(temp_c, 2),
+                temp_c_state=round(site["temp_c_state"], 3),
+                energy_in_kwh=round(site["energy_in_kwh"], 4),
+                energy_out_kwh=round(site["energy_out_kwh"], 4),
+                alarming=alarming,
+                out_of_control=out_of_control,
+            )
         )
         del history[:-STATE_LOG]
         updated.append(site)
@@ -875,13 +1060,13 @@ def tick_sites(
             "disco_out_kw": round(disco_out, 3),
             "disco_voltage_v": round(disco_voltage, 2),
             "frequency_hz": round(frequency, 3),
-            "contactor": "closed",
-            "islanded": 0,
+            "contactor": contactor,
+            "islanded": 1 if islanded else 0,
             "load_kw": round(load_kw, 3),
             "panel_voltage_v": round(meter_voltage, 2),
             "physical_soc_kwh": round(site["physical_soc_kwh"], 4),
             "soc_kwh": round(shown_soc, 3),
-            "soc_pct": round(100.0 * shown_soc / site["capacity_kwh"], 1),
+            "soc_pct": soc_pct,
             "commanded_charge_kw": round(commanded_charge, 3),
             "commanded_discharge_kw": round(commanded_discharge, 3),
             "charge_kw": round(charge_kw, 3),

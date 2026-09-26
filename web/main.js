@@ -58,7 +58,7 @@ controls.target.set(0, 0, 0.4);
 let payload = null;
 let selected = null;
 let unitDetail = null;
-const folds = { now: true, agent: true, attention: false };
+const folds = { now: true, agent: false, attention: false };
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
@@ -682,48 +682,56 @@ function nowBlock(data) {
     ${because.map(markLine).join("")}`;
 }
 
-function decisionEntries(data) {
-  const calls = (data.calls || []).map((call) => ({
-    ts: call.ts || "",
-    site: "fleet",
-    actor: call.who || "rules",
-    title: call.signal || "hold",
-    status: "",
-    because: call.because || [],
-    note: "",
-    payload: {},
-  }));
-  const actions = (data.actions || [])
+const WHO = { sim: "agent", api: "user", llm: "model", rules: "fleet" };
+
+function actionEntry(action) {
+  return {
+    ts: action.ts || "",
+    site: action.site_id,
+    actor: action.actor,
+    title: decisionLabel(action),
+    status: action.status || "",
+    because: (action.payload || {}).because || [],
+    note: action.note || "",
+    payload: action.payload || {},
+  };
+}
+
+function agentCases(data) {
+  const open = (status) => status === "pending" || status === "active";
+  return (data.actions || [])
     .filter((action) => action.actor === "sim" || action.actor === "llm" || action.actor === "api")
-    .map((action) => ({
-      ts: action.ts || "",
-      site: action.site_id,
-      actor: action.actor,
-      title: decisionLabel(action),
-      status: action.status || "",
-      because: (action.payload || {}).because || [],
-      note: action.note || "",
-      payload: action.payload || {},
-    }));
-  return [...calls, ...actions].sort((a, b) => b.ts.localeCompare(a.ts));
+    .map(actionEntry)
+    .sort((a, b) => {
+      const rank = Number(open(b.status)) - Number(open(a.status));
+      if (rank) return rank;
+      return b.ts.localeCompare(a.ts);
+    });
+}
+
+function caseCard(entry, opts = {}) {
+  const status = entry.status || "";
+  const who = WHO[entry.actor] || entry.actor || "";
+  const when = (entry.ts || "").slice(11, 16);
+  const meta = [who, when].filter(Boolean).join(" · ");
+  const site = opts.site === false
+    ? ""
+    : `<button type="button" class="case-site" data-site="${escapeHtml(entry.site)}">${escapeHtml(entry.site)}</button>`;
+  const pill = status ? `<span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>` : "";
+  const hit = opts.site === false ? "" : ` data-site="${escapeHtml(entry.site)}"`;
+  return `<article class="case status-${escapeHtml(status)}"${hit}>
+      <div class="case-head"><b class="case-action">${escapeHtml(entry.title)}</b>${pill}</div>
+      <p class="case-meta">${site}${site && meta ? "<span> · </span>" : ""}${meta ? `<span>${escapeHtml(meta)}</span>` : ""}</p>
+      ${reasonHtml(entry)}
+    </article>`;
 }
 
 function agentBlock(data) {
-  const entries = decisionEntries(data);
+  const entries = agentCases(data);
   const rows = entries.length
-    ? entries
-        .map((entry) => {
-          const when = entry.ts.slice(11, 16);
-          const status = entry.status ? ` · ${entry.status}` : "";
-          const hit = entry.site && entry.site !== "fleet" ? ` data-site="${entry.site}"` : "";
-          return `<div class="decision"${hit}>
-            <div class="unit-row"><span>${entry.site}</span><em>${when} · ${entry.title} · ${entry.actor}${status}</em></div>
-            ${reasonHtml(entry)}
-          </div>`;
-        })
-        .join("")
-    : `<p class="muted">No decisions yet. The ladder, an alarming code, a price call, and a posted action each leave the clause that fired.</p>`;
-  return `<div class="roster">${rows}</div>`;
+    ? entries.map((entry) => caseCard(entry)).join("")
+    : `<p class="muted">No agent cases. An alarming code, a price call, or a posted action opens one.</p>`;
+  return `<div class="cases">${rows}</div>`;
 }
 
 function fold(name, title, body) {
@@ -742,7 +750,7 @@ function logLine(row) {
     : row.charge_kw > 0.01
       ? `${fmt(row.charge_kw, 2)} kW in`
       : "idle";
-  const alarms = (row.alarming || []).join(" ");
+  const codes = (row.out_of_control || row.alarming || []).join(" ");
   const word = row.availability === "offline" ? "offline" : row.state;
   return `<p class="log-line ${word}">
     <span>${time}</span>
@@ -751,7 +759,8 @@ function logLine(row) {
     <em>${fmt(row.soc_pct, 0)}%</em>
     <em>${fmt(row.load_kw, 2)} kW load</em>
     <em>${moved}</em>
-    ${alarms ? `<em class="flag">${alarms}</em>` : ""}
+    ${row.grid === "off" ? `<em class="flag">grid off</em>` : ""}
+    ${codes ? `<em class="flag">${codes}</em>` : ""}
   </p>`;
 }
 
@@ -792,21 +801,23 @@ function renderPanel(data) {
     ? queue
         .slice(0, 40)
         .map(
-          (site) => `<button type="button" class="unit-row alarm" data-site="${site.id}">
-            <i></i><span>${site.id}</span><em>${(site.flagged || []).join(" ")}</em>
+          (site) => `<button type="button" class="alert" data-site="${site.id}">
+            <span class="status alarm">maintenance</span>
+            <span class="alert-id">${site.id}</span>
+            <em>${(site.flagged || []).join(" ")}</em>
           </button>`,
         )
         .join("")
-    : `<p class="muted">Every chart in this view is inside its limits.</p>`;
+    : `<p class="muted">No maintenance alerts.</p>`;
 
-  const actionCount = decisionEntries(data).length;
+  const openCases = agentCases(data).filter((entry) => entry.status === "pending" || entry.status === "active").length;
   panelBody.innerHTML = `
     ${fold("now", "Now", nowBlock(data))}
-    ${fold("agent", `Decisions${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, agentBlock(data))}
+    ${fold("agent", `Agent cases${openCases ? `<span class="count">${fmt(openCases)}</span>` : ""}`, agentBlock(data))}
     ${fold(
       "attention",
-      `Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
-      `<div class="roster">${queueHtml}</div>${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}`,
+      `Maintenance alerts${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
+      `<div class="alerts">${queueHtml}</div>${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}`,
     )}
   `;
 }
@@ -836,9 +847,17 @@ const METRIC_ROWS = {
   base: [
     ["state of charge", "base", (m) => `${fmt(m.soc_pct, 1)}%`, "soc_tracking"],
     ["temperature", "base", (m) => `${fmt(m.temp_c, 1)} °C`, "base_temp"],
-    ["charge", "base", (m) => `${fmt(m.charge_kw, 2)} kW`, "dispatch_response"],
-    ["discharge", "base", (m) => `${fmt(m.discharge_kw, 2)} kW`, "dispatch_response"],
+    ["charge", "base", (m) => `${fmt(m.charge_kw, 2)} kW`],
+    ["discharge", "base", (m) => `${fmt(m.discharge_kw, 2)} kW`],
   ],
+};
+
+const RESOLVE = {
+  disco_meter_delta: "Compare the disco to the billing meter. If they still disagree, post scheduled service. Past ±3σ the agent posts that and the cabinet stays offline until the window ends.",
+  disco_voltage: "Post scheduled service and check the connection at the disconnect. The agent posts it once the chart is past ±3σ.",
+  frequency: "Leave the cabinet. Frequency is the grid, not this battery. The chart is marked and nothing is posted.",
+  base_temp: "Past ±3σ the agent holds the pack, then posts scheduled service.",
+  soc_tracking: "Past ±3σ the agent posts scheduled service. The reported charge has left the coulomb count.",
 };
 
 const DIA = { w: 360, h: 460, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };
@@ -921,21 +940,22 @@ function readUnit(site) {
   const charts = site.charts || [];
   const stateOf = (id) => {
     const mine = charts.filter((chart) => chart.component === id);
-    if (mine.some((chart) => chart.alarm)) return "flagged";
+    if (mine.some((chart) => chart.in_control === false)) return "flagged";
     if (mine.some((chart) => chart.warning)) return "watch";
     return "";
   };
+  const gridOff = (site.snapshot && site.snapshot.grid) === "off" || disco.islanded;
   return {
     mode: modeOf(site),
     soc: Math.min(1, Math.max(0, (base.soc_pct ?? 0) / 100)),
     notes: {
-      grid: `${grid.signal || "hold"} · ${fmt(meter.in_kw, 2)} kW in`,
+      grid: gridOff ? "off" : `${grid.signal || "hold"} · ${fmt(meter.in_kw, 2)} kW in`,
       disco: `${fmt(disco.frequency_hz, 3)} Hz · ${disco.contactor || "closed"}`,
       panel: `${fmt(house.load_kw, 2)} kW`,
       base: `${fmt(base.soc_pct, 1)}% · ${fmt(base.temp_c, 1)} °C`,
     },
     blocks: {
-      grid: stateOf("meter") || stateOf("grid"),
+      grid: gridOff ? "flagged" : (stateOf("meter") || stateOf("grid")),
       disco: stateOf("disco"),
       panel: stateOf("panel"),
       base: stateOf("base"),
@@ -998,31 +1018,22 @@ function patchDiagram(holder, view) {
   if (fill) fill.setAttribute("width", ((DIA.bw - 32) * view.soc).toFixed(1));
 }
 
-function agentControls(site) {
-  const rows = METRIC_ROWS[component] || [];
-  const ids = [];
-  for (const row of rows) {
-    if (row[3] && !ids.includes(row[3])) ids.push(row[3]);
-  }
-  const armed = site.armed || [];
-  const byId = {};
-  for (const chart of site.charts || []) byId[chart.chart_id] = chart;
-  const buttons = ids.map((id) => {
-    const on = armed.includes(id);
-    const title = ((byId[id] && byId[id].title) || id).toLowerCase();
-    return `<button type="button" class="arm${on ? " on" : ""}" data-arm="${id}" data-on="${on ? "1" : "0"}">${on ? "clear" : "trigger"} ${title}</button>`;
-  }).join("");
-  const allOn = (site.charts || []).length > 0 && (site.charts || []).every((chart) => armed.includes(chart.chart_id));
-  const dispatchOn = !!site.dispatch;
+function armButton(site, chartId, label) {
+  const on = (site.armed || []).includes(chartId);
+  return `<button type="button" class="arm${on ? " on" : ""}" data-arm="${chartId}" data-on="${on ? "1" : "0"}">${on ? "clear" : "trigger"} ${label}</button>`;
+}
+
+function resolveNote(site, chartId) {
+  const text = RESOLVE[chartId];
+  if (!text) return "";
+  const chart = (site.charts || []).find((item) => item.chart_id === chartId);
+  const hot = chart && chart.in_control === false ? " flag" : "";
+  return `<p class="note resolve${hot}">${text}</p>`;
+}
+
+function decisionFooter(site) {
   const call = site.agent_call;
   const place = call && call.day && call.day !== "mid" ? ` · ${call.day}` : "";
-  const market = payload && payload.market;
-  const shape = payload && payload.shape;
-  const basis = market && market.rate_basis === "ercot" ? "ERCOT" : "simulated";
-  const day = shape && shape.shape ? ` · ${shape.shape}` : "";
-  const context = market
-    ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
-    : "";
   const openActions = (site.actions || []).filter((row) => row.status === "pending" || row.status === "active");
   const covered = openActions.some((row) => ((row.payload || {}).because || []).length);
   const callMarks = call && !covered ? (call.because || []).map(markLine).join("") : "";
@@ -1030,29 +1041,86 @@ function agentControls(site) {
     ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>
        ${callMarks}`
     : "";
-  const openReasons = openActions.map((row) => `<div class="decision"><b>${decisionLabel(row)}</b>${reasonHtml(row)}</div>`).join("");
-  return `<div class="arms">
-      ${buttons}
-      <button type="button" class="arm${allOn ? " on" : ""}" data-arm="all" data-on="${allOn ? "1" : "0"}">${allOn ? "clear all codes" : "trigger all codes"}</button>
-      <button type="button" class="arm${dispatchOn ? " on" : ""}" data-dispatch="${dispatchOn ? "0" : "1"}">${dispatchOn ? "dispatch on" : "push or pull"}</button>
-    </div>
-    ${context}
-    ${callLine}
-    ${openReasons}`;
+  const openReasons = openActions.map((row) => caseCard(actionEntry(row), { site: false })).join("");
+  return `${callLine}${openReasons ? `<div class="cases">${openReasons}</div>` : ""}`;
 }
 
-async function postAgent(node) {
+function simControls(site) {
+  const gridOff = (site.snapshot && site.snapshot.grid) === "off";
+  if (component === "grid") {
+    const market = payload && payload.market;
+    const shape = payload && payload.shape;
+    const basis = market && market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+    const day = shape && shape.shape ? ` · ${shape.shape}` : "";
+    const context = market
+      ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
+      : "";
+    return `<div class="arms">
+        <button type="button" class="arm${gridOff ? " hot" : ""}" data-grid="${gridOff ? "1" : "0"}">${gridOff ? "grid on" : "turn off the grid"}</button>
+        ${armButton(site, "disco_meter_delta", "meter agreement")}
+        <button type="button" class="arm" data-signal="push">push</button>
+        <button type="button" class="arm" data-signal="pull">pull</button>
+        <button type="button" class="arm" data-signal="hold">hold</button>
+      </div>
+      ${resolveNote(site, "disco_meter_delta")}
+      ${context}
+      ${decisionFooter(site)}`;
+  }
+  if (component === "disco") {
+    return `<div class="arms">
+        ${armButton(site, "disco_voltage", "voltage")}
+        ${armButton(site, "frequency", "frequency")}
+      </div>
+      ${resolveNote(site, "disco_voltage")}
+      ${resolveNote(site, "frequency")}
+      ${decisionFooter(site)}`;
+  }
+  if (component === "panel") return decisionFooter(site);
+  return `<div class="arms">
+      ${armButton(site, "soc_tracking", "state of charge")}
+      ${armButton(site, "base_temp", "temperature")}
+      <button type="button" class="arm" data-ticket="1">maintenance ticket</button>
+    </div>
+    ${resolveNote(site, "soc_tracking")}
+    ${resolveNote(site, "base_temp")}
+    ${decisionFooter(site)}`;
+}
+
+async function postSim(node) {
   if (!unitDetail) return;
-  const body = { site_id: unitDetail.id };
+  let url = "/api/agent";
+  let body = { site_id: unitDetail.id };
   if (node.hasAttribute("data-arm")) {
     body.chart_id = node.dataset.arm;
     body.armed = node.dataset.on !== "1";
-  }
-  if (node.hasAttribute("data-dispatch")) {
-    body.dispatch = node.dataset.dispatch === "1";
+  } else if (node.hasAttribute("data-grid")) {
+    body.grid = node.dataset.grid !== "0";
+  } else if (node.hasAttribute("data-signal")) {
+    url = "/api/actions";
+    const signal = node.dataset.signal;
+    body = {
+      site_id: unitDetail.id,
+      kind: "set_signal",
+      note: `Forced ${signal} on this base for one hour.`,
+      payload: {
+        signal,
+        intensity: signal === "hold" ? 0 : 1,
+        because: [{ line: `Forced ${signal} on this base for one hour.`, threshold: signal }],
+      },
+    };
+  } else if (node.hasAttribute("data-ticket")) {
+    url = "/api/actions";
+    body = {
+      site_id: unitDetail.id,
+      kind: "scheduled_service",
+      note: "Maintenance ticket. Follow scheduled service.",
+      payload: {
+        because: [{ line: "Maintenance ticket. Follow scheduled service.", threshold: "scheduled service" }],
+      },
+    };
   }
   try {
-    const response = await fetch(api("/api/agent"), {
+    const response = await fetch(api(url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -1068,17 +1136,19 @@ async function postAgent(node) {
   }
 }
 
-function metricRow(label, text, chartId) {
+function metricRow(label, text, chartId, charts) {
   if (!chartId) return row(label, text);
+  const chart = (charts || []).find((item) => item.chart_id === chartId);
+  const hot = chart && chart.in_control === false ? " hot" : "";
   const on = expanded.has(chartId) ? " on" : "";
-  return `<button type="button" class="metric-link${on}" data-chart="${chartId}" data-scroll="1">
+  return `<button type="button" class="metric-link${on}${hot}" data-chart="${chartId}" data-scroll="1">
     <span>${label}</span><b>${text}</b>
   </button>`;
 }
 
 function chartCard(chart) {
   const status = chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ");
-  const tone = chart.alarm ? "flag" : chart.warning ? "watch" : "muted";
+  const tone = chart.in_control === false ? "flag" : chart.warning ? "watch" : "muted";
   const resolution = chart.alarm && chart.action ? `<p class="action">${chart.action}</p>` : "";
   return `<div class="chart open" id="chart-${chart.chart_id}">
     <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
@@ -1125,9 +1195,9 @@ function renderUnit() {
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>
-    ${agentControls(site)}
+    ${simControls(site)}
     <div class="stack">${rows
-      .map(([label, source, format, chartId]) => metricRow(label, format(metrics[source] || {}), chartId))
+      .map(([label, source, format, chartId]) => metricRow(label, format(metrics[source] || {}), chartId, site.charts))
       .join("")}</div>
     ${charts.length ? `<div class="dt-charts">${charts.map(chartCard).join("")}</div>` : ""}
     ${logBlock(site)}
@@ -1151,7 +1221,10 @@ async function openUnit(id, block = null) {
   const detail = await loadUnit(id);
   if (!detail) return;
   unitDetail = detail;
-  const flagged = (detail.charts || []).find((chart) => chart.alarm) || (detail.charts || []).find((chart) => chart.warning);
+  const flagged = (detail.charts || []).find((chart) => chart.in_control === false)
+    || (detail.charts || []).find((chart) => chart.alarm)
+    || (detail.charts || []).find((chart) => chart.warning);
+  if (block === "meter") block = "grid";
   const known = COMPONENTS.some((item) => item.id === block);
   const fromChart = flagged ? flagged.component : "base";
   component = known ? block : fromChart;
@@ -1175,7 +1248,7 @@ panelToggle.addEventListener("click", () => {
   panelOpen = !panelOpen;
   document.querySelector("main").classList.toggle("collapsed", !panelOpen);
   panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
-  panelToggle.textContent = panelOpen ? "hide" : "decisions";
+  panelToggle.textContent = panelOpen ? "hide" : "cases";
 });
 
 panel.addEventListener("toggle", (event) => {
@@ -1207,9 +1280,9 @@ modal.addEventListener("click", (event) => {
     modal.close();
     return;
   }
-  const armHit = event.target.closest("[data-arm], [data-dispatch]");
+  const armHit = event.target.closest("[data-arm], [data-grid], [data-signal], [data-ticket]");
   if (armHit) {
-    postAgent(armHit);
+    postSim(armHit);
     return;
   }
   const blockHit = event.target.closest("[data-component]");

@@ -84,7 +84,11 @@ Commanded kilowatts are then `power_limit_kw` × intensity, clipped by the energ
 
 This is why `signal` and `state` are different fields. `signal` is what the fleet was told; `state` is what this battery did. The map colours by `state`, so the share of the fleet that could not respond is visible rather than hidden.
 
-Every home keeps a `state_log` of the last 180 ticks. Each row is `ts`, `state`, `signal`, `source`, `availability`, `soc_pct`, `load_kw`, `charge_kw`, `discharge_kw`, and `alarming` (the chart ids past their limits). `GET /api/site/{id}` returns that log newest first. It stays in the process with the rest of the fleet. It is not a table, and a restart clears it. Startup writes a simulated 180 rows before the first tick, using the hour-of-day load and push in the evening, pull overnight, hold otherwise. Live ticks replace that from the newest end. The full component rows for the instrumented cohort remain `metric_logs`.
+Every home keeps a `state_log` of the last 180 ticks. Each row is the log state in [contracts.md](contracts.md): the call, what the battery did, the integrators, meter import and export, and the chart ids that were alarming or out of control. `GET /api/site/{id}` returns that log newest first, and `snapshot` is the same physics plus the live flags (`offline`, `signal_override`, `armed`, `addons`, `chart_history`). The log stays in the process. It is not a table, and a restart clears it. Startup writes a simulated 180 rows before the first tick, using the hour-of-day load and push in the evening, pull overnight, hold otherwise. Live ticks replace that from the newest end. The full component rows for the instrumented cohort remain `metric_logs`.
+
+### Grid off
+
+`POST /api/agent` with `{"site_id", "grid": false}` opens the contactor. The same route with `"grid": true` closes it. While it is open, grid, meter, and disco import and export are 0, the disco is `islanded`, and the cabinet discharges to cover house load until the customer's reserve. It does not charge from the utility, and it does not export. The log row's `grid` field is `off`. The flag lives in the process. A restart clears it.
 
 This is a prototype policy. It is not an ERCOT market award.
 
@@ -111,7 +115,7 @@ After the charts for a tick are written, the process audits them and appends `un
 
 An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. The note starts with the alarm past ±3σ, then the procedure for that code. `payload.because` is `{line, threshold}` with threshold `±3σ`. A code response outranks the price call below: while one is open, that home is not given a price signal.
 
-`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home. `GET /api/agent` lists homes that are armed or set to dispatch. `GET /api/site/{id}` includes `armed`, `dispatch`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view has a trigger for each code on the open box, plus trigger-all and the dispatch switch. Those flags live in the process. A restart clears them.
+`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
 
 On a home with `dispatch` set, and with no open code response, the agent reads the [day trace](ercot-sources.md) and posts `set_signal`:
 

@@ -60,6 +60,7 @@ from gridsim.fleet.simulate import (
     build_sites,
     load_anchors,
     metro_summary,
+    machine_snapshot,
     seed_history,
     station_summary,
     tick_sites,
@@ -397,8 +398,15 @@ class Fleet:
             self.actions.append(action)
         return action
 
-    def arm(self, site_id: str, chart_id: str | None, armed: bool | None, dispatch: bool | None) -> dict:
-        """Arm a chart so the next tick drives it past the limits, or turn on price dispatch."""
+    def arm(
+        self,
+        site_id: str,
+        chart_id: str | None,
+        armed: bool | None,
+        dispatch: bool | None,
+        grid: bool | None = None,
+    ) -> dict:
+        """Arm a chart, turn on price dispatch, or open and close the service contactor."""
         known = [spec["chart_id"] for spec in CHARTS]
         with self._lock:
             site = next((item for item in self.sites if item["id"] == site_id), None)
@@ -421,10 +429,13 @@ class Fleet:
                     site["armed"] = current
             if dispatch is not None:
                 site["agent_dispatch"] = bool(dispatch)
+            if grid is not None:
+                site["grid_off"] = not grid
             return {
                 "site_id": site_id,
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),
+                "grid": "off" if site.get("grid_off") else "on",
             }
 
     def agent_view(self) -> dict:
@@ -433,8 +444,14 @@ class Fleet:
             for site in self.sites:
                 armed = list(site.get("armed") or [])
                 dispatch = bool(site.get("agent_dispatch"))
-                if armed or dispatch:
-                    rows.append({"site_id": site["id"], "armed": armed, "dispatch": dispatch})
+                grid_off = bool(site.get("grid_off"))
+                if armed or dispatch or grid_off:
+                    rows.append({
+                        "site_id": site["id"],
+                        "armed": armed,
+                        "dispatch": dispatch,
+                        "grid": "off" if grid_off else "on",
+                    })
             return {"sites": rows}
 
     def tick(self) -> None:
@@ -719,6 +736,7 @@ class Fleet:
                 "charts": charts,
                 "usage": list(self.usage.get(site_id, [])[-24:]),
                 "state_log": list(reversed(site.get("state_log") or [])),
+                "snapshot": machine_snapshot(site),
                 "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),

@@ -18,11 +18,13 @@ Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `in
 
 Feeder lines from homes to substations are gone. The pale ring marks the selected unit. The right panel collapses, and its ledger sums every unit. Inside a city or a substation, **back** sits on the map. Opening a battery draws no line back to its city.
 
-The sim agent runs after each tick's charts. An alarming code gets the registered `steps` (`actor` `sim`) on the next tick. Frequency is left alone. A warning is left alone. `POST /api/agent` arms any chart, or all of them, so the residual is forced to +4 sigma. The same route sets dispatch on one home: push or pull from the simulated (or ERCOT) rate and that home's expected load, using closed usage hours when they exist. The unit view has the triggers and shows the call the agent chose, including a hold. A card in the top left draws 24 hours of ERCOT demand and the price, including a 6-hour forecast. The sim agent reads that same trace when it chooses push or pull. Each home keeps a state log of recent ticks, and each control chart draws the last 30 hours. Startup fills both with simulated rows. The header shows the sim time on the right.
+The sim agent runs after each tick's charts. An alarming code gets the registered `steps` (`actor` `sim`) on the next tick. Frequency is left alone. A warning is left alone. `POST /api/agent` arms any chart, or all of them, so the residual is forced to +4 sigma. The same route sets dispatch on one home: push or pull from the simulated (or ERCOT) rate and that home's expected load, using closed usage hours when they exist. A decision from the ladder, the sim agent, the remote model, or a user post carries the clause that fired. The sidebar marks the threshold. A maintenance row then quotes the procedure for that code. A card in the top left draws 24 hours of ERCOT demand and the price, including a 6-hour forecast. The sim agent reads that same trace when it chooses push or pull. Each home keeps a state log of recent ticks, and each control chart draws the last 30 hours. Startup fills both with simulated rows. The header shows the sim time on the right.
+
+`GET /api/site/{id}` returns a state `snapshot`, and each `state_log` row is the log state in [contracts.md](contracts.md). Together they are the physics and the call for one home. The unit view is grid, disco, panel, and base. House load is on the electrical panel. From Grid you can turn the grid off, trigger a meter agreement, or force push, pull, or hold. Disco triggers voltage or frequency. Base posts a maintenance ticket and does not trigger dispatch. No box offers trigger-all. A box, a metric, or a chart that is out of control is red. The side panel lists Agent cases, each with a status pill, and Maintenance alerts for homes past ±3σ. Agent cases and Maintenance alerts start collapsed.
 
 ## In the working tree
 
-A decision from the ladder, the sim agent, the remote model, or a user post carries the clause that fired. The sidebar marks the threshold. A maintenance row then quotes the procedure for that code.
+Nothing beyond `main`.
 
 ## Not standing yet
 

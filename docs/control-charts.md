@@ -45,7 +45,7 @@ Each code also has `steps`, the rows the sim agent posts when that chart's `alar
 | `soc_tracking` | `scheduled_service` |
 | `dispatch_response` | `set_signal` hold, then `scheduled_service` |
 
-`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the agent posts `steps`. `armed: false` clears it. The scripted faults on this page stay in place either way. An armed chart replaces the measured value for that tick.
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the agent posts `steps`. `armed: false` clears it. The scripted faults on this page stay in place either way. An armed chart replaces the measured value for that tick. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
 
 ## Rules
 

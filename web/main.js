@@ -1319,63 +1319,68 @@ function logLine(row) {
   </p>`;
 }
 
-function contractWhy(site, snap, signal, state) {
-  const duty = site.duty;
-  const level = site.intensity;
-  const reserve = site.reserve_frac;
-  const soc = snap.soc_pct;
-  if (snap.offline || snap.availability === "offline") {
-    return "Scheduled service has this base offline, so it holds.";
-  }
-  if (snap.grid === "off") {
-    return "The contactor is open, so this home does not import or export.";
-  }
-  if (signal === "hold") return "The call is hold, so this home does not move.";
-  if (level != null && duty != null && level < duty) {
-    return `Duty ${fmt(duty, 2)} is past intensity ${fmt(level, 2)}, so the call did not reach this home.`;
-  }
-  if (signal === "push" && reserve != null && soc != null && soc <= reserve * 100 + 0.2) {
-    return `Charge is at the ${fmt(reserve * 100, 0)}% reserve, so a push holds.`;
-  }
-  if (signal === "pull" && soc != null && soc >= 94.5) {
-    return "Charge is at the 95% ceiling, so a pull holds.";
-  }
-  if (signal !== state) {
-    const did = state === "push" ? "pushed" : state === "pull" ? "pulled" : "held";
-    return `Called to ${signal}. This battery ${did}.`;
-  }
-  return "This home answered the call.";
+const LOG_STATE_SCHEMA = [
+  ["ts", "string"],
+  ["state", "push | pull | hold"],
+  ["signal", "push | pull | hold"],
+  ["source", "rules | external | action"],
+  ["availability", "online | offline"],
+  ["grid", "on | off"],
+  ["soc_pct", "number"],
+  ["physical_soc_kwh", "number"],
+  ["load_kw", "number"],
+  ["load_kw_state", "number"],
+  ["charge_kw", "number"],
+  ["discharge_kw", "number"],
+  ["in_kw", "number"],
+  ["out_kw", "number"],
+  ["voltage_v", "number"],
+  ["voltage_state", "number"],
+  ["frequency_hz", "number"],
+  ["temp_c", "number"],
+  ["temp_c_state", "number"],
+  ["energy_in_kwh", "number"],
+  ["energy_out_kwh", "number"],
+  ["alarming", ["chart_id"]],
+  ["out_of_control", ["chart_id"]],
+];
+
+const SNAPSHOT_SCHEMA = [
+  ["offline", "boolean"],
+  ["signal_override", "null | {signal, intensity}"],
+  ["armed", ["chart_id"]],
+  ["addons", ["addon_id"]],
+  ["chart_history", "chart_id -> number[]"],
+];
+
+const SITE_SCHEMA = [
+  ["duty", "0..1"],
+  ["intensity", "0..1"],
+  ["reserve_frac", "SOC_RESERVE .. SOC_RESERVE + 0.25"],
+];
+
+function schemaJson(rows) {
+  const lines = rows.map(([key, value], index) => {
+    const shown = Array.isArray(value)
+      ? `[${value.map((item) => `"${item}"`).join(", ")}]`
+      : `"${value}"`;
+    const comma = index === rows.length - 1 ? "" : ",";
+    return `  <span class="k">"${key}"</span>: <span class="v">${shown}</span>${comma}`;
+  });
+  return `<pre class="contract-json">{
+${lines.join("\n")}
+}</pre>`;
 }
 
-function contractCell(name, value, gloss, tone) {
-  return `<div>
-    <span>${name}</span>
-    <b class="${tone || ""}">${value}</b>
-    <em>${gloss}</em>
-  </div>`;
-}
-
-function contractBlock(site) {
-  const snap = site.snapshot || {};
-  const signal = snap.signal || "hold";
-  const state = snap.state || site.state || "hold";
-  const source = snap.source || "rules";
-  const extras = [
-    ["source", source],
-    ["availability", snap.availability || "online"],
-    ["soc_pct", snap.soc_pct == null ? "—" : `${fmt(snap.soc_pct, 0)}%`],
-  ];
-  if (site.duty != null) extras.push(["duty", fmt(site.duty, 2)]);
-  if (site.intensity != null) extras.push(["intensity", fmt(site.intensity, 2)]);
-  if (site.reserve_frac != null) extras.push(["reserve", `${fmt(site.reserve_frac * 100, 0)}%`]);
+function contractBlock() {
   return `<section class="contract" aria-label="Data contract">
     <p class="unit-chain-cap">contract</p>
-    <div class="contract-pair">
-      ${contractCell("signal", signal, "the call", signal)}
-      ${contractCell("state", state, "what it did", state)}
-    </div>
-    <p class="contract-why">${contractWhy(site, snap, signal, state)}</p>
-    <p class="contract-fields">${extras.map(([name, value]) => `<span><em>${name}</em> ${value}</span>`).join("")}</p>
+    <p class="contract-name">log state</p>
+    ${schemaJson(LOG_STATE_SCHEMA)}
+    <p class="contract-name">snapshot</p>
+    ${schemaJson(SNAPSHOT_SCHEMA)}
+    <p class="contract-name">site</p>
+    ${schemaJson(SITE_SCHEMA)}
   </section>`;
 }
 
@@ -1879,7 +1884,7 @@ function renderUnit() {
   const scrolled = detail.scrollTop;
   const logSnap = snapState(detail.querySelector(".log-body"));
   detail.innerHTML = `
-    ${contractBlock(site)}
+    ${contractBlock()}
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>

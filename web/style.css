@@ -706,53 +706,25 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
 }
 
 .contract { margin: 0 0 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-.contract-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px 28px;
-}
-.contract-pair span, .contract-fields em {
-  display: block;
-  color: #5a5f68;
+.contract-name {
+  margin: 16px 0 6px;
   font-size: 10px;
-  font-style: normal;
   letter-spacing: 0.16em;
   text-transform: uppercase;
+  color: #5a5f68;
 }
-.contract-pair b {
-  display: block;
-  margin-top: 2px;
-  font-size: 22px;
-  font-weight: 550;
-  text-transform: lowercase;
-}
-.contract-pair b.push { color: var(--push); }
-.contract-pair b.pull { color: var(--pull); }
-.contract-pair b.hold { color: var(--hold); }
-.contract-pair b.alarm, .contract-pair b.offline { color: var(--alarm); }
-.contract-pair em {
-  color: var(--muted);
-  font-size: 12px;
-  font-style: normal;
-}
-.contract-why {
-  margin: 10px 0 12px;
-  max-width: 42em;
-  font-size: 13px;
-  line-height: 1.45;
-}
-.contract-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
+.contract-json {
   margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: #0c0d10;
+  color: var(--muted);
+  font: 12px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  white-space: pre;
+  overflow: auto;
 }
-.contract-fields span {
-  color: var(--ink);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.contract-fields em { margin-bottom: 2px; }
+.contract-json .k { color: var(--watch); }
+.contract-json .v { color: var(--ink); }
 .unit-detail, .unit-chain, aside { scrollbar-width: thin; scrollbar-color: #33373f transparent; }
 
 .dt-name { margin: 16px 0 4px; font-size: 14px; font-weight: 550; }

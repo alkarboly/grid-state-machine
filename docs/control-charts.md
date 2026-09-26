@@ -42,10 +42,10 @@ Each alarming code opens one `scheduled_service` ticket. A warning posts nothing
 
 | Code | First response | If the reset does not clear it |
 | --- | --- | --- |
-| `disco_meter_delta` | System reset, 2 minutes. Assumed to clear a glitch. | — |
-| `disco_voltage` | System reset, 2 minutes. Assumed to clear a glitch. | — |
-| `soc_tracking` | System reset, 2 minutes. | Agent ticket, 20 minutes. |
-| `dispatch_response` | System reset, 2 minutes. | Agent ticket, 20 minutes. |
+| `disco_meter_delta` | System reset, 15 seconds (0.25 minutes). Assumed to clear a glitch. | — |
+| `disco_voltage` | System reset, 15 seconds (0.25 minutes). Assumed to clear a glitch. | — |
+| `soc_tracking` | System reset, 15 seconds (0.25 minutes). | Agent ticket, 20 minutes. |
+| `dispatch_response` | System reset, 15 seconds (0.25 minutes). | Agent ticket, 20 minutes. |
 | `base_temp` | Reset skipped. Heat does not clear by reboot. | Agent ticket, 30 minutes. |
 | `frequency` | none | none |
 

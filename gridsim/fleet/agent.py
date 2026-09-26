@@ -194,13 +194,15 @@ def _price_note(because: list[dict], expected: float, source: str, shape: dict |
 
 
 # Simulated maintenance. Minutes are assumptions, not a crew schedule.
+# 15 seconds keeps reset flows visible in a short demo.
+RESET_MIN = 0.25
 # A reset is a short outage. `clears` means that reboot is assumed to fix it.
 # Otherwise the same ticket escalates and the agent writes the visit.
 RESOLUTION = {
-    "disco_meter_delta": {"reset_min": 2, "clears": True, "service_min": 20},
-    "disco_voltage": {"reset_min": 2, "clears": True, "service_min": 20},
-    "soc_tracking": {"reset_min": 2, "clears": False, "service_min": 20},
-    "dispatch_response": {"reset_min": 2, "clears": False, "service_min": 20},
+    "disco_meter_delta": {"reset_min": RESET_MIN, "clears": True, "service_min": 20},
+    "disco_voltage": {"reset_min": RESET_MIN, "clears": True, "service_min": 20},
+    "soc_tracking": {"reset_min": RESET_MIN, "clears": False, "service_min": 20},
+    "dispatch_response": {"reset_min": RESET_MIN, "clears": False, "service_min": 20},
     "base_temp": {"reset_min": None, "clears": False, "service_min": 30},
 }
 
@@ -230,7 +232,17 @@ def _gathered(site: dict, chart: dict) -> dict:
     }
 
 
-def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: int | None) -> str:
+def _estimate_label(minutes: float | None) -> str:
+    if minutes is None:
+        return ""
+    if minutes < 1:
+        return f"{round(minutes * 60)}s"
+    if float(minutes).is_integer():
+        return f"{int(minutes)}m"
+    return f"{minutes:g}m"
+
+
+def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: float | None) -> str:
     written = write_ticket({
         "site_id": site["id"],
         "chart_id": chart_id,
@@ -242,7 +254,7 @@ def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: int | None
     return _ticket_note(site, chart_id, gathered, reset_min)
 
 
-def _ticket_note(site: dict, chart_id: str, gathered: dict, reset_min: int | None) -> str:
+def _ticket_note(site: dict, chart_id: str, gathered: dict, reset_min: float | None) -> str:
     bits = [f"{site['id']} {chart_id}"]
     if gathered.get("z") is not None:
         bits.append(f"z {gathered['z']}")
@@ -255,7 +267,7 @@ def _ticket_note(site: dict, chart_id: str, gathered: dict, reset_min: int | Non
     if gathered.get("load_kw") is not None:
         bits.append(f"load {gathered['load_kw']} kW")
     if reset_min:
-        bits.append(f"reset {reset_min}m did not clear")
+        bits.append(f"reset {_estimate_label(reset_min)} did not clear")
     else:
         bits.append("reset skipped")
     return ". ".join(bits) + "."
@@ -330,7 +342,7 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             site["id"],
             "scheduled_service",
             now,
-            note=f"System reset for {spec['chart_id']}. Estimate {policy['reset_min']}m.",
+            note=f"System reset for {spec['chart_id']}. Estimate {_estimate_label(policy['reset_min'])}.",
             payload=payload,
             actor="maintenance",
             ends_at=now + timedelta(minutes=policy["reset_min"]),
@@ -371,7 +383,7 @@ def _append_step(ticket: dict, stage: str, estimate_min, result: str, actor: str
 
 
 def _ticket_payload(spec, policy, gathered, because, reset_min, now: datetime) -> dict:
-    result = "reset skipped" if not reset_min else f"reset {reset_min}m did not clear"
+    result = "reset skipped" if not reset_min else f"reset {_estimate_label(reset_min)} did not clear"
     steps = []
     if reset_min:
         steps.append(_step("reset", reset_min, "did not clear", "maintenance", now))
@@ -415,7 +427,7 @@ def _escalate(site, ticket, chart, spec, policy, now) -> None:
     payload["because"] = payload.get("because") or []
     if reset_min:
         _append_step(ticket, "reset", reset_min, "did not clear", "maintenance", now)
-    result = "reset skipped" if not reset_min else f"reset {reset_min}m did not clear"
+    result = "reset skipped" if not reset_min else f"reset {_estimate_label(reset_min)} did not clear"
     _append_step(ticket, "ticket", policy["service_min"], result, "llm", now)
     ticket["actor"] = "llm"
     ticket["status"] = "active"
@@ -441,7 +453,7 @@ def record_toggle(site: dict, actions: list[dict], chart_id: str, armed: bool, n
             _append_step(ticket, payload.get("stage") or "reset", estimate, "triggered", "api", now)
             end = datetime.fromisoformat(ticket["ends_at"]) if ticket.get("ends_at") else now
             if estimate and end <= now:
-                ticket["ends_at"] = iso(now + timedelta(minutes=int(estimate)))
+                ticket["ends_at"] = iso(now + timedelta(minutes=float(estimate)))
                 ticket["status"] = "active"
             return [ticket]
         spec = next(item for item in CHARTS if item["chart_id"] == chart_id)

@@ -58,7 +58,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(voltage["kind"], "scheduled_service")
         self.assertEqual(voltage["actor"], "maintenance")
         self.assertEqual(voltage["payload"]["stage"], "reset")
-        self.assertEqual(voltage["payload"]["estimate_min"], 2)
+        self.assertEqual(voltage["payload"]["estimate_min"], RESOLUTION["disco_voltage"]["reset_min"])
         thermal = by_code["base_temp"]
         self.assertEqual(thermal["actor"], "llm")
         self.assertEqual(thermal["payload"]["stage"], "ticket")
@@ -73,7 +73,7 @@ class AgentTests(unittest.TestCase):
         site = _bare({"disco_voltage"})
         site["armed"] = ["disco_voltage"]
         rows = audit([site], [], _grid(0.5), {}, now)
-        later = now + timedelta(minutes=2)
+        later = now + timedelta(seconds=15)
         closed = audit([site], rows, _grid(0.5), {}, later)
         self.assertEqual(rows[0]["status"], "done")
         self.assertEqual(
@@ -90,7 +90,7 @@ class AgentTests(unittest.TestCase):
         site["metrics"] = {"base": {"soc_pct": 55, "temp_c": 32.0}, "panel": {"load_kw": 0.8}}
         rows = audit([site], [], _grid(0.5), {}, now)
         ticket = rows[0]
-        later = now + timedelta(minutes=2)
+        later = now + timedelta(seconds=15)
         extra = audit([site], rows, _grid(0.5), {}, later)
         self.assertEqual(extra, [])
         self.assertEqual(ticket["id"], rows[0]["id"])
@@ -99,7 +99,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(ticket["payload"]["estimate_min"], 20)
         self.assertEqual(
             [item["result"] for item in ticket["payload"]["escalation"]],
-            ["trying", "did not clear", "reset 2m did not clear"],
+            ["trying", "did not clear", "reset 15s did not clear"],
         )
         self.assertEqual(ticket["payload"]["escalation"][-1]["actor"], "llm")
         self.assertIn("soc 55", ticket["note"])

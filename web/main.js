@@ -727,7 +727,9 @@ function agentCases(data, desk, ids) {
 }
 
 function spanLabel(ms) {
-  const minutes = Math.max(0, Math.round(ms / 60000));
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
@@ -740,7 +742,7 @@ function timerLabel(start, end, now = Date.now()) {
   if (!Number.isFinite(endMs)) return "";
   if (Number.isFinite(startMs) && startMs - now > 30000) return `in ${spanLabel(startMs - now)}`;
   const left = endMs - now;
-  return left <= 0 ? "0m" : spanLabel(left);
+  return left <= 0 ? "0s" : spanLabel(left);
 }
 
 function paintTimers() {
@@ -752,9 +754,17 @@ function paintTimers() {
 
 setInterval(paintTimers, 1000);
 
+function estimateLabel(minutes) {
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1) return `${Math.round(value * 60)}s`;
+  return Number.isInteger(value) ? `${value}m` : `${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}m`;
+}
+
 function stepText(item) {
-  const estimate = item.estimate_min ? `${item.estimate_min}m ` : "";
-  return `${item.stage || "step"} ${estimate}${item.result || ""}`.trim();
+  const estimate = estimateLabel(item.estimate_min);
+  const bit = estimate ? `${estimate} ` : "";
+  return `${item.stage || "step"} ${bit}${item.result || ""}`.trim();
 }
 
 function stepList(payload) {
@@ -782,7 +792,8 @@ function caseCard(entry, opts = {}) {
   if (opts.select && opts.site !== false) {
     const payload = entry.payload || {};
     const chart = escapeHtml(payload.chart_id || "");
-    const estimate = payload.estimate_min ? `<span class="case-est">est ${payload.estimate_min}m</span>` : "";
+    const estimateText = estimateLabel(payload.estimate_min);
+    const estimate = estimateText ? `<span class="case-est">est ${escapeHtml(estimateText)}</span>` : "";
     const steps = stepList(payload);
     const whoLine = !steps && named ? `<span class="escalation">${escapeHtml(named)}</span>` : "";
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
@@ -994,11 +1005,11 @@ const METRIC_ROWS = {
 };
 
 const RESOLVE = {
-  disco_meter_delta: "Past ±3σ maintenance tries a 2 minute system reset. That reboot is assumed to clear a meter glitch, and the ticket closes.",
-  disco_voltage: "Past ±3σ maintenance tries a 2 minute system reset. That reboot is assumed to clear a voltage glitch, and the ticket closes.",
+  disco_meter_delta: "Past ±3σ maintenance tries a 15 second system reset. That reboot is assumed to clear a meter glitch, and the ticket closes.",
+  disco_voltage: "Past ±3σ maintenance tries a 15 second system reset. That reboot is assumed to clear a voltage glitch, and the ticket closes.",
   frequency: "Leave the cabinet. Frequency is the grid, not this battery. The chart is marked and nothing is posted.",
   base_temp: "Heat does not clear by reboot. The agent opens a 30 minute service ticket from the cabinet readings.",
-  soc_tracking: "Past ±3σ maintenance tries a 2 minute reset. That does not clear a charge offset, so the agent opens a 20 minute service ticket.",
+  soc_tracking: "Past ±3σ maintenance tries a 15 second reset. That does not clear a charge offset, so the agent opens a 20 minute service ticket.",
 };
 
 const DIA = { w: 360, h: 460, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };

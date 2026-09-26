@@ -18,6 +18,10 @@ services:
         sync: false
       - key: LLM_URL
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
       - key: ERCOT_USERNAME
         sync: false
       - key: ERCOT_PASSWORD

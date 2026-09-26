@@ -6,6 +6,25 @@ DATA = ROOT / "data"
 WEB = ROOT / "web"
 DB_PATH = DATA / "gridsim.db"
 
+
+def _load_env_file() -> None:
+    """Read `.env` into the process. A variable already set in the shell wins."""
+    path = ROOT / ".env"
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file()
+
 CHICAGO = "America/Chicago"
 
 # Published Base Core energy. Continuous kW is an assumption; see docs/gaps.md.
@@ -46,6 +65,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").stri
 # set_signal on a unit set to dispatch.
 LLM_URL = os.environ.get("LLM_URL", "").strip()
 LLM_EVERY_S = float(os.environ.get("LLM_EVERY_S", "600"))
+
+# Optional. When the key is set, an escalated maintenance ticket asks this model
+# to write the note from the gathered readings. gpt-4o-mini is the cheap default.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
 # Comma-separated browser origins allowed to call the bot. Empty keeps same-origin only.
 WEB_ORIGIN = os.environ.get("WEB_ORIGIN", "").strip()

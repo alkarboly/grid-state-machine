@@ -461,7 +461,9 @@ def upsert_actions(conn: sqlite3.Connection, rows: list[dict]) -> None:
           status = excluded.status,
           starts_at = excluded.starts_at,
           ends_at = excluded.ends_at,
-          note = excluded.note
+          note = excluded.note,
+          payload_json = excluded.payload_json,
+          actor = excluded.actor
         """,
         [
             (

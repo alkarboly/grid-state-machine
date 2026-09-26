@@ -32,7 +32,7 @@ CHARTS = (
         "title": "Meter agreement",
         "unit": "kW",
         "sigma": 0.20,
-        "action": "Compare the disco to the billing meter. If they still disagree, post scheduled_service.",
+        "action": "Try a system reset. A meter glitch is assumed to clear. The ticket closes when the reset ends.",
         "steps": ({"kind": "scheduled_service"},),
     },
     {
@@ -42,7 +42,7 @@ CHARTS = (
         "title": "Cabinet temperature",
         "unit": "°C",
         "sigma": None,
-        "action": "Post set_signal hold so the pack stops working, then scheduled_service for cooling or a stuck sensor.",
+        "action": "Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings.",
         "steps": (
             {"kind": "set_signal", "signal": "hold", "intensity": 0},
             {"kind": "scheduled_service"},
@@ -55,7 +55,7 @@ CHARTS = (
         "title": "Service voltage",
         "unit": "V",
         "sigma": None,
-        "action": "Post scheduled_service and check the connection at the disconnect.",
+        "action": "Try a system reset. A voltage glitch is assumed to clear. The ticket closes when the reset ends.",
         "steps": ({"kind": "scheduled_service"},),
     },
     {
@@ -75,7 +75,7 @@ CHARTS = (
         "title": "State-of-charge tracking",
         "unit": "kWh",
         "sigma": 0.45,
-        "action": "Post scheduled_service. The reported charge has left the coulomb count.",
+        "action": "Try a system reset. A charge offset does not clear, so the agent opens a service ticket.",
         "steps": ({"kind": "scheduled_service"},),
     },
     {
@@ -85,7 +85,7 @@ CHARTS = (
         "title": "Dispatch response",
         "unit": "kW",
         "sigma": 0.40,
-        "action": "Post set_signal hold, then scheduled_service. The battery is not doing what it was told.",
+        "action": "Try an inverter reset. If the battery still ignores dispatch, the agent opens a service ticket.",
         "steps": (
             {"kind": "set_signal", "signal": "hold", "intensity": 0},
             {"kind": "scheduled_service"},

@@ -7,9 +7,12 @@ that call. The remote model in docs/llm.md stays outside the tick.
 
 from __future__ import annotations
 
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 
 from gridsim.fleet.actions import OPEN, market_rate, new_action
+from gridsim.llm import write_ticket
+from gridsim.timeutil import iso
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import HOUR_MEAN_KW, panel_kw
 
@@ -157,17 +160,6 @@ def choose_unit_signal(rate: float, expected: float, typical: float, shape: dict
     return signal
 
 
-def _open_code(actions: list[dict], site_id: str, chart_id: str, kind: str) -> bool:
-    for action in actions:
-        if action.get("site_id") != site_id or action.get("kind") != kind:
-            continue
-        if action.get("status") not in OPEN:
-            continue
-        if (action.get("payload") or {}).get("chart_id") == chart_id:
-            return True
-    return False
-
-
 def _code_busy(actions: list[dict], site_id: str) -> bool:
     for action in actions:
         if action.get("site_id") != site_id or action.get("status") not in OPEN:
@@ -199,44 +191,199 @@ def _price_note(because: list[dict], expected: float, source: str, shape: dict |
     return note
 
 
+# Simulated maintenance. Minutes are assumptions, not a crew schedule.
+# A reset is a short outage. `clears` means that reboot is assumed to fix it.
+# Otherwise the same ticket escalates and the agent writes the visit.
+RESOLUTION = {
+    "disco_meter_delta": {"reset_min": 2, "clears": True, "service_min": 20},
+    "disco_voltage": {"reset_min": 2, "clears": True, "service_min": 20},
+    "soc_tracking": {"reset_min": 2, "clears": False, "service_min": 20},
+    "dispatch_response": {"reset_min": 2, "clears": False, "service_min": 20},
+    "base_temp": {"reset_min": None, "clears": False, "service_min": 30},
+}
+
+
+def _open_ticket(actions: list[dict], site_id: str, chart_id: str) -> dict | None:
+    for action in actions:
+        if action.get("site_id") != site_id or action.get("kind") != "scheduled_service":
+            continue
+        if action.get("status") not in OPEN:
+            continue
+        if (action.get("payload") or {}).get("chart_id") == chart_id:
+            return action
+    return None
+
+
+def _gathered(site: dict, chart: dict) -> dict:
+    metrics = site.get("metrics") or {}
+    base = metrics.get("base") or {}
+    panel = metrics.get("panel") or {}
+    return {
+        "z": chart.get("z"),
+        "measured": chart.get("measured"),
+        "expected": chart.get("expected"),
+        "soc_pct": base.get("soc_pct"),
+        "temp_c": base.get("temp_c"),
+        "load_kw": panel.get("load_kw"),
+    }
+
+
+def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: int | None) -> str:
+    written = write_ticket({
+        "site_id": site["id"],
+        "chart_id": chart_id,
+        "gathered": gathered,
+        "reset_min": reset_min,
+    })
+    if written:
+        return written
+    return _ticket_note(site, chart_id, gathered, reset_min)
+
+
+def _ticket_note(site: dict, chart_id: str, gathered: dict, reset_min: int | None) -> str:
+    bits = [f"{site['id']} {chart_id}"]
+    if gathered.get("z") is not None:
+        bits.append(f"z {gathered['z']}")
+    if gathered.get("measured") is not None:
+        bits.append(f"measured {gathered['measured']}")
+    if gathered.get("soc_pct") is not None:
+        bits.append(f"soc {gathered['soc_pct']}%")
+    if gathered.get("temp_c") is not None:
+        bits.append(f"temp {gathered['temp_c']} °C")
+    if gathered.get("load_kw") is not None:
+        bits.append(f"load {gathered['load_kw']} kW")
+    if reset_min:
+        bits.append(f"reset {reset_min}m did not clear")
+    else:
+        bits.append("reset skipped")
+    return ". ".join(bits) + "."
+
+
+def _return_online(site_id: str, now: datetime, actor: str, service_id: str) -> dict:
+    return {
+        "id": uuid.uuid4().hex,
+        "ts": iso(now),
+        "site_id": site_id,
+        "kind": "return_online",
+        "status": "done",
+        "starts_at": iso(now),
+        "ends_at": iso(now),
+        "note": "Back online after system reset",
+        "payload": {"service_id": service_id},
+        "actor": actor,
+    }
+
+
 def maintenance_manager(sites: list[dict], actions: list[dict], now: datetime) -> list[dict]:
-    """Pending rows for alarming codes. A warning posts nothing. Frequency posts nothing."""
+    """One ticket per alarming code. Reset first when that fault allows it.
+
+    A warning posts nothing. Frequency posts nothing. A failed reset escalates
+    the same row: the agent writes the visit from the readings on the home.
+    """
     created: list[dict] = []
     pending = list(actions)
     for site in sites:
         charts = {chart["chart_id"]: chart for chart in site.get("charts") or []}
         for spec in CHARTS:
+            policy = RESOLUTION.get(spec["chart_id"])
             chart = charts.get(spec["chart_id"])
-            if not chart or not chart.get("alarm"):
+            if not policy or not chart or not chart.get("alarm"):
                 continue
-            for step in spec["steps"]:
-                kind = step["kind"]
-                if _open_code(pending, site["id"], spec["chart_id"], kind):
-                    continue
-                payload = {"chart_id": spec["chart_id"]}
-                if kind == "set_signal":
-                    payload["signal"] = step["signal"]
-                    payload["intensity"] = step.get("intensity", 0)
-                zed = chart.get("z")
-                limit = "±3σ"
-                if zed is None:
-                    because = [_clause(f"alarm beyond {limit}", limit)]
-                    lead = f"Alarm beyond {limit}."
-                else:
-                    because = [_clause(f"z {zed} beyond {limit}", limit)]
-                    lead = f"Alarm beyond {limit} (z {zed})."
-                payload["because"] = because
-                row = new_action(
-                    site["id"],
-                    kind,
-                    now,
-                    note=f"{lead} {spec['action']}",
-                    payload=payload,
-                    actor="maintenance",
-                )
-                created.append(row)
-                pending.append(row)
+            ticket = _open_ticket(pending, site["id"], spec["chart_id"])
+            if ticket is None:
+                created.append(_open_case(site, spec, chart, policy, now, pending))
+                continue
+            payload = ticket.setdefault("payload", {})
+            if payload.get("stage") != "reset":
+                continue
+            end = datetime.fromisoformat(ticket["ends_at"])
+            if now < end:
+                continue
+            if policy["clears"]:
+                _clear_reset(site, ticket, now, created)
+            else:
+                _escalate(site, ticket, chart, spec, policy, now)
     return created
+
+
+def _open_case(site, spec, chart, policy, now, pending) -> dict:
+    gathered = _gathered(site, chart)
+    because = [_clause(f"z {chart.get('z')} beyond ±3σ", "±3σ")]
+    if policy["reset_min"]:
+        payload = {
+            "chart_id": spec["chart_id"],
+            "stage": "reset",
+            "estimate_min": policy["reset_min"],
+            "because": because,
+            "gathered": gathered,
+            "escalation": [{
+                "stage": "reset",
+                "estimate_min": policy["reset_min"],
+                "result": "trying",
+            }],
+        }
+        row = new_action(
+            site["id"],
+            "scheduled_service",
+            now,
+            note=f"System reset for {spec['chart_id']}. Estimate {policy['reset_min']}m.",
+            payload=payload,
+            actor="maintenance",
+            ends_at=now + timedelta(minutes=policy["reset_min"]),
+        )
+    else:
+        payload = _ticket_payload(spec, policy, gathered, because, None)
+        row = new_action(
+            site["id"],
+            "scheduled_service",
+            now,
+            note=_agent_note(site, spec["chart_id"], gathered, None),
+            payload=payload,
+            actor="llm",
+            ends_at=now + timedelta(minutes=policy["service_min"]),
+        )
+    pending.append(row)
+    return row
+
+
+def _ticket_payload(spec, policy, gathered, because, reset_min) -> dict:
+    result = "reset skipped" if not reset_min else f"reset {reset_min}m did not clear"
+    steps = []
+    if reset_min:
+        steps.append({"stage": "reset", "estimate_min": reset_min, "result": "did not clear"})
+    steps.append({"stage": "ticket", "estimate_min": policy["service_min"], "result": result})
+    return {
+        "chart_id": spec["chart_id"],
+        "stage": "ticket",
+        "estimate_min": policy["service_min"],
+        "because": because,
+        "gathered": gathered,
+        "escalation": steps,
+    }
+
+
+def _clear_reset(site, ticket, now, created) -> None:
+    chart_id = ticket["payload"]["chart_id"]
+    site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
+    ticket["status"] = "done"
+    ticket["note"] = f"System reset cleared {chart_id}."
+    ticket["payload"]["escalation"] = [{
+        "stage": "reset",
+        "estimate_min": ticket["payload"].get("estimate_min"),
+        "result": "cleared",
+    }]
+    created.append(_return_online(site["id"], now, ticket.get("actor") or "maintenance", ticket["id"]))
+
+
+def _escalate(site, ticket, chart, spec, policy, now) -> None:
+    reset_min = policy["reset_min"]
+    gathered = _gathered(site, chart)
+    because = ticket["payload"].get("because") or []
+    ticket["payload"] = _ticket_payload(spec, policy, gathered, because, reset_min)
+    ticket["actor"] = "llm"
+    ticket["status"] = "active"
+    ticket["ends_at"] = iso(now + timedelta(minutes=policy["service_min"]))
+    ticket["note"] = _agent_note(site, spec["chart_id"], gathered, reset_min)
 
 
 def fleet_manager(

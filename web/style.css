@@ -493,6 +493,14 @@ h2 {
 .alert.case-row.status-cancelled { border-left-color: var(--line); }
 .alert.case-row .status.pending { color: var(--watch); border-color: var(--watch); }
 .alert.case-row .status.active { color: var(--pull); border-color: var(--pull); }
+.alert.case-row .status { grid-row: 1 / span 3; }
+.alert.case-row .escalation {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.case .escalation { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
 .because { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .because mark {
   background: #3d3424;

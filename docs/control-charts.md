@@ -25,27 +25,29 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 
 | Code | Action |
 | --- | --- |
-| `disco_meter_delta` | Compare the disco to the billing meter. If they still disagree, post `scheduled_service`. |
-| `base_temp` | Post `set_signal` hold so the pack stops working, then `scheduled_service` for cooling or a stuck sensor. |
-| `disco_voltage` | Post `scheduled_service` and check the connection at the disconnect. |
+| `disco_meter_delta` | Try a system reset. A meter glitch is assumed to clear. The ticket closes when the reset ends. |
+| `base_temp` | Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings. |
+| `disco_voltage` | Try a system reset. A voltage glitch is assumed to clear. The ticket closes when the reset ends. |
 | `frequency` | Leave the cabinet. Frequency is the grid, not this battery. |
-| `soc_tracking` | Post `scheduled_service`. The reported charge has left the coulomb count. |
-| `dispatch_response` | Post `set_signal` hold, then `scheduled_service`. The battery is not doing what it was told. |
+| `soc_tracking` | Try a system reset. A charge offset does not clear, so the agent opens a service ticket. |
+| `dispatch_response` | Try an inverter reset. If the battery still ignores dispatch, the agent opens a service ticket. |
 
-`action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`. When the maintenance manager posts a step, the note leads with the alarm past ±3σ and then this procedure.
+`action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`. The ticket note is the gathered readings and the escalation, not this sentence.
 
-Each code also has `steps`, the rows the maintenance manager posts when that chart's `alarm` is true. A warning does not post them. `frequency` has no steps.
+Each alarming code opens one `scheduled_service` ticket. A warning posts nothing. `frequency` posts nothing. The ticket is the assignment: `payload.stage`, `payload.estimate_min`, and `payload.escalation` are stored on the `unit_actions` row. The minutes are assumptions.
 
-| Code | `steps` |
-| --- | --- |
-| `disco_meter_delta` | `scheduled_service` |
-| `base_temp` | `set_signal` hold, then `scheduled_service` |
-| `disco_voltage` | `scheduled_service` |
-| `frequency` | none |
-| `soc_tracking` | `scheduled_service` |
-| `dispatch_response` | `set_signal` hold, then `scheduled_service` |
+| Code | First response | If the reset does not clear it |
+| --- | --- | --- |
+| `disco_meter_delta` | System reset, 2 minutes. Assumed to clear a glitch. | — |
+| `disco_voltage` | System reset, 2 minutes. Assumed to clear a glitch. | — |
+| `soc_tracking` | System reset, 2 minutes. | Agent ticket, 20 minutes. |
+| `dispatch_response` | System reset, 2 minutes. | Agent ticket, 20 minutes. |
+| `base_temp` | Reset skipped. Heat does not clear by reboot. | Agent ticket, 30 minutes. |
+| `frequency` | none | none |
 
-`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the maintenance manager posts `steps`. `armed: false` clears it, and the home is healthy again. An armed chart replaces the measured value for that tick. For temperature, that triggered residual is the open hour's point, so the healthy samples already in the hour do not hide it. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
+The reset is a short outage: the base is `offline` until the estimate ends. A reset that clears disarms the chart and writes `return_online`. A reset that does not clear keeps the same row, sets `stage` to `ticket`, sets `actor` to `llm`, and extends `ends_at` by the service estimate. The agent note is gathered from that home: z, measured, state of charge, temperature, and load. `payload.escalation` lists each stage with its estimate and result.
+
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the maintenance manager opens the ticket for that code. `armed: false` clears it, and the home is healthy again. An armed chart replaces the measured value for that tick. For temperature, that triggered residual is the open hour's point, so the healthy samples already in the hour do not hide it. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
 
 ## Rules
 
@@ -95,10 +97,10 @@ Startup fills that window before the first tick. The values are simulated, then 
   "in_control": false,
   "alarm": true,
   "warning": true,
-  "action": "Post set_signal hold so the pack stops working, then scheduled_service for cooling or a stuck sensor."
+  "action": "Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings."
 }
 ```
 
 ## Triggered faults
 
-Every home starts healthy. The only fault is a chart you arm. The maintenance manager coordinates that home: it posts the `steps` for the code, the case shows in Maintenance manager, and the decisions log records the step. The fleet manager does not post a price call on that home while the response is open. Clearing the arm ends the fault. See [simulation.md](simulation.md).
+Every home starts healthy. The only fault is a chart you arm. The maintenance manager opens one ticket for that code. Maintenance manager shows the stage, the estimate, and the escalation on that row. The fleet manager does not post a price call on that home while the ticket is open. A reset that clears, or a finished service visit, ends the fault. See [simulation.md](simulation.md).

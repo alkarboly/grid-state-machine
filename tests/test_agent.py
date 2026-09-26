@@ -1,10 +1,10 @@
 import random
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from gridsim.fleet.actions import market_rate
-from gridsim.fleet.agent import audit, choose_unit_signal, day_shape, expected_kw, typical_kw
+from gridsim.fleet.agent import RESOLUTION, audit, choose_unit_signal, day_shape, expected_kw, typical_kw
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import build_sites, tick_sites
 
@@ -39,34 +39,65 @@ def _bare(alarms: set[str], warnings: set[str] | None = None) -> dict:
 
 
 class AgentTests(unittest.TestCase):
-    def test_every_code_has_the_registered_steps(self):
-        kinds = {spec["chart_id"]: tuple(step["kind"] for step in spec["steps"]) for spec in CHARTS}
-        self.assertEqual(kinds["disco_meter_delta"], ("scheduled_service",))
-        self.assertEqual(kinds["base_temp"], ("set_signal", "scheduled_service"))
-        self.assertEqual(kinds["disco_voltage"], ("scheduled_service",))
-        self.assertEqual(kinds["frequency"], ())
-        self.assertEqual(kinds["soc_tracking"], ("scheduled_service",))
-        self.assertEqual(kinds["dispatch_response"], ("set_signal", "scheduled_service"))
-        for spec in CHARTS:
-            for step in spec["steps"]:
-                if step["kind"] == "set_signal":
-                    self.assertEqual(step["signal"], "hold")
+    def test_resolution_depends_on_the_fault(self):
+        self.assertTrue(RESOLUTION["disco_voltage"]["clears"])
+        self.assertTrue(RESOLUTION["disco_meter_delta"]["clears"])
+        self.assertFalse(RESOLUTION["soc_tracking"]["clears"])
+        self.assertFalse(RESOLUTION["dispatch_response"]["clears"])
+        self.assertIsNone(RESOLUTION["base_temp"]["reset_min"])
+        self.assertNotIn("frequency", RESOLUTION)
 
-    def test_an_alarm_posts_each_step_once(self):
+    def test_an_alarm_opens_one_ticket(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
         site = _bare({"base_temp", "frequency", "disco_voltage"})
+        site["metrics"] = {"base": {"soc_pct": 40, "temp_c": 49.0}, "panel": {"load_kw": 1.2}}
         rows = audit([site], [], _grid(0.5), {}, now)
-        by_code = {}
-        for row in rows:
-            by_code.setdefault(row["payload"]["chart_id"], []).append(row["kind"])
-            self.assertEqual(row["actor"], "maintenance")
-            self.assertEqual(row["status"], "pending")
-        self.assertEqual(by_code["base_temp"], ["set_signal", "scheduled_service"])
-        self.assertEqual(by_code["disco_voltage"], ["scheduled_service"])
-        self.assertNotIn("frequency", by_code)
-        self.assertEqual(rows[0]["payload"]["signal"], "hold")
+        by_code = {row["payload"]["chart_id"]: row for row in rows}
+        self.assertEqual(set(by_code), {"base_temp", "disco_voltage"})
+        voltage = by_code["disco_voltage"]
+        self.assertEqual(voltage["kind"], "scheduled_service")
+        self.assertEqual(voltage["actor"], "maintenance")
+        self.assertEqual(voltage["payload"]["stage"], "reset")
+        self.assertEqual(voltage["payload"]["estimate_min"], 2)
+        thermal = by_code["base_temp"]
+        self.assertEqual(thermal["actor"], "llm")
+        self.assertEqual(thermal["payload"]["stage"], "ticket")
+        self.assertEqual(thermal["payload"]["estimate_min"], 30)
+        self.assertIn("temp 49.0", thermal["note"])
+        self.assertEqual(thermal["payload"]["escalation"][-1]["result"], "reset skipped")
         again = audit([site], rows, _grid(0.5), {}, now)
         self.assertEqual(again, [])
+
+    def test_a_reset_that_clears_closes_the_ticket(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare({"disco_voltage"})
+        site["armed"] = ["disco_voltage"]
+        rows = audit([site], [], _grid(0.5), {}, now)
+        later = now + timedelta(minutes=2)
+        closed = audit([site], rows, _grid(0.5), {}, later)
+        self.assertEqual(rows[0]["status"], "done")
+        self.assertEqual(rows[0]["payload"]["escalation"][0]["result"], "cleared")
+        self.assertEqual(site["armed"], [])
+        self.assertEqual(closed[0]["kind"], "return_online")
+
+    def test_a_failed_reset_escalates_the_same_ticket(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare({"soc_tracking"})
+        site["metrics"] = {"base": {"soc_pct": 55, "temp_c": 32.0}, "panel": {"load_kw": 0.8}}
+        rows = audit([site], [], _grid(0.5), {}, now)
+        ticket = rows[0]
+        later = now + timedelta(minutes=2)
+        extra = audit([site], rows, _grid(0.5), {}, later)
+        self.assertEqual(extra, [])
+        self.assertEqual(ticket["id"], rows[0]["id"])
+        self.assertEqual(ticket["actor"], "llm")
+        self.assertEqual(ticket["payload"]["stage"], "ticket")
+        self.assertEqual(ticket["payload"]["estimate_min"], 20)
+        self.assertEqual(
+            [item["result"] for item in ticket["payload"]["escalation"]],
+            ["did not clear", "reset 2m did not clear"],
+        )
+        self.assertIn("soc 55", ticket["note"])
 
     def test_a_warning_posts_nothing(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
@@ -167,8 +198,7 @@ class AgentTests(unittest.TestCase):
         site["agent_dispatch"] = True
         rows = audit([site], [], _grid(0.1), {}, now)
         self.assertEqual([row["kind"] for row in rows], ["scheduled_service"])
-        self.assertIn("±3σ", rows[0]["note"])
-        self.assertIn("Compare the disco", rows[0]["note"])
+        self.assertEqual(rows[0]["payload"]["stage"], "reset")
         self.assertEqual(rows[0]["payload"]["because"][0]["threshold"], "±3σ")
         self.assertNotIn("price", {row["payload"].get("reason") for row in rows})
 

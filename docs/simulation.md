@@ -28,7 +28,7 @@ These are modelled addresses. They are not customer locations.
 
 ### Faults
 
-Every home starts healthy. A home is faulted only while you arm a chart on it. The next tick reports that residual at +4 sigma, past the limits. The maintenance manager then coordinates the response: it posts the steps for that code, hold and a service visit, or a service visit alone, and the fleet manager stays off that home while the response is open. Clearing the arm ends the fault. Frequency is charted and left alone. The steps are in [control-charts.md](control-charts.md).
+Every home starts healthy. A home is faulted only while you arm a chart on it. The next tick reports that residual at +4 sigma, past the limits. The maintenance manager opens one ticket and tries a system reset when that fault allows it. If the reset is assumed not to clear the fault, the same ticket escalates and the agent writes the visit. The fleet manager stays off that home while the ticket is open. Frequency is charted and left alone. The estimates are in [control-charts.md](control-charts.md).
 
 ## Home load
 
@@ -117,7 +117,7 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 
 After the charts for a tick are written, the maintenance manager appends `unit_actions` with `actor` `maintenance`. The following tick applies those rows. This is separate from `LLM_URL`, which stays outside the tick.
 
-An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. The note starts with the alarm past ±3σ, then the procedure for that code. `payload.because` is `{line, threshold}` with threshold `±3σ`. A code response outranks the fleet manager: while one is open, that home is not given a price signal.
+An alarming chart opens one `scheduled_service` ticket, tracked on `unit_actions`. A warning does not. `frequency` posts nothing. `payload.chart_id` is the code. `payload.stage` is `reset` or `ticket`. `payload.estimate_min` is the assumption for this stage, and `ends_at` is that clock time. `payload.escalation` is the list of stages already taken, each `{stage, estimate_min, result}`. `payload.gathered` is what the agent read: z, measured, expected, state of charge, temperature, and load. A reset uses `actor` `maintenance`. The escalated visit uses `actor` `llm`. The note is those gathered fields plus whether the reset was skipped or did not clear. A code response outranks the fleet manager: while one is open, that home is not given a price signal.
 
 ### Fleet manager
 

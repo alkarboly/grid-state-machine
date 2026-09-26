@@ -16,7 +16,7 @@ ERCOT dashboard JSON
     → raw_records (SQLite)
     → normalized grid snapshot, constraints, prices
     → fleet tick (one battery at a time: load, dispatch, sensor noise, control charts)
-    → maintenance manager posts alarm steps, then the fleet manager posts a price call, and both append unit_actions
+    → maintenance manager opens or escalates a ticket, then the fleet manager posts a price call, and both append unit_actions
     → metric_logs, observations, control_points, dispatch_ticks (SQLite)
     → when configured, Supabase receives the dispatch row, the market row,
       unit_latest, closed usage hours, and action status

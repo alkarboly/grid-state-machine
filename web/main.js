@@ -608,7 +608,9 @@ function row(label, text) {
 
 function actionTitle(action) {
   const payload = action.payload || {};
-  if (action.kind === "scheduled_service") return "scheduled service";
+  if (action.kind === "scheduled_service") {
+    return payload.stage === "reset" ? "system reset" : "scheduled service";
+  }
   if (action.kind === "return_online") return "back online";
   if (action.kind === "set_signal") return `set ${payload.signal || "signal"}`;
   if (action.kind === "install_addon") return `install ${payload.addon_id || "add-on"}`;
@@ -756,12 +758,20 @@ function caseCard(entry, opts = {}) {
     : "";
   const pill = status ? `<span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>` : "";
   if (opts.select && opts.site !== false) {
-    const chart = escapeHtml((entry.payload || {}).chart_id || "");
+    const payload = entry.payload || {};
+    const chart = escapeHtml(payload.chart_id || "");
+    const estimate = payload.estimate_min ? ` · est ${payload.estimate_min}m` : "";
     const clock = timer ? ` · ${timer}` : "";
+    const whoLine = named ? escapeHtml(named) : "";
+    const trail = (payload.escalation || [])
+      .map((item) => `${item.stage} ${item.estimate_min}m ${item.result}`)
+      .join(" · ");
+    const foot = [whoLine, trail].filter(Boolean).join(" · ");
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
       ${pill || `<span class="status">case</span>`}
       <span class="alert-id">${escapeHtml(entry.site)}</span>
-      <em>${escapeHtml(entry.title)}${clock}</em>
+      <em>${escapeHtml(entry.title)}${estimate}${clock}</em>
+      ${foot ? `<span class="escalation">${foot}</span>` : ""}
     </button>`;
   }
   const site = opts.site === false
@@ -771,9 +781,13 @@ function caseCard(entry, opts = {}) {
   const bits = [site, whoHtml, timer].filter(Boolean);
   const meta = bits.join(`<span> · </span>`);
   const hit = opts.site === false ? "" : ` data-site="${escapeHtml(entry.site)}"`;
+  const trail = ((entry.payload || {}).escalation || [])
+    .map((item) => `<p class="escalation">${escapeHtml(`${item.stage} ${item.estimate_min}m ${item.result}`)}</p>`)
+    .join("");
   return `<article class="case status-${escapeHtml(status)}"${hit}>
       <div class="case-head"><b class="case-action">${escapeHtml(entry.title)}</b>${pill}</div>
       ${meta ? `<p class="case-meta">${meta}</p>` : ""}
+      ${trail}
     </article>`;
 }
 
@@ -912,11 +926,11 @@ const METRIC_ROWS = {
 };
 
 const RESOLVE = {
-  disco_meter_delta: "Compare the disco to the billing meter. If they still disagree, post scheduled service. Past ±3σ the agent posts that and the cabinet stays offline until the window ends.",
-  disco_voltage: "Post scheduled service and check the connection at the disconnect. The agent posts it once the chart is past ±3σ.",
+  disco_meter_delta: "Past ±3σ maintenance tries a 2 minute system reset. That reboot is assumed to clear a meter glitch, and the ticket closes.",
+  disco_voltage: "Past ±3σ maintenance tries a 2 minute system reset. That reboot is assumed to clear a voltage glitch, and the ticket closes.",
   frequency: "Leave the cabinet. Frequency is the grid, not this battery. The chart is marked and nothing is posted.",
-  base_temp: "Past ±3σ the agent holds the pack, then posts scheduled service.",
-  soc_tracking: "Past ±3σ the agent posts scheduled service. The reported charge has left the coulomb count.",
+  base_temp: "Heat does not clear by reboot. The agent opens a 30 minute service ticket from the cabinet readings.",
+  soc_tracking: "Past ±3σ maintenance tries a 2 minute reset. That does not clear a charge offset, so the agent opens a 20 minute service ticket.",
 };
 
 const DIA = { w: 360, h: 460, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };

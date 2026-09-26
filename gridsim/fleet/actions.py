@@ -207,8 +207,15 @@ def apply_actions(sites: list[dict], actions: list[dict], now: datetime) -> list
             action["status"] = "pending"
             continue
         if kind == "scheduled_service":
-            if now >= end:
+            stage = payload.get("stage")
+            # A reset stays open past its estimate. The maintenance manager
+            # either clears it or escalates the same row into a field ticket.
+            if now >= end and stage != "reset":
                 action["status"] = "done"
+                chart_id = payload.get("chart_id")
+                armed = site.get("armed") or []
+                if stage == "ticket" and chart_id in armed:
+                    site["armed"] = [item for item in armed if item != chart_id]
                 created.append(
                     {
                         "id": uuid.uuid4().hex,

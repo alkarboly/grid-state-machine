@@ -2,7 +2,7 @@
 
 A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
-Two managers do sit in the tick. After the charts are written, the maintenance manager appends alarm steps with `actor` `maintenance`, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). `LLM_URL` is still optional. A remote model is a third writer, `actor` `llm`, and it is not either manager.
+Two managers do sit in the tick. After the charts are written, the maintenance manager opens or escalates a ticket, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). When a reset does not clear the fault, the in-tick agent writes the visit with `actor` `llm`. If `OPENAI_API_KEY` is set, that note is two sentences from `OPENAI_MODEL` (default `gpt-4o-mini`) using the gathered readings. A missing key or a failed call keeps the gathered sentence. That call does not use `LLM_URL`. `LLM_URL` is still optional. A remote model remains a third writer and is not either manager.
 
 The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
 
@@ -44,7 +44,7 @@ Insert into `unit_actions` with a new hex `id`. `POST /api/actions` assigns the 
 
 | kind | payload | What the next tick does |
 | --- | --- | --- |
-| `scheduled_service` | `{}` | Base goes `offline` and returns in 1–2 hours. The bot writes `return_online`. |
+| `scheduled_service` | `{}`, or `{chart_id, stage, estimate_min, escalation, gathered}` | Base goes `offline` until `ends_at`. A missing end is 1–2 hours. A `reset` stage stays open so the maintenance manager can clear it or escalate the same row. A finished `ticket` disarms that chart. The bot writes `return_online`. |
 | `set_signal` | `{"signal": "hold", "intensity": 0}` | That home's call changes until `ends_at`. Default window is one hour. `signal` is `push`, `pull`, or `hold`. |
 | `install_addon` | `{"addon_id": "solar"}` | Disco starts metering `solar` or `ev_charger`. |
 | `remove_addon` | `{"addon_id": "solar"}` | Disco stops metering it. |

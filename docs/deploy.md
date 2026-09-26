@@ -2,7 +2,7 @@
 
 One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table a controller reads and writes. The browser talks only to that service. The service-role key stays in the service environment.
 
-Do not paste the service-role key, the ERCOT password, or the subscription key into chat. Set them in the Render dashboard.
+Do not paste the service-role key, the OpenAI key, the ERCOT password, or the subscription key into chat. Set them in the Render dashboard.
 
 ## 1. Supabase
 
@@ -32,6 +32,7 @@ Copy the project URL and the service-role key into the bot's environment only. R
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_ROLE_KEY`
   - `LLM_URL` if a model endpoint is ready. Leave it empty until then.
+  - `OPENAI_API_KEY` and `OPENAI_MODEL` if an escalated ticket should ask OpenAI for the note. `OPENAI_MODEL` defaults to `gpt-4o-mini`. Leave the key empty until then. Do not paste the key into chat.
   - `ERCOT_USERNAME`, `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY` if you want official prices. The public dashboard works without them.
 
 Leave `SERVE_STATIC` unset. The default serves `web/` from this same process, and `API_BASE` in `web/config.js` stays empty so the page calls its own origin. Set `SERVE_STATIC=0` and `WEB_ORIGIN` only if a different origin must host the map.

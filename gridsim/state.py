@@ -201,6 +201,22 @@ def _latest(site: dict, ts: str) -> dict:
     }
 
 
+def _action_stamp(action: dict) -> tuple:
+    """What a stored ticket must rewrite when the maintenance state machine moves."""
+    payload = action.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    steps = payload.get("escalation") or []
+    return (
+        action.get("status"),
+        action.get("ends_at"),
+        action.get("note") or "",
+        action.get("actor"),
+        payload.get("stage"),
+        tuple((item.get("stage"), item.get("result")) for item in steps if isinstance(item, dict)),
+    )
+
+
 def _snapshot(grid: dict, fleet: dict, applied: dict, frequency_hz: float) -> dict:
     """One row per tick. This is the object a controller reads."""
     return {
@@ -495,7 +511,7 @@ class Fleet:
                 for site in self.sites:
                     site["addons"] = list(remote_addons.get(site["id"], []))
             before_addons = {site["id"]: tuple(site.get("addons") or []) for site in self.sites}
-            before_status = {action["id"]: action.get("status") for action in self.actions}
+            before_stamp = {action["id"]: _action_stamp(action) for action in self.actions}
             created = apply_actions(self.sites, self.actions, now)
             self.actions.extend(created)
             self._trim_actions()
@@ -538,7 +554,7 @@ class Fleet:
             publish_ids = {site["id"] for site in publish}
             usage_rows = [item for item in note.get("usage") or [] if item["site_id"] in publish_ids]
             dirty_actions = [
-                action for action in self.actions if before_status.get(action["id"]) != action.get("status")
+                action for action in self.actions if before_stamp.get(action["id"]) != _action_stamp(action)
             ]
             addon_sites = [
                 site for site in sites if tuple(site.get("addons") or []) != before_addons.get(site["id"], ())

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gridsim</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">gridsim</div>
+    <div class="stats" id="stats"></div>
+  </header>
+  <main>
+    <canvas id="map"></canvas>
+    <aside id="panel">
+      <p class="muted">Loading the fleet…</p>
+    </aside>
+  </main>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

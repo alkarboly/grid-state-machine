@@ -1,0 +1,38 @@
+[
+  {
+    "id": "austin",
+    "prefix": "aus",
+    "name": "Austin",
+    "lat": 30.2672,
+    "lon": -97.7431,
+    "count": 12,
+    "load_zone": "LZ_AEN"
+  },
+  {
+    "id": "houston",
+    "prefix": "hou",
+    "name": "Houston",
+    "lat": 29.7604,
+    "lon": -95.3698,
+    "count": 10,
+    "load_zone": "LZ_HOUSTON"
+  },
+  {
+    "id": "dallas",
+    "prefix": "dal",
+    "name": "Dallas",
+    "lat": 32.7767,
+    "lon": -96.797,
+    "count": 8,
+    "load_zone": "LZ_NORTH"
+  },
+  {
+    "id": "san-antonio",
+    "prefix": "sat",
+    "name": "San Antonio",
+    "lat": 29.4241,
+    "lon": -98.4936,
+    "count": 6,
+    "load_zone": "LZ_CPS"
+  }
+]

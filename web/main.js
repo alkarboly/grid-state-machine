@@ -1460,14 +1460,6 @@ const METRIC_ROWS = {
   ],
 };
 
-const RESOLVE = {
-  disco_meter_delta: "Past ±3σ maintenance tries a 15 second system reset. That reboot is assumed to clear a meter glitch, and the ticket closes.",
-  disco_voltage: "Past ±3σ maintenance tries a 15 second system reset. That reboot is assumed to clear a voltage glitch, and the ticket closes.",
-  frequency: "Leave the cabinet. Frequency is the grid, not this battery. The chart is marked and nothing is posted.",
-  base_temp: "Heat does not clear by reboot. The agent opens a 30 minute service ticket from the cabinet readings.",
-  soc_tracking: "Past ±3σ maintenance tries a 15 second reset. That does not clear a charge offset, so the agent opens a 20 minute service ticket.",
-};
-
 const DIA = { w: 360, h: 460, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };
 const ROWS = { grid: 56, disco: 210, base: 360 };
 const CX = DIA.bx + DIA.bw / 2;
@@ -1626,17 +1618,102 @@ function patchDiagram(holder, view) {
   if (fill) fill.setAttribute("width", ((DIA.bw - 32) * view.soc).toFixed(1));
 }
 
-function armButton(site, chartId, label) {
-  const on = (site.armed || []).includes(chartId);
-  return `<button type="button" class="arm${on ? " on" : ""}" data-arm="${chartId}" data-on="${on ? "1" : "0"}">${on ? "clear" : "trigger"} ${label}</button>`;
+function chartHot(site, chartId) {
+  const chart = (site.charts || []).find((item) => item.chart_id === chartId);
+  return Boolean(chart && chart.in_control === false);
 }
 
-function resolveNote(site, chartId) {
-  const text = RESOLVE[chartId];
-  if (!text) return "";
-  const chart = (site.charts || []).find((item) => item.chart_id === chartId);
-  const hot = chart && chart.in_control === false ? " flag" : "";
-  return `<p class="note resolve${hot}">${text}</p>`;
+function actRow(title, text, control, hot) {
+  return `<div class="act${hot ? " hot" : ""}">
+    <div>
+      <b>${title}</b>
+      <span>${text}</span>
+    </div>
+    ${control}
+  </div>`;
+}
+
+function armControl(site, chartId) {
+  const on = (site.armed || []).includes(chartId);
+  return `<button type="button" class="act-btn${on ? " on" : ""}" data-arm="${chartId}" data-on="${on ? "1" : "0"}">${on ? "Clear" : "Flag"}</button>`;
+}
+
+function signalChoice(site) {
+  const forced = site.snapshot && site.snapshot.signal_override && site.snapshot.signal_override.signal;
+  const one = (signal, label) => {
+    const on = forced === signal ? ` on ${signal}` : "";
+    return `<button type="button" class="act-btn${on}" data-signal="${signal}">${label}</button>`;
+  };
+  return `<div class="act-choice">${one("push", "Push")}${one("pull", "Pull")}${one("hold", "Hold")}</div>`;
+}
+
+function simControls(site) {
+  const gridOff = (site.snapshot && site.snapshot.grid) === "off";
+  const rows = [];
+  if (component === "grid") {
+    const forced = site.snapshot && site.snapshot.signal_override && site.snapshot.signal_override.signal;
+    const market = payload && payload.market;
+    const shape = payload && payload.shape;
+    const basis = market && market.rate_basis === "ercot" ? "live" : "simulated";
+    const day = shape && shape.shape ? ` · ${shape.shape}` : "";
+    const context = market
+      ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
+      : "";
+    rows.push(actRow(
+      "This home",
+      forced
+        ? `Forced to ${forced} for one hour. It outranks the fleet call.`
+        : "Force push, pull, or hold for one hour. It outranks the fleet call.",
+      signalChoice(site),
+    ));
+    rows.push(actRow(
+      "Contactor",
+      "Open it and this home stops importing and exporting. The battery covers the house.",
+      `<button type="button" class="act-btn${gridOff ? " hot" : ""}" data-grid="${gridOff ? "1" : "0"}">${gridOff ? "Turn on" : "Turn off"}</button>`,
+      gridOff,
+    ));
+    rows.push(actRow(
+      "Meter agreement",
+      "Compare the disco with the billing meter. A disagreement opens service.",
+      armControl(site, "disco_meter_delta"),
+      chartHot(site, "disco_meter_delta"),
+    ));
+    return `<div class="acts"><p class="unit-chain-cap">actions</p>${rows.join("")}</div>${context}${decisionFooter(site)}`;
+  }
+  if (component === "disco") {
+    rows.push(actRow(
+      "Voltage",
+      "Past limits, maintenance tries a 15 second reset.",
+      armControl(site, "disco_voltage"),
+      chartHot(site, "disco_voltage"),
+    ));
+    rows.push(actRow(
+      "Frequency",
+      "Left on the cabinet. The chart is marked and nothing is posted.",
+      armControl(site, "frequency"),
+      chartHot(site, "frequency"),
+    ));
+    return `<div class="acts"><p class="unit-chain-cap">actions</p>${rows.join("")}</div>${decisionFooter(site)}`;
+  }
+  if (component === "panel") return decisionFooter(site);
+  rows.push(actRow(
+    "State of charge",
+    "A reset does not clear a charge offset, so service opens.",
+    armControl(site, "soc_tracking"),
+    chartHot(site, "soc_tracking"),
+  ));
+  rows.push(actRow(
+    "Temperature",
+    "Heat does not clear by reboot, so service opens.",
+    armControl(site, "base_temp"),
+    chartHot(site, "base_temp"),
+  ));
+  rows.push(actRow(
+    "Service",
+    "Open a maintenance visit on this cabinet.",
+    `<button type="button" class="act-btn" data-ticket="1">Open ticket</button>`,
+  ));
+  return `<div class="acts"><p class="unit-chain-cap">actions</p>${rows.join("")}</div>${decisionFooter(site)}`;
 }
 
 const BOX_CHARTS = {
@@ -1676,47 +1753,6 @@ function decisionFooter(site) {
   });
   if (!entries.length) return "";
   return `<div class="cases">${entries.map((entry) => caseCard(entry, { site: false })).join("")}</div>`;
-}
-
-function simControls(site) {
-  const gridOff = (site.snapshot && site.snapshot.grid) === "off";
-  if (component === "grid") {
-    const market = payload && payload.market;
-    const shape = payload && payload.shape;
-    const basis = market && market.rate_basis === "ercot" ? "live" : "simulated";
-    const day = shape && shape.shape ? ` · ${shape.shape}` : "";
-    const context = market
-      ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
-      : "";
-    return `<div class="arms">
-        <button type="button" class="arm${gridOff ? " hot" : ""}" data-grid="${gridOff ? "1" : "0"}">${gridOff ? "grid on" : "turn off the grid"}</button>
-        ${armButton(site, "disco_meter_delta", "meter agreement")}
-        <button type="button" class="arm" data-signal="push">push</button>
-        <button type="button" class="arm" data-signal="pull">pull</button>
-        <button type="button" class="arm" data-signal="hold">hold</button>
-      </div>
-      ${resolveNote(site, "disco_meter_delta")}
-      ${context}
-      ${decisionFooter(site)}`;
-  }
-  if (component === "disco") {
-    return `<div class="arms">
-        ${armButton(site, "disco_voltage", "voltage")}
-        ${armButton(site, "frequency", "frequency")}
-      </div>
-      ${resolveNote(site, "disco_voltage")}
-      ${resolveNote(site, "frequency")}
-      ${decisionFooter(site)}`;
-  }
-  if (component === "panel") return decisionFooter(site);
-  return `<div class="arms">
-      ${armButton(site, "soc_tracking", "state of charge")}
-      ${armButton(site, "base_temp", "temperature")}
-      <button type="button" class="arm" data-ticket="1">maintenance ticket</button>
-    </div>
-    ${resolveNote(site, "soc_tracking")}
-    ${resolveNote(site, "base_temp")}
-    ${decisionFooter(site)}`;
 }
 
 async function postSim(node) {

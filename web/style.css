@@ -880,23 +880,42 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
   text-align: left;
   cursor: pointer;
 }
-.arms {
+.acts { margin: 2px 0 8px; }
+.act {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
 }
-.arm {
-  padding: 3px 8px;
-  border: 1px solid var(--line);
-  background: transparent;
+.act b { display: block; font-size: 13px; font-weight: 550; }
+.act span {
+  display: block;
+  margin-top: 2px;
+  max-width: 38em;
   color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.act.hot span { color: var(--alarm); }
+.act-choice { display: flex; flex: none; gap: 6px; }
+.act-btn {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  background: #181a20;
+  color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
-.arm.on { color: var(--ink); border-color: var(--watch); }
-.arm.hot { color: var(--alarm); border-color: var(--alarm); }
+.act-btn:hover { border-color: #5d584e; }
+.act-btn.on { color: var(--watch); border-color: var(--watch); }
+.act-btn.hot { color: var(--alarm); border-color: var(--alarm); }
+.act-btn.on.push { color: var(--push); border-color: var(--push); }
+.act-btn.on.pull { color: var(--pull); border-color: var(--pull); }
+.act-btn.on.hold { color: var(--hold); border-color: var(--hold); }
 .metric-link.hot span, .metric-link.hot b { color: var(--alarm); }
 .note.resolve { margin: 0 0 10px; line-height: 1.45; }
 .note.resolve.flag { color: var(--alarm); }

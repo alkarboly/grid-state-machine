@@ -692,11 +692,20 @@ function caseDesk(action) {
   return "fleet";
 }
 
-function agentCases(data, desk) {
+function homesInView(data) {
+  const sites = data.sites || [];
+  if (modal.open && selected) return sites.filter((site) => site.id === selected);
+  if (focusedStation) return sites.filter((site) => site.station === focusedStation);
+  if (focusedMetro) return sites.filter((site) => site.metro === focusedMetro);
+  return sites;
+}
+
+function agentCases(data, desk, ids) {
   const open = (status) => status === "pending" || status === "active";
   return latestSteps(
     (data.actions || [])
       .filter((action) => CASE_ACTORS.has(action.actor) && caseDesk(action) === desk)
+      .filter((action) => !ids || ids.has(action.site_id))
       .map(actionEntry),
   ).sort((a, b) => {
     const rank = Number(open(b.status)) - Number(open(a.status));
@@ -756,11 +765,11 @@ function caseCard(entry, opts = {}) {
     </article>`;
 }
 
-function agentBlock(data, desk) {
-  const entries = agentCases(data, desk);
+function agentBlock(data, desk, ids) {
+  const entries = agentCases(data, desk, ids);
   const empty = desk === "fleet"
     ? "No fleet calls. A home set to dispatch, or a posted push, pull, or hold, opens one."
-    : "No maintenance cases. An alarming code or a service ticket opens one.";
+    : "No maintenance cases in this view.";
   const rows = entries.length
     ? entries.map((entry) => caseCard(entry, { desk })).join("")
     : `<p class="muted">${empty}</p>`;
@@ -820,11 +829,13 @@ function usageBlock(site) {
 }
 
 function renderPanel(data) {
-  const sites = data.sites || [];
-  if (!sites.length) {
+  const fleetSites = data.sites || [];
+  if (!fleetSites.length) {
     panelBody.innerHTML = `<p class="muted">No batteries in this snapshot.</p>`;
     return;
   }
+  const sites = homesInView(data);
+  const ids = sites === fleetSites ? null : new Set(sites.map((site) => site.id));
   const queue = [];
   for (const site of sites) {
     if (site.alarm) queue.push(site);
@@ -841,15 +852,15 @@ function renderPanel(data) {
           </button>`,
         )
         .join("")
-    : `<p class="muted">No maintenance alerts.</p>`;
+    : `<p class="muted">No maintenance alerts in this view.</p>`;
 
-  const openCount = (desk) => agentCases(data, desk).filter((entry) => entry.status === "pending" || entry.status === "active").length;
+  const openCount = (desk, scope) => agentCases(data, desk, scope).filter((entry) => entry.status === "pending" || entry.status === "active").length;
   const fleetOpen = openCount("fleet");
-  const careOpen = openCount("maintenance");
+  const careOpen = openCount("maintenance", ids);
   panelBody.innerHTML = `
     ${fold("now", "Now", nowBlock(data))}
     ${fold("fleet", `Fleet manager${fleetOpen ? `<span class="count">${fmt(fleetOpen)}</span>` : ""}`, agentBlock(data, "fleet"))}
-    ${fold("maintenance", `Maintenance manager${careOpen ? `<span class="count">${fmt(careOpen)}</span>` : ""}`, agentBlock(data, "maintenance"))}
+    ${fold("maintenance", `Maintenance manager${careOpen ? `<span class="count">${fmt(careOpen)}</span>` : ""}`, agentBlock(data, "maintenance", ids))}
     ${fold(
       "attention",
       `Maintenance alerts${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
@@ -1262,7 +1273,10 @@ async function openUnit(id, block = null) {
   if (!modal.open) modal.showModal();
   if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
   renderUnit();
-  if (payload) renderScene(payload);
+  if (payload) {
+    renderScene(payload);
+    renderPanel(payload);
+  }
 }
 
 modal.addEventListener("toggle", (event) => {
@@ -1271,6 +1285,7 @@ modal.addEventListener("toggle", (event) => {
 
 modal.addEventListener("close", () => {
   history.replaceState(null, "", location.pathname);
+  if (payload) renderPanel(payload);
 });
 
 panelToggle.addEventListener("click", () => {
@@ -1434,7 +1449,10 @@ function focusMetro(metro) {
     focusPoint = { x: point.x, z: point.z, distance: 1.7, pose: "city" };
     placeHash(`#metro/${metro.id}`);
   }
-  if (payload) renderScene(payload);
+  if (payload) {
+    renderScene(payload);
+    renderPanel(payload);
+  }
 }
 
 function stepBack() {
@@ -1508,7 +1526,10 @@ function focusStation(station) {
     distance: frameDistance(stageRadius),
     pose: "station",
   };
-  if (payload) renderScene(payload);
+  if (payload) {
+    renderScene(payload);
+    renderPanel(payload);
+  }
   placeHash(`#station/${station.id}`);
 }
 
@@ -1615,6 +1636,79 @@ function resize() {
   }
 }
 
+const decisionBox = document.getElementById("decision-log");
+const seenDecisions = new Set();
+let decisionRows = [];
+const DECISION_KEEP = 12;
+
+function decisionTone(text) {
+  const parts = String(text).split(/\s+/);
+  const word = parts[0] === "set" ? parts[1] : parts[0];
+  if (word === "push" || word === "pull" || word === "hold") return word;
+  if (text.includes("scheduled service") || text.includes("back online")) return "alarm";
+  return "";
+}
+
+function paintDecisions() {
+  if (!decisionRows.length) {
+    decisionBox.innerHTML = `<p class="decision">Waiting for a decision.</p>`;
+    return;
+  }
+  const stick = decisionBox.scrollHeight - decisionBox.scrollTop - decisionBox.clientHeight < 28;
+  decisionBox.innerHTML = decisionRows.map((row) => {
+    const tone = decisionTone(row.text);
+    const site = row.site
+      ? `<button type="button" data-site="${escapeHtml(row.site)}">${escapeHtml(row.site)}</button>`
+      : "";
+    const body = tone
+      ? `<b class="${tone}">${escapeHtml(row.text)}</b>`
+      : `<b>${escapeHtml(row.text)}</b>`;
+    return `<p class="decision" title="${escapeHtml(row.text)}"><span>${escapeHtml(row.time)}</span> ${escapeHtml(row.who)} ${site} ${body}</p>`;
+  }).join("");
+  if (stick) decisionBox.scrollTop = decisionBox.scrollHeight;
+}
+
+function ingestDecisions(data) {
+  const incoming = [];
+  for (const call of data.calls || []) {
+    const why = (call.because || []).map((item) => item.line).filter(Boolean).join(" · ");
+    const text = why ? `${call.signal || "hold"} · ${why}` : (call.signal || "hold");
+    incoming.push({
+      key: `call:${call.ts}:${call.who}:${call.signal}:${why}`,
+      ts: call.ts || "",
+      time: (call.ts || "").slice(11, 19),
+      who: call.who || "rules",
+      site: "",
+      text,
+    });
+  }
+  for (const action of data.actions || []) {
+    if (!CASE_ACTORS.has(action.actor)) continue;
+    const why = (((action.payload || {}).because || []).map((item) => item.line).filter(Boolean))[0] || "";
+    const title = decisionLabel(action);
+    incoming.push({
+      key: `act:${action.id || `${action.site_id}:${action.ts}:${action.kind}`}`,
+      ts: action.ts || "",
+      time: (action.ts || "").slice(11, 19),
+      who: WHO[action.actor] || action.actor || "",
+      site: action.site_id || "",
+      text: why && !title.includes(why) ? `${title} · ${why}` : title,
+    });
+  }
+  incoming.sort((a, b) => a.ts.localeCompare(b.ts) || a.key.localeCompare(b.key));
+  const novel = incoming.filter((row) => !seenDecisions.has(row.key));
+  for (const row of incoming) seenDecisions.add(row.key);
+  if (!decisionRows.length) decisionRows = incoming.slice(-DECISION_KEEP);
+  else if (novel.length) decisionRows = decisionRows.concat(novel).slice(-DECISION_KEEP);
+  else return;
+  paintDecisions();
+}
+
+decisionBox.addEventListener("click", (event) => {
+  const unit = event.target.closest("[data-site]");
+  if (unit) openUnit(unit.dataset.site);
+});
+
 async function poll() {
   try {
     const response = await fetch(api("/api/scene"));
@@ -1623,6 +1717,7 @@ async function poll() {
     renderStats(payload);
     renderDay(payload);
     renderPanel(payload);
+    ingestDecisions(payload);
     if (modal.open && selected) {
       unitDetail = (await loadUnit(selected)) || unitDetail;
       renderUnit();

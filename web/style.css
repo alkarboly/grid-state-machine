@@ -175,6 +175,54 @@ main {
   color: var(--muted);
 }
 
+#decisions {
+  position: absolute;
+  z-index: 3;
+  right: 414px;
+  bottom: 16px;
+  width: min(300px, 38vw);
+  max-height: 168px;
+  padding: 8px 10px;
+  background: rgba(16, 17, 20, 0.9);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+main.collapsed #decisions { right: 54px; }
+
+#decision-log {
+  overflow: auto;
+  max-height: 132px;
+}
+
+.decision {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.decision b { color: var(--ink); font-weight: 500; }
+.decision .push { color: var(--push); }
+.decision .pull { color: var(--pull); }
+.decision .hold { color: var(--hold); }
+.decision .alarm { color: var(--alarm); }
+
+.decision button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
 .key.alarm i { background: var(--alarm); }
 
 main.collapsed { grid-template-columns: 1fr 40px; }
@@ -756,6 +804,8 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-template-rows: 1fr 320px; }
   main.collapsed { grid-template-columns: 1fr; grid-template-rows: 1fr 40px; }
+  #decisions, main.collapsed #decisions { right: 14px; bottom: 336px; }
+  main.collapsed #decisions { bottom: 56px; }
   main.collapsed #panel-toggle { writing-mode: horizontal-tb; height: auto; }
   aside { border-left: 0; border-top: 1px solid var(--line); }
   .roster { grid-template-columns: 1fr 1fr 1fr; }

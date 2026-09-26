@@ -213,7 +213,7 @@ h2 {
 .stack { margin-top: 22px; }
 .ledger { margin-top: 12px; }
 .ledger h3 { margin-top: 8px; }
-.stack h3, .constraints h3 {
+.stack h3 {
   margin: 16px 0 6px;
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -230,10 +230,21 @@ h2 {
 }
 .stack p b { color: var(--ink); font-weight: 450; }
 
-.constraints { margin-top: 26px; }
-.constraints ul { margin: 0; padding-left: 16px; }
-.constraints li { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
-.constraints p { font-size: 12px; margin: 0; }
+.fold { margin-top: 20px; }
+.fold summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 550;
+  list-style: none;
+}
+.fold summary::-webkit-details-marker { display: none; }
+.fold summary::before { content: "▸ "; }
+.fold[open] summary::before { content: "▾ "; }
+.fold summary .flag { color: var(--alarm); margin-left: 8px; letter-spacing: 0; text-transform: none; }
+.fold .roster, .fold .note { margin-top: 8px; }
 
 /* fleet roster */
 

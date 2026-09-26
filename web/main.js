@@ -19,7 +19,6 @@ const COLOR = {
   constraint: 0xc4b59a,
 };
 
-const FAMILIES = ["all", "measurement", "thermal", "electrical", "energy", "response"];
 const NODE_Y = 0.02;
 const UNIT_CAP = 20000;
 const LABEL_SHARE = 0.03;
@@ -59,7 +58,7 @@ controls.target.set(0, 0, 0.4);
 let payload = null;
 let selected = null;
 let unitDetail = null;
-let family = "all";
+let actionsOpen = false;
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
@@ -246,11 +245,6 @@ function modeOf(item) {
   return item.alarm ? "alarm" : item.state || "hold";
 }
 
-function focused(site) {
-  if (family === "all") return true;
-  return (site.families || []).includes(family);
-}
-
 function viewDistance() {
   return camera.position.distanceTo(controls.target);
 }
@@ -271,7 +265,7 @@ function renderUnits(data) {
     const point = project(site.lat, site.lon, NODE_Y);
     positions.setXYZ(drawn, point.x, point.y, point.z);
     TINT.setHex(COLOR[modeOf(site)]);
-    if (!focused(site) || (focusedStation && site.station !== focusedStation)) TINT.lerp(LAND, 0.9);
+    if (focusedStation && site.station !== focusedStation) TINT.lerp(LAND, 0.9);
     colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
     drawn += 1;
     if (site.id === selected) {
@@ -444,11 +438,12 @@ function actionBlock(data) {
         )
         .join("")
     : `<p class="muted">No actions yet. A scheduled service takes that base offline and brings it back in one to two hours.</p>`;
-  return `<div class="group">
-    <h3>Actions</h3>
+  const count = actions.length ? `<span class="flag">${fmt(actions.length)}</span>` : "";
+  return `<details class="fold" data-fold="actions"${actionsOpen ? " open" : ""}>
+    <summary>Actions${count}</summary>
     <div class="roster">${rows}</div>
     <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>
-  </div>`;
+  </details>`;
 }
 
 function usageBlock(site) {
@@ -471,18 +466,14 @@ function renderPanel(data) {
     return;
   }
   const fleet = data.fleet || {};
-  const chips = FAMILIES.map(
-    (name) => `<button type="button" data-family="${name}" class="${name === family ? "on" : ""}">${name}</button>`,
-  ).join("");
 
-  const flaggedByMetro = new Map();
+  const flaggedByStation = new Map();
   const queue = [];
   for (const site of sites) {
     if (!site.alarm) continue;
-    flaggedByMetro.set(site.metro, (flaggedByMetro.get(site.metro) || 0) + 1);
-    if (focused(site)) queue.push(site);
+    flaggedByStation.set(site.station, (flaggedByStation.get(site.station) || 0) + 1);
+    queue.push(site);
   }
-  const metroName = new Map((data.metros || []).map((metro) => [metro.id, metro.name]));
 
   const queueHtml = queue.length
     ? queue
@@ -495,26 +486,17 @@ function renderPanel(data) {
         .join("")
     : `<p class="muted">Every chart in this view is inside its limits.</p>`;
 
-  const metroHtml = (data.metros || [])
-    .map((metro) => {
-      const bad = flaggedByMetro.get(metro.id) || 0;
-      return `<button type="button" class="metro-row" data-metro="${metro.id}">
-        <span>${metro.name}</span>
-        <em>${fmt(metro.units)}</em>
+  const areaHtml = [...(data.stations || [])]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((station) => {
+      const bad = flaggedByStation.get(station.id) || 0;
+      return `<button type="button" class="metro-row" data-station="${station.id}">
+        <span>${station.name}</span>
+        <em>${fmt(station.units)}</em>
         <b class="${bad ? "flag" : "muted"}">${bad || "—"}</b>
       </button>`;
     })
     .join("");
-
-  const constraints = (data.constraints || []).slice(0, 4);
-  const constraintHtml = constraints.length
-    ? `<ul>${constraints
-        .map(
-          (item) =>
-            `<li>${item.constraint_name || "constraint"} · ${item.from_station || "?"} → ${item.to_station || "?"} · ${fmt(item.shadow_price, 1)} $/MW</li>`,
-        )
-        .join("")}</ul>`
-    : `<p class="muted">Arcs between stations appear once the ERCOT key is set and both station codes are in station_geo.json.</p>`;
 
   const gridNet = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
   panelBody.innerHTML = `
@@ -545,7 +527,6 @@ function renderPanel(data) {
       ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
     </div>
     <p class="muted note">Grid in − out is ${mw(gridNet)}. That is load + chargers − solar + solar into batteries + charge − discharge.</p>
-    <div class="chips">${chips}</div>
     ${marketBlock(data)}
     ${actionBlock(data)}
     <div class="group">
@@ -564,15 +545,11 @@ function renderPanel(data) {
       ${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}
     </div>
     <div class="group">
-      <h3>Metros<span>units · flagged</span></h3>
+      <h3>Service areas<span>units · flagged</span></h3>
       <div class="metros">
-        <button type="button" class="metro-row" data-metro="all"><span>Whole state</span><em>${fmt(fleet.units)}</em><b class="muted">—</b></button>
-        ${metroHtml}
+        <button type="button" class="metro-row" data-station="all"><span>Whole state</span><em>${fmt(fleet.units)}</em><b class="muted">—</b></button>
+        ${areaHtml}
       </div>
-    </div>
-    <div class="constraints">
-      <h3>Binding constraints</h3>
-      ${constraintHtml}
     </div>
   `;
 }
@@ -948,29 +925,26 @@ panelToggle.addEventListener("click", () => {
   panelToggle.textContent = panelOpen ? "hide" : "fleet";
 });
 
+panel.addEventListener("toggle", (event) => {
+  if (event.target.dataset.fold === "actions") actionsOpen = event.target.open;
+}, true);
+
 panel.addEventListener("click", (event) => {
-  if (!payload || event.target.closest("#panel-toggle")) return;
-  const chip = event.target.closest("[data-family]");
-  if (chip) {
-    family = chip.dataset.family;
-    renderScene(payload);
-    renderPanel(payload);
-    return;
-  }
+  if (!payload || event.target.closest("#panel-toggle") || event.target.closest("summary")) return;
   const unit = event.target.closest("[data-site]");
   if (unit) {
     openUnit(unit.dataset.site);
     return;
   }
-  const metroHit = event.target.closest("[data-metro]");
-  if (metroHit) {
-    const id = metroHit.dataset.metro;
+  const areaHit = event.target.closest("[data-station]");
+  if (areaHit) {
+    const id = areaHit.dataset.station;
     if (id === "all") {
       focusMetro(null);
       return;
     }
-    const metro = (payload.metros || []).find((item) => item.id === id);
-    if (metro) focusMetro(metro);
+    const station = (payload.stations || []).find((item) => item.id === id);
+    if (station) focusStation(station);
   }
 });
 

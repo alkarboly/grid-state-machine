@@ -2,7 +2,7 @@
 
 Handoff for the next session. Names and shapes stay in the other pages. This page says what already runs, what is only on this machine, and the slice to build next.
 
-`main` is at `8d85012`, “Add fleet ledger and map back button.” Do not commit `.env` or `data/gridsim.db`.
+`main` is at `b4cf64d`, “Add chart code key and actions.” Do not commit `.env` or `data/gridsim.db`.
 
 ## Built and on `main`
 
@@ -20,7 +20,7 @@ Feeder lines from homes to substations are gone. The pale ring marks the selecte
 
 ## In the working tree
 
-The panel carries a code key. `chart_id` is the code. Each code has an action in [control-charts.md](control-charts.md). The attention queue prints the code on the flagged unit, and an alarming chart in the unit view repeats the action.
+The panel no longer offers the maintenance-family chips or a binding-constraints list. Actions start collapsed. The old metro list is the service-area list: one row per modeled distribution substation, and a click flies to that substation.
 
 ## Not standing yet
 

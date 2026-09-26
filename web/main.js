@@ -322,11 +322,21 @@ function flowState(item, preferAction = false, forcedSignal = null) {
   return item.state || signal || "hold";
 }
 
+function gridOff(item) {
+  return Boolean(item) && (item.grid === "off" || item.snapshot?.grid === "off");
+}
+
+function gridStamp(sites) {
+  let stamp = "";
+  for (const site of sites || []) if (site.grid === "off") stamp += `${site.id},`;
+  return stamp;
+}
+
 function modeOf(item, preferAction = false, forcedSignal = null) {
   if (!item) return "hold";
-  // A flagged chart stays red even while service has the base offline, or it
-  // vanishes into the gray hold column.
-  if (item.alarm) return "alarm";
+  // A flagged chart, or an open contactor, stays red even while service has
+  // the base offline, or it vanishes into the gray hold column.
+  if (item.alarm || gridOff(item)) return "alarm";
   const availability = item.metrics?.base?.availability;
   if (item.offline || availability === "offline") return "offline";
   return flowState(item, preferAction, forcedSignal);
@@ -409,7 +419,8 @@ function packBlock(indices, base, side, shape, targetX, targetZ) {
 
 function sortLane(indices, sites) {
   indices.sort((a, b) => {
-    const flagged = Number(Boolean(sites[b].alarm)) - Number(Boolean(sites[a].alarm));
+    const marked = (site) => Boolean(site.alarm) || site.grid === "off";
+    const flagged = Number(marked(sites[b])) - Number(marked(sites[a]));
     if (flagged) return flagged;
     return sites[a].id.localeCompare(sites[b].id);
   });
@@ -423,7 +434,7 @@ function stackYard(data) {
   }
   const { bySite: overrides, stamp: overrideStamp } = signalOverrides(data);
   const stamp = (data.fleet || {}).ts || "";
-  const signature = `${focusedMetro}|${stamp}|${data.sites.length}|${overrideStamp}`;
+  const signature = `${focusedMetro}|${stamp}|${data.sites.length}|${overrideStamp}|${gridStamp(data.sites)}`;
   if (signature === metroStackSig && metroStack) return metroStack;
   const stations = (data.stations || [])
     .filter((station) => station.metro === focusedMetro)
@@ -513,7 +524,7 @@ function areaYard(data) {
   const { bySite: overrides, stamp: overrideStamp } = signalOverrides(data);
   const stamp = (data.fleet || {}).ts || "";
   const aspect = Math.max(camera.aspect, 0.5);
-  const signature = `${focusedStation}|${stamp}|${data.sites.length}|${overrideStamp}|${aspect.toFixed(2)}`;
+  const signature = `${focusedStation}|${stamp}|${data.sites.length}|${overrideStamp}|${aspect.toFixed(2)}|${gridStamp(data.sites)}`;
   if (signature === areaStackSig && areaStack) return areaStack;
   const station = (data.stations || []).find((item) => item.id === focusedStation);
   if (!station) {
@@ -896,8 +907,12 @@ function renderStats(data) {
   const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
   const feedDown = ercot.dashboard && ercot.dashboard !== "live";
   const feed = feedDown ? `<span>feed <b>${ercot.dashboard}</b></span>` : "";
-  const flagged = fleet.alarms
-    ? `<span class="flagged">flagged <b>${fmt(fleet.alarms)}</b></span>`
+  const flaggedN = (data.sites || []).reduce(
+    (count, site) => count + (site.alarm || site.grid === "off" ? 1 : 0),
+    0,
+  );
+  const flagged = flaggedN
+    ? `<span class="flagged">flagged <b>${fmt(flaggedN)}</b></span>`
     : `<span>flagged <b>0</b></span>`;
   document.getElementById("stats").innerHTML = `
     <span>${flow} <b>${fmt(mw, 2)} MW</b></span>
@@ -1836,13 +1851,14 @@ function renderUnit() {
   const linked = new Set(rows.map((item) => item[3]).filter(Boolean));
   const charts = (site.charts || []).filter((chart) => linked.has(chart.chart_id) && expanded.has(chart.chart_id));
   const mode = modeOf(site);
+  const modeLabel = gridOff(site) ? "grid off" : mode;
 
   document.getElementById("unit-id").textContent = site.id;
   document.getElementById("unit-sub").textContent =
     `${site.city} · ${site.station_name || site.station || site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`
     + (site.instrumented ? " · full-rate telemetry" : "");
   document.getElementById("unit-mode").className = `mode ${mode}`;
-  document.getElementById("unit-mode").innerHTML = `<i></i>${mode}`;
+  document.getElementById("unit-mode").innerHTML = `<i></i>${modeLabel}`;
 
   const view = readUnit(site);
   const holder = document.getElementById("unit-diagram");
@@ -2214,7 +2230,8 @@ canvas.addEventListener("pointermove", (event) => {
   } else {
     const site = hit.site;
     const station = (payload.stations || []).find((item) => item.id === site.station);
-    tip.innerHTML = `<b>${site.id}</b> ${modeOf(site)} · ${fmt(site.soc_pct, 0)}%${
+    const word = gridOff(site) ? "grid off" : modeOf(site);
+    tip.innerHTML = `<b>${site.id}</b> ${word} · ${fmt(site.soc_pct, 0)}%${
       station ? `<br>supplies ${station.name}` : ""
     }${site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""}`;
   }
@@ -2467,7 +2484,7 @@ function renderStage(data) {
     stageCard.classList.add("in");
   }
   const stamp = (data.fleet || {}).ts || "";
-  const signature = `${view.key}|${stamp}`;
+  const signature = `${view.key}|${stamp}|${gridStamp(view.sites)}`;
   if (signature === stageSignature) return;
   stageSignature = signature;
 
@@ -2478,7 +2495,7 @@ function renderStage(data) {
   let holding = 0;
   let flagged = 0;
   for (const site of view.sites) {
-    if (site.alarm) flagged += 1;
+    if (site.alarm || site.grid === "off") flagged += 1;
     if (site.state === "push") pushing += 1;
     else if (site.state === "pull") pulling += 1;
     else holding += 1;

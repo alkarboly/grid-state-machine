@@ -60,15 +60,13 @@ Hit testing projects the drawn positions to screen space once per camera move an
 
 Clicking a node on the map or a row in the exception queue opens one unit.
 
-The unit view is a one-line diagram of the chain in [contracts.md](contracts.md): grid, meter, disco, panel, base. The connectors carry the measured flow, so the arrow direction is import or export and the dash speed and line weight follow the kilowatts. The panel branch leaves the disco sideways because house load is the one leg that never reverses.
+The unit view is a one-line diagram: grid, disco, panel, base. The meter is not its own box. Its reading is the grid box, and `disco_meter_delta` opens from that box. The data contract in [contracts.md](contracts.md) still records `meter` separately. The connectors carry the measured flow, so the arrow direction is import or export and the dash speed and line weight follow the kilowatts. The panel branch leaves the disco sideways because house load is the one leg that never reverses.
 
-Every box is a control. Clicking one shows that component's metrics and only the control charts that name it, which is why `component` is part of the chart contract. A box carries a red mark when one of its charts is out of limits and an amber one when a chart is only in warning, so the fault is visible on the hardware before anything is clicked.
+Every box is a control. Clicking one shows that box's metrics. A box carries a red mark when one of its charts is out of limits and an amber one when a chart is only in warning, so the fault is visible on the hardware before anything is clicked.
 
-Metrics that a chart watches are themselves clickable and open that chart. Clicking a chart header expands it to the measured value, the expected operating point, sigma, and the limits.
+A metric that a chart watches opens that one chart. The chart draws the center line and the 1σ, 2σ, and 3σ lines. Other charts on the unit stay closed.
 
-Under the charts, **elsewhere on this unit** lists the charts that hang off the other blocks with their component, status, and current value. Clicking one switches blocks and opens that chart. The grid and the panel carry no charts of their own, so without it those two blocks would be a dead end.
-
-The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet. Append a block, as in `/#hou-0002/disco`, to open on that block.
+The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet. Append a block, as in `/#hou-0002/disco`, to open on that block. `/#hou-0002/meter` opens Grid.
 
 ## Persistence
 

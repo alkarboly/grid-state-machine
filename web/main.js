@@ -457,20 +457,35 @@ function renderStats(data) {
 
 function chartSvg(chart) {
   const series = chart.series?.length ? chart.series : [chart.value];
-  const span = Math.max(chart.ucl || 1, ...series.map((value) => Math.abs(value))) * 1.1;
+  const sigma = Math.abs(chart.sigma) || Math.abs(chart.ucl) / 3 || 1;
+  const span = sigma * 3.4;
   const width = 360;
-  const height = 64;
-  const xAt = (index) => (series.length === 1 ? width / 2 : (index / (series.length - 1)) * width);
-  const yAt = (value) => height / 2 - (value / span) * (height / 2 - 3);
+  const height = 96;
+  const plot = width - 34;
+  const xAt = (index) => (series.length === 1 ? plot / 2 : (index / (series.length - 1)) * plot);
+  const yAt = (value) => {
+    const clamped = Math.max(-span, Math.min(span, value));
+    return height / 2 - (clamped / span) * (height / 2 - 8);
+  };
   const stroke = chart.in_control ? (chart.warning ? "#d8b46a" : "#cfc6ba") : "#e15b4c";
-  const band = Math.abs(yAt((chart.ucl / 3) * 2) - yAt(0));
   const poly = series.map((value, index) => `${xAt(index).toFixed(1)},${yAt(value).toFixed(1)}`).join(" ");
   const last = series[series.length - 1];
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img">
-    <rect x="0" y="${(yAt(0) - band).toFixed(1)}" width="${width}" height="${(band * 2).toFixed(1)}" fill="#1b1d21" />
-    <line x1="0" x2="${width}" y1="${yAt(chart.ucl).toFixed(1)}" y2="${yAt(chart.ucl).toFixed(1)}" stroke="#4d5159" stroke-dasharray="4 4" />
-    <line x1="0" x2="${width}" y1="${yAt(chart.lcl).toFixed(1)}" y2="${yAt(chart.lcl).toFixed(1)}" stroke="#4d5159" stroke-dasharray="4 4" />
-    <line x1="0" x2="${width}" y1="${yAt(0).toFixed(1)}" y2="${yAt(0).toFixed(1)}" stroke="#6d675c" />
+  const guide = (value, label, color, dash) => {
+    const y = yAt(value).toFixed(1);
+    const pattern = dash ? ` stroke-dasharray="${dash}"` : "";
+    const name = label
+      ? `<text x="${width - 2}" y="${y}" text-anchor="end" dominant-baseline="middle" fill="${color}" font-size="9">${label}</text>`
+      : "";
+    return `<line x1="0" x2="${plot}" y1="${y}" y2="${y}" stroke="${color}"${pattern} />${name}`;
+  };
+  return `<svg viewBox="0 0 ${width} ${height}" role="img">
+    ${guide(sigma, "1σ", "#4a4e57", "")}
+    ${guide(-sigma, "", "#4a4e57", "")}
+    ${guide(sigma * 2, "2σ", "#5c616b", "3 3")}
+    ${guide(-sigma * 2, "", "#5c616b", "3 3")}
+    ${guide(sigma * 3, "3σ", "#7a6258", "5 4")}
+    ${guide(-sigma * 3, "", "#7a6258", "5 4")}
+    <line x1="0" x2="${plot}" y1="${yAt(0).toFixed(1)}" y2="${yAt(0).toFixed(1)}" stroke="#6d675c" />
     <polyline points="${poly}" fill="none" stroke="${stroke}" stroke-width="1.6" />
     <circle cx="${xAt(series.length - 1).toFixed(1)}" cy="${yAt(last).toFixed(1)}" r="2.6" fill="${stroke}" />
   </svg>`;
@@ -619,61 +634,35 @@ function renderPanel(data) {
 /* ---------- unit modal ---------- */
 
 const COMPONENTS = [
-  { id: "grid", name: "Grid", role: "Utility interchange at the site, plus the ERCOT context that drove dispatch." },
-  { id: "meter", name: "Meter", role: "Service meter. Billing-grade measurement of the flow the disco also sees." },
-  { id: "disco", name: "Disco", role: "Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise." },
+  { id: "grid", name: "Grid", role: "Service entrance. The meter reading and the utility call live on this box." },
+  { id: "disco", name: "Disco", role: "Raspberry Pi at the disconnect." },
   { id: "panel", name: "Electrical panel", role: "House load downstream of the battery interconnect." },
-  { id: "base", name: "Base", role: "Battery cabinet. Charge and discharge are what the battery did. The commanded pair is what dispatch asked for." },
+  { id: "base", name: "Base", role: "Battery cabinet." },
 ];
 
-// Rows are [label, formatter, chart_id]. A row with a chart is clickable.
+// Rows are [label, metrics object, formatter, chart_id]. A row with a chart opens that chart.
 const METRIC_ROWS = {
   grid: [
-    ["in", (m) => `${fmt(m.in_kw, 2)} kW`],
-    ["out", (m) => `${fmt(m.out_kw, 2)} kW`],
-    ["signal", (m) => m.signal || "—"],
-    ["LMP", (m) => (m.lmp_usd_mwh == null ? "—" : `${fmt(m.lmp_usd_mwh, 2)} $/MWh`)],
-    ["ERCOT demand", (m) => `${fmt(m.demand_mw)} MW`],
-    ["demand percentile", (m) => `${fmt((m.demand_percentile ?? 0) * 100, 0)}%`],
-    ["storage on the grid", (m) => `${fmt(m.storage_gen_mw)} MW`],
-    ["snapshot", (m) => (m.grid_as_of ? m.grid_as_of.slice(11, 19) : "—")],
-  ],
-  meter: [
-    ["in", (m) => `${fmt(m.in_kw, 2)} kW`, "disco_meter_delta"],
-    ["out", (m) => `${fmt(m.out_kw, 2)} kW`, "disco_meter_delta"],
-    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`],
-    ["energy imported", (m) => `${fmt(m.energy_in_kwh, 2)} kWh`],
-    ["energy exported", (m) => `${fmt(m.energy_out_kwh, 2)} kWh`],
+    ["in", "meter", (m) => `${fmt(m.in_kw, 2)} kW`, "disco_meter_delta"],
+    ["out", "meter", (m) => `${fmt(m.out_kw, 2)} kW`, "disco_meter_delta"],
   ],
   disco: [
-    ["in", (m) => `${fmt(m.in_kw, 2)} kW`],
-    ["out", (m) => `${fmt(m.out_kw, 2)} kW`],
-    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`, "disco_voltage"],
-    ["frequency", (m) => `${fmt(m.frequency_hz, 3)} Hz`, "frequency"],
-    ["contactor", (m) => m.contactor || "—"],
-    ["islanded", (m) => (m.islanded ? "yes" : "no")],
-    ["add-ons", (m) => (m.addons || []).map((item) => `${item.addon_id} ${fmt(item.kw, 2)} kW`).join(", ") || "none"],
+    ["voltage", "disco", (m) => `${fmt(m.voltage_v, 1)} V`, "disco_voltage"],
+    ["frequency", "disco", (m) => `${fmt(m.frequency_hz, 3)} Hz`, "frequency"],
   ],
   panel: [
-    ["load", (m) => `${fmt(m.load_kw, 2)} kW`],
-    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`],
+    ["load", "panel", (m) => `${fmt(m.load_kw, 2)} kW`],
   ],
   base: [
-    ["state of charge", (m) => `${fmt(m.soc_pct, 1)}%`, "soc_tracking"],
-    ["energy stored", (m) => `${fmt(m.soc_kwh, 2)} of ${fmt(m.capacity_kwh, 1)} kWh`, "soc_tracking"],
-    ["availability", (m) => m.availability || "online"],
-    ["power limit", (m) => `${fmt(m.power_limit_kw, 1)} kW`],
-    ["solar into battery", (m) => `${fmt(m.solar_charge_kw, 2)} kW`],
-    ["charge", (m) => `${fmt(m.charge_kw, 2)} kW`, "dispatch_response"],
-    ["commanded charge", (m) => `${fmt(m.commanded_charge_kw, 2)} kW`, "dispatch_response"],
-    ["discharge", (m) => `${fmt(m.discharge_kw, 2)} kW`, "dispatch_response"],
-    ["commanded discharge", (m) => `${fmt(m.commanded_discharge_kw, 2)} kW`, "dispatch_response"],
-    ["temperature", (m) => `${fmt(m.temp_c, 1)} °C`, "base_temp"],
+    ["state of charge", "base", (m) => `${fmt(m.soc_pct, 1)}%`, "soc_tracking"],
+    ["temperature", "base", (m) => `${fmt(m.temp_c, 1)} °C`, "base_temp"],
+    ["charge", "base", (m) => `${fmt(m.charge_kw, 2)} kW`, "dispatch_response"],
+    ["discharge", "base", (m) => `${fmt(m.discharge_kw, 2)} kW`, "dispatch_response"],
   ],
 };
 
-const DIA = { w: 360, h: 540, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };
-const ROWS = { grid: 44, meter: 176, disco: 308, base: 440 };
+const DIA = { w: 360, h: 460, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };
+const ROWS = { grid: 56, disco: 210, base: 360 };
 const CX = DIA.bx + DIA.bw / 2;
 
 const modal = document.getElementById("unit");
@@ -760,25 +749,19 @@ function readUnit(site) {
     mode: modeOf(site),
     soc: Math.min(1, Math.max(0, (base.soc_pct ?? 0) / 100)),
     notes: {
-      grid:
-        grid.lmp_usd_mwh == null
-          ? `${grid.signal || "hold"} · LMP pending`
-          : `${grid.signal || "hold"} · ${fmt(grid.lmp_usd_mwh, 2)} $/MWh`,
-      meter: `${fmt(meter.voltage_v, 1)} V`,
+      grid: `${grid.signal || "hold"} · ${fmt(meter.in_kw, 2)} kW in`,
       disco: `${fmt(disco.frequency_hz, 3)} Hz · ${disco.contactor || "closed"}`,
       panel: `${fmt(house.load_kw, 2)} kW`,
       base: `${fmt(base.soc_pct, 1)}% · ${fmt(base.temp_c, 1)} °C`,
     },
     blocks: {
-      grid: stateOf("grid"),
-      meter: stateOf("meter"),
+      grid: stateOf("meter") || stateOf("grid"),
       disco: stateOf("disco"),
       panel: stateOf("panel"),
       base: stateOf("base"),
     },
     flows: {
-      grid: flowOf(grid.in_kw, grid.out_kw),
-      meter: flowOf(meter.in_kw, meter.out_kw),
+      grid: flowOf(meter.in_kw, meter.out_kw),
       base: flowOf(base.charge_kw, base.discharge_kw),
       panel: { dir: 1, kw: house.load_kw || 0, tone: "hold" },
     },
@@ -797,10 +780,7 @@ function diagram(site, view) {
     <line class="rail dotted" x1="${CX}" y1="18" x2="${CX}" y2="${ROWS.grid}" />
 
     ${block("grid", ROWS.grid, "Grid", view.notes.grid, { state: view.blocks.grid })}
-    ${vFlow("grid", ROWS.grid + DIA.bh, ROWS.meter, view.flows.grid)}
-
-    ${block("meter", ROWS.meter, "Meter", view.notes.meter, { state: view.blocks.meter })}
-    ${vFlow("meter", ROWS.meter + DIA.bh, ROWS.disco, view.flows.meter)}
+    ${vFlow("grid", ROWS.grid + DIA.bh, ROWS.disco, view.flows.grid)}
 
     ${block("disco", ROWS.disco, "Disco", view.notes.disco, { state: view.blocks.disco })}
     ${hFlow(ROWS.disco + DIA.bh / 2, DIA.bx + DIA.bw, DIA.px, view.flows.panel.kw)}
@@ -840,59 +820,21 @@ function patchDiagram(holder, view) {
 
 function metricRow(label, text, chartId) {
   if (!chartId) return row(label, text);
-  return `<button type="button" class="metric-link" data-chart="${chartId}" data-scroll="1">
+  const on = expanded.has(chartId) ? " on" : "";
+  return `<button type="button" class="metric-link${on}" data-chart="${chartId}" data-scroll="1">
     <span>${label}</span><b>${text}</b>
   </button>`;
 }
 
 function chartCard(chart) {
-  const open = expanded.has(chart.chart_id);
   const status = chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ");
   const tone = chart.alarm ? "flag" : chart.warning ? "watch" : "muted";
-  const detail = open
-    ? `<div class="chart-facts">
-        ${row("measured", `${fmt(chart.measured, 3)} ${chart.unit}`)}
-        ${row("expected", `${fmt(chart.expected, 3)} ${chart.unit}`)}
-        ${row("residual", `${fmt(chart.value, 3)} ${chart.unit}`)}
-        ${row("sigma", fmt(chart.sigma, 3))}
-        ${row("limits", `${fmt(chart.lcl, 3)} to ${fmt(chart.ucl, 3)}`)}
-        ${row("code", chart.chart_id)}
-        ${row("family", chart.family)}
-      </div>`
-    : "";
   const resolution = chart.alarm && chart.action ? `<p class="action">${chart.action}</p>` : "";
-  return `<div class="chart${open ? " open" : ""}" id="chart-${chart.chart_id}">
-    <button type="button" class="chart-head" data-chart="${chart.chart_id}">
-      <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
-    </button>
+  return `<div class="chart open" id="chart-${chart.chart_id}">
+    <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
     ${chartSvg(chart)}
-    <p class="${tone}">${chart.chart_id} · ${status} · z ${fmt(chart.z, 1)}</p>
+    <p class="${tone}">${status}</p>
     ${resolution}
-    ${detail}
-  </div>`;
-}
-
-// The charts hanging off the other blocks, so a sparse tab still tells you
-// where the rest of the unit is and gets you there in one click.
-function elsewhere(site) {
-  const rest = (site.charts || []).filter((chart) => chart.component !== component);
-  if (!rest.length) return "";
-  const rows = rest
-    .map((chart) => {
-      const tone = chart.alarm ? "flag" : chart.warning ? "watch" : "muted";
-      const status = chart.alarm ? "alarm" : chart.warning ? "watch" : "in control";
-      const name = (COMPONENTS.find((item) => item.id === chart.component) || {}).name || chart.component;
-      return `<button type="button" class="else-row" data-component="${chart.component}" data-chart="${chart.chart_id}">
-        <span>${chart.title}</span>
-        <em>${name}</em>
-        <i class="${tone}">${status}</i>
-        <b>${fmt(chart.value, 2)} ${chart.unit}</b>
-      </button>`;
-    })
-    .join("");
-  return `<div class="dt-else">
-    <div class="dt-cap">elsewhere on this unit</div>
-    ${rows}
   </div>`;
 }
 
@@ -900,8 +842,9 @@ function renderUnit() {
   const site = unitDetail;
   if (!modal.open || !site) return;
   const spec = COMPONENTS.find((item) => item.id === component) || COMPONENTS[0];
-  const metrics = (site.metrics || {})[component] || {};
-  const charts = (site.charts || []).filter((chart) => chart.component === component);
+  const rows = METRIC_ROWS[component] || [];
+  const linked = new Set(rows.map((item) => item[3]).filter(Boolean));
+  const charts = (site.charts || []).filter((chart) => linked.has(chart.chart_id) && expanded.has(chart.chart_id));
   const mode = modeOf(site);
 
   document.getElementById("unit-id").textContent = site.id;
@@ -924,8 +867,7 @@ function renderUnit() {
   const tabs = COMPONENTS.map(
     (item) => `<button type="button" data-component="${item.id}" class="${item.id === component ? "on" : ""}">${item.name}</button>`,
   ).join("");
-  const rows = METRIC_ROWS[component];
-  const split = rows.length > 4;
+  const metrics = site.metrics || {};
 
   const detail = document.getElementById("unit-detail");
   const scrolled = detail.scrollTop;
@@ -933,19 +875,10 @@ function renderUnit() {
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>
-    <div class="stack${split ? " split" : ""}"${split ? ` style="--rows:${Math.ceil(rows.length / 2)}"` : ""}>${rows
-      .map(([label, format, chartId]) => metricRow(label, format(metrics), chartId))
+    <div class="stack">${rows
+      .map(([label, source, format, chartId]) => metricRow(label, format(metrics[source] || {}), chartId))
       .join("")}</div>
-    <div class="dt-charts">
-      <div class="dt-cap">control charts${charts.length ? "" : " — none on this component"}</div>
-      ${charts.length
-        ? charts.map(chartCard).join("")
-        : `<div class="dt-empty">
-            <p>Nothing is charted here.</p>
-            <p class="muted">The ${spec.name.toLowerCase()} is a pass-through in this model. Charts hang off the meter, the disco, and the base.</p>
-          </div>`}
-    </div>
-    ${elsewhere(site)}
+    ${charts.length ? `<div class="dt-charts">${charts.map(chartCard).join("")}</div>` : ""}
     ${usageBlock(site)}
   `;
   detail.scrollTop = scrolled;
@@ -968,7 +901,9 @@ async function openUnit(id, block = null) {
   unitDetail = detail;
   const flagged = (detail.charts || []).find((chart) => chart.alarm) || (detail.charts || []).find((chart) => chart.warning);
   const known = COMPONENTS.some((item) => item.id === block);
-  component = known ? block : flagged ? flagged.component : "base";
+  const fromChart = flagged ? flagged.component : "base";
+  component = known ? block : fromChart;
+  if (component === "meter") component = "grid";
   expanded = new Set(flagged ? [flagged.chart_id] : []);
   if (!modal.open) modal.showModal();
   if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
@@ -1027,10 +962,9 @@ modal.addEventListener("click", (event) => {
     const id = chartHit.dataset.chart;
     // A jump from another component has to switch tabs before it can scroll.
     const jump = blockHit && blockHit.dataset.component !== component;
-    if (jump) component = blockHit.dataset.component;
-    if (jump || chartHit.dataset.scroll) expanded.add(id);
-    else if (expanded.has(id)) expanded.delete(id);
-    else expanded.add(id);
+    if (jump) component = blockHit.dataset.component === "meter" ? "grid" : blockHit.dataset.component;
+    if (expanded.has(id) && !chartHit.dataset.scroll) expanded = new Set();
+    else expanded = new Set([id]);
     renderUnit();
     if (jump || chartHit.dataset.scroll) {
       document.getElementById(`chart-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });

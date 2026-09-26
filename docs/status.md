@@ -20,7 +20,7 @@ Feeder lines from homes to substations are gone. The pale ring marks the selecte
 
 ## In the working tree
 
-Nothing uncommitted. The side panel starts collapsed, and its sections start collapsed.
+The unit view is grid, disco, panel, and base. A metric opens its chart, which draws the 1σ, 2σ, and 3σ lines. The elsewhere list is gone.
 
 ## Not standing yet
 

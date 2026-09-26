@@ -6,7 +6,7 @@ Each battery keeps six individuals charts. The charted number is the residual `m
 
 ## Families
 
-Every chart also names the `component` it belongs to, so a chart is always attached to a box in the one-line diagram rather than floating next to the unit.
+Every chart also names the `component` it belongs to. In the unit view the meter is drawn as part of the grid box, so `disco_meter_delta` opens from Grid. The chart itself draws the center line and the ±1σ, ±2σ, and ±3σ lines. Limits in the table stay `±3 * sigma`.
 
 | `chart_id` | `component` | `family` | What it catches | `sigma` |
 | --- | --- | --- | --- | --- |

@@ -754,13 +754,22 @@ function caseCard(entry, opts = {}) {
   const timer = clock
     ? `<time class="timer" data-start="${escapeHtml(entry.starts_at)}" data-ends="${escapeHtml(entry.ends_at)}">${clock}</time>`
     : "";
+  const pill = status ? `<span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>` : "";
+  if (opts.select && opts.site !== false) {
+    const chart = escapeHtml((entry.payload || {}).chart_id || "");
+    const clock = timer ? ` · ${timer}` : "";
+    return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
+      ${pill || `<span class="status">case</span>`}
+      <span class="alert-id">${escapeHtml(entry.site)}</span>
+      <em>${escapeHtml(entry.title)}${clock}</em>
+    </button>`;
+  }
   const site = opts.site === false
     ? ""
     : `<button type="button" class="case-site" data-site="${escapeHtml(entry.site)}">${escapeHtml(entry.site)}</button>`;
   const whoHtml = who ? `<span>${escapeHtml(who)}</span>` : "";
   const bits = [site, whoHtml, timer].filter(Boolean);
   const meta = bits.join(`<span> · </span>`);
-  const pill = status ? `<span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>` : "";
   const hit = opts.site === false ? "" : ` data-site="${escapeHtml(entry.site)}"`;
   return `<article class="case status-${escapeHtml(status)}"${hit}>
       <div class="case-head"><b class="case-action">${escapeHtml(entry.title)}</b>${pill}</div>
@@ -774,7 +783,7 @@ function agentBlock(data, desk, ids) {
     ? "No fleet calls. A home set to dispatch, or a posted push, pull, or hold, opens one."
     : "No maintenance cases in this view.";
   const rows = entries.length
-    ? entries.map((entry) => caseCard(entry, { desk })).join("")
+    ? entries.map((entry) => caseCard(entry, { desk, select: desk === "maintenance" })).join("")
     : `<p class="muted">${empty}</p>`;
   return `<div class="cases">${rows}</div>`;
 }
@@ -825,7 +834,7 @@ function usageBlock(site) {
     .slice(-8)
     .map(
       (row) =>
-        `<p><span>hour ${row.hour}</span><b>${fmt(row.load_kwh, 2)} kWh load</b></p>`,
+        `<p><span>hour ${row.hour}</span><b>${fmt(row.load_kwh, 2)} kWh load${row.temp_c == null ? "" : ` · ${fmt(row.temp_c, 1)} °C`}</b></p>`,
     )
     .join("");
   return `<div class="stack"><h3>Recent usage</h3>${lines}</div>`;
@@ -1264,7 +1273,9 @@ async function openUnit(id, block = null) {
   const detail = await loadUnit(id);
   if (!detail) return;
   unitDetail = detail;
-  const flagged = (detail.charts || []).find((chart) => chart.in_control === false)
+  const named = (detail.charts || []).find((chart) => chart.chart_id === block);
+  const flagged = named
+    || (detail.charts || []).find((chart) => chart.in_control === false)
     || (detail.charts || []).find((chart) => chart.alarm)
     || (detail.charts || []).find((chart) => chart.warning);
   if (block === "meter") block = "grid";
@@ -1307,7 +1318,7 @@ panel.addEventListener("click", (event) => {
   if (!payload || event.target.closest("#panel-toggle") || event.target.closest("summary")) return;
   const unit = event.target.closest("[data-site]");
   if (unit) {
-    openUnit(unit.dataset.site);
+    openUnit(unit.dataset.site, unit.dataset.chart || null);
     return;
   }
   const areaHit = event.target.closest("[data-station]");

@@ -22,7 +22,7 @@ Newest row of `market_ticks`:
 
 `usage_hours` for those homes, newest hours first:
 
-- `load_kwh`, `import_kwh`, `export_kwh`, `solar_kwh`, `ev_kwh`
+- `load_kwh`, `import_kwh`, `export_kwh`, `solar_kwh`, `ev_kwh`, `temp_c`
 
 `site_addons` is the install set the disco is tracking. `addon_catalog` is `solar` (source, 5 kW) and `ev_charger` (load, 7.2 kW).
 

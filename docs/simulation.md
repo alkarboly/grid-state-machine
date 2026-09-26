@@ -38,7 +38,7 @@ The live target is `hour_kw` for the clock hour, times `0.85 + 0.30 * demand_per
 
 Each tick adds panel kilowatts times elapsed hours to an open bucket. When the clock hour changes, that bucket closes as one `usage_hours` row. `load_kwh` on that row is the panel, not grid import.
 
-Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own.
+Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own. Cabinet temperature samples in one clock hour, including the simulated history written at startup, are averaged. That mean is `usage_hours.temp_c` when the hour closes, and it is the `base_temp` point. The diagram still shows the latest tick. The buckets are [metrics.md](metrics.md).
 
 ## Interchange
 

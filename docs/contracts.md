@@ -71,7 +71,7 @@ These fields are the log state as well. A log row and the snapshot use the same 
 | `voltage_v` | Disco voltage. |
 | `voltage_state` | Lagged service voltage the next tick starts from. |
 | `frequency_hz` | Disco frequency. |
-| `temp_c` | Cabinet temperature. |
+| `temp_c` | Cabinet temperature this tick. The hour mean is `usage_hours.temp_c` and the `base_temp` chart. See [metrics.md](metrics.md). |
 | `temp_c_state` | Lagged temperature the next tick starts from. |
 | `energy_in_kwh` | Cumulative meter import. |
 | `energy_out_kwh` | Cumulative meter export. |

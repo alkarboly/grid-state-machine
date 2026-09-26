@@ -11,6 +11,7 @@ Create a project. In the SQL editor, run these files in order:
 1. `supabase/migrations/20260926043000_dispatch.sql`
 2. `supabase/migrations/20260926043100_llm_read.sql`
 3. `supabase/migrations/20260926043200_actions.sql`
+4. `supabase/migrations/20260926160000_usage_temp.sql`
 
 The eight tables those files create, and what a disco records into them, are [data-model.md](data-model.md).
 

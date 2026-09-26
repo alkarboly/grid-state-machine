@@ -41,6 +41,7 @@ create table if not exists usage_hours (
   export_kwh double precision not null,
   solar_kwh double precision not null,
   ev_kwh double precision not null,
+  temp_c double precision,
   primary key (ts, site_id)
 );
 

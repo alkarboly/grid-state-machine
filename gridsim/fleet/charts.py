@@ -11,8 +11,15 @@ CHART_STEP_SECONDS = 60
 CHART_POINTS = CHART_HOURS * 3600 // CHART_STEP_SECONDS
 
 
+def series_seconds(chart_id: str) -> int:
+    """How long one drawn point covers. Temperature is the hour mean. The others are one minute."""
+    if chart_id == "base_temp":
+        return 3600
+    return CHART_STEP_SECONDS
+
+
 def trace_values(samples) -> list:
-    """The live series. A missed minute is null."""
+    """The live series. A missed bucket is null."""
     if not samples:
         return []
     return [None if value != value else round(float(value), 4) for value in samples]

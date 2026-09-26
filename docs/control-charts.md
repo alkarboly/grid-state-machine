@@ -73,9 +73,9 @@ So:
 
 ## Point contract
 
-One row per battery per chart per tick. `value` is the residual. `series` is only on the live API, not in the table. It is the last 30 hours, one residual per minute, oldest first. The newest sample in that minute wins. A missed minute is null. `series_seconds` is 60. The unit view draws that whole window, with the newest point at the right. The run rules still see every tick; they do not use this minute trace.
+One row per battery per chart per tick. `value` is the residual. `series` is only on the live API, not in the table. It is the last 30 hours, oldest first. Five charts keep one residual per minute: the newest sample in that minute wins, a missed minute is null, and `series_seconds` is 60. `base_temp` keeps one residual per clock hour: the mean of every sample in that hour, including the simulated samples written at startup, a missed hour is null, and `series_seconds` is 3600. The unit view draws that whole window, with the newest point at the right. The run rules for the minute charts still see every tick. `base_temp` run rules see completed hour means, and the open hour is the point being judged. Which metric uses which bucket is [metrics.md](metrics.md).
 
-Startup fills that window before the first tick. The values are simulated. A faulted chart sits at that fault for the whole window, and a healthy chart is noise around zero. Later ticks replace the newest minute with the live residual.
+Startup fills that window before the first tick. The values are simulated, then bucketed the same way as live samples. A faulted chart sits at that fault for the whole window, and a healthy chart is noise around zero. Later ticks replace the newest minute, or the open temperature hour, with the live residual.
 
 ```json
 {

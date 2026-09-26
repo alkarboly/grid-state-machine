@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS usage_hours (
   export_kwh REAL NOT NULL,
   solar_kwh REAL NOT NULL,
   ev_kwh REAL NOT NULL,
+  temp_c REAL,
   PRIMARY KEY (ts, site_id)
 );
 CREATE TABLE IF NOT EXISTS unit_actions (
@@ -218,6 +219,7 @@ _ADDED_COLUMNS = (
     ("fleet_rollups", "ev_kw", "REAL NOT NULL DEFAULT 0"),
     ("fleet_rollups", "grid_in_kw", "REAL NOT NULL DEFAULT 0"),
     ("fleet_rollups", "grid_out_kw", "REAL NOT NULL DEFAULT 0"),
+    ("usage_hours", "temp_c", "REAL"),
 )
 
 _OBSERVATION_COLUMNS = (
@@ -433,13 +435,13 @@ def insert_usage(conn: sqlite3.Connection, rows: list[dict]) -> None:
     conn.executemany(
         """
         INSERT OR REPLACE INTO usage_hours (
-          ts, site_id, hour, load_kwh, import_kwh, export_kwh, solar_kwh, ev_kwh
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ts, site_id, hour, load_kwh, import_kwh, export_kwh, solar_kwh, ev_kwh, temp_c
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 row["ts"], row["site_id"], row["hour"], row["load_kwh"], row["import_kwh"],
-                row["export_kwh"], row["solar_kwh"], row["ev_kwh"],
+                row["export_kwh"], row["solar_kwh"], row["ev_kwh"], row.get("temp_c"),
             )
             for row in rows
         ],

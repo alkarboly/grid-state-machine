@@ -12,7 +12,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from gridsim import config
-from gridsim.fleet.charts import CHART_POINTS, CHART_STEP_SECONDS, CHARTS, HISTORY, evaluate
+from gridsim.fleet.charts import (
+    CHART_HOURS,
+    CHART_POINTS,
+    CHART_STEP_SECONDS,
+    CHARTS,
+    HISTORY,
+    evaluate,
+    series_seconds,
+)
 from gridsim.fleet.actions import addon_power
 from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order
 from gridsim.timeutil import CENTRAL, iso
@@ -453,27 +461,57 @@ def _split(net_kw: float) -> tuple[float, float]:
     return 0.0, -net_kw
 
 
-def _remember_trace(site: dict, chart_id: str, now, value: float) -> None:
-    """One residual per minute for the last 30 hours. The newest sample in a minute wins."""
+def _remember_trace(
+    site: dict,
+    chart_id: str,
+    now,
+    value: float,
+    step_seconds: int | None = None,
+    cap: int | None = None,
+) -> None:
+    """One residual per bucket for the last 30 hours.
+
+    A minute chart keeps the newest sample in that minute. Temperature keeps the
+    hour mean, so a later tick in the same hour replaces the open point.
+    """
+    step = CHART_STEP_SECONDS if step_seconds is None else step_seconds
+    limit = CHART_POINTS if cap is None else cap
     traces = site.setdefault("chart_trace", {})
     marks = site.setdefault("chart_mark", {})
     buf = traces.get(chart_id)
     if not isinstance(buf, array.array):
         buf = array.array("f")
         traces[chart_id] = buf
-    slot = int(now.timestamp()) // CHART_STEP_SECONDS
+    slot = int(now.timestamp()) // step
     previous = marks.get(chart_id)
     if previous == slot and len(buf):
         buf[-1] = value
         return
     if previous is not None and slot > previous + 1:
-        gap = min(slot - previous - 1, CHART_POINTS)
+        gap = min(slot - previous - 1, limit)
         buf.extend(array.array("f", [float("nan")] * gap))
     buf.append(value)
     marks[chart_id] = slot
-    extra = len(buf) - CHART_POINTS
+    extra = len(buf) - limit
     if extra > 0:
         del buf[:extra]
+
+
+def _hour_means(minutes: array.array, end_minute_slot: int) -> tuple[array.array, int]:
+    """Mean of the simulated samples that fall in each clock hour."""
+    start = end_minute_slot - (len(minutes) - 1)
+    groups: dict[int, list[float]] = {}
+    order: list[int] = []
+    for index, value in enumerate(minutes):
+        hour_slot = (start + index) // 60
+        if hour_slot not in groups:
+            order.append(hour_slot)
+            groups[hour_slot] = []
+        groups[hour_slot].append(float(value))
+    if len(order) > CHART_HOURS:
+        order = order[-CHART_HOURS:]
+    means = array.array("f", [sum(groups[hour]) / len(groups[hour]) for hour in order])
+    return means, order[-1]
 
 
 def _trace_level(site: dict, chart_id: str, hour: int) -> tuple[float, float]:
@@ -771,8 +809,9 @@ def seed_history(sites: list[dict], now: datetime) -> None:
     """Fill the chart trace and the state log before the first live tick.
 
     The values are simulated. A faulted chart sits at that fault for the whole
-    window. A healthy chart is noise around zero. Live ticks replace the newest
-    minute and append the log.
+    window. A healthy chart is noise around zero. Temperature samples in each
+    clock hour are averaged before they are drawn. Live ticks replace the newest
+    minute, or the open temperature hour, and append the log.
     """
     slot = int(now.timestamp()) // CHART_STEP_SECONDS
     hours = [
@@ -797,8 +836,14 @@ def seed_history(sites: list[dict], now: datetime) -> None:
                 span = sigma * 1.6
                 for index in range(CHART_POINTS):
                     buf[index] = center + (rng.random() - 0.5) * span
+            if chart_id == "base_temp":
+                buf, hour_slot = _hour_means(buf, slot)
+                marks[chart_id] = hour_slot
+                closed = list(buf[:-1])
+                site.setdefault("chart_history", {})["base_temp"] = closed[-HISTORY:]
+            else:
+                marks[chart_id] = slot
             traces[chart_id] = buf
-            marks[chart_id] = slot
         site["chart_trace"] = traces
         site["chart_mark"] = marks
 
@@ -864,11 +909,44 @@ def seed_history(sites: list[dict], now: datetime) -> None:
 
 def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
     """Tick residuals stay short for the run rules. The trace is what the unit view draws."""
+    if spec["chart_id"] == "base_temp":
+        return _chart_temp(site, spec, measured, expected, sigma, now)
     history = site["chart_history"].setdefault(spec["chart_id"], [])
     point = evaluate(spec, measured, expected, sigma if sigma is not None else spec["sigma"], history)
     history.append(point["value"])
     del history[:-HISTORY]
     _remember_trace(site, spec["chart_id"], now, point["value"])
+    return point
+
+
+def _chart_temp(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
+    """Cabinet temperature is the mean of every sample in the open clock hour."""
+    sigma = float(sigma if sigma is not None else spec["sigma"])
+    slot = int(now.timestamp()) // series_seconds("base_temp")
+    history = site["chart_history"].setdefault("base_temp", [])
+    bucket = site.get("temp_hour")
+    if bucket is None or bucket.get("slot") != slot:
+        if bucket and bucket.get("n"):
+            history.append(bucket["sum"] / bucket["n"])
+            del history[:-HISTORY]
+        elif bucket is None:
+            mark = site.get("chart_mark", {}).get("base_temp")
+            trace = site.get("chart_trace", {}).get("base_temp")
+            if mark is not None and mark != slot and trace:
+                history.append(float(trace[-1]))
+                del history[:-HISTORY]
+        bucket = {"slot": slot, "sum": 0.0, "m": 0.0, "e": 0.0, "n": 0}
+        site["temp_hour"] = bucket
+    bucket["sum"] += measured - expected
+    bucket["m"] += measured
+    bucket["e"] += expected
+    bucket["n"] += 1
+    count = bucket["n"]
+    point = evaluate(spec, bucket["m"] / count, bucket["e"] / count, sigma, history)
+    _remember_trace(
+        site, "base_temp", now, point["value"],
+        step_seconds=series_seconds("base_temp"), cap=CHART_HOURS,
+    )
     return point
 
 
@@ -1172,7 +1250,7 @@ def tick_sites(
         site["signal"] = signal
         site["alarm"] = alarm
         _roll_usage(
-            site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, closed_usage
+            site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, temp_c, closed_usage
         )
         # What the battery actually did, which is not always what it was told.
         if discharge_kw > 0.01:
@@ -1289,11 +1367,12 @@ def tick_sites(
     return updated, logs, observations, points
 
 
-def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, closed) -> None:
+def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, temp_c, closed) -> None:
     """Add this tick to the open hour. A closed hour is one usage_hours row."""
     bucket = site.get("usage")
     if bucket is None or bucket.get("hour") != hour:
         if bucket and bucket.get("hour") is not None:
+            count = bucket.get("temp_n") or 0
             closed.append(
                 {
                     "ts": bucket["ts"],
@@ -1304,6 +1383,7 @@ def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_
                     "export_kwh": round(bucket["export_kwh"], 4),
                     "solar_kwh": round(bucket["solar_kwh"], 4),
                     "ev_kwh": round(bucket["ev_kwh"], 4),
+                    "temp_c": round(bucket["temp_sum"] / count, 3) if count else None,
                 }
             )
         bucket = {
@@ -1314,6 +1394,8 @@ def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_
             "export_kwh": 0.0,
             "solar_kwh": 0.0,
             "ev_kwh": 0.0,
+            "temp_sum": 0.0,
+            "temp_n": 0,
         }
         site["usage"] = bucket
     bucket["load_kwh"] += load_kw * dt
@@ -1321,3 +1403,5 @@ def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_
     bucket["export_kwh"] += grid_out * dt
     bucket["solar_kwh"] += solar_kw * dt
     bucket["ev_kwh"] += ev_kw * dt
+    bucket["temp_sum"] += temp_c
+    bucket["temp_n"] += 1

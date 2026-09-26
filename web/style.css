@@ -486,6 +486,13 @@ h2 {
 .alert-id { color: var(--ink); font-variant-numeric: tabular-nums; }
 .alert em { color: var(--alarm); font-style: normal; font-size: 12px; }
 .alert:hover { border-color: #4a4f59; }
+.alert.case-row em { color: var(--muted); }
+.alert.case-row.status-pending { border-left-color: var(--watch); }
+.alert.case-row.status-active { border-left-color: var(--pull); }
+.alert.case-row.status-done,
+.alert.case-row.status-cancelled { border-left-color: var(--line); }
+.alert.case-row .status.pending { color: var(--watch); border-color: var(--watch); }
+.alert.case-row .status.active { color: var(--pull); border-color: var(--pull); }
 .because { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .because mark {
   background: #3d3424;

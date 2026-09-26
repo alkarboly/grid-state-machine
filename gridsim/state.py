@@ -55,7 +55,7 @@ from gridsim.ercot.normalize import (
     prices_from_rows,
 )
 from gridsim.fleet.agent import audit, day_shape
-from gridsim.fleet.charts import CHART_STEP_SECONDS, CHARTS, trace_values
+from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
 from gridsim.fleet.simulate import (
     DEMO_FAULTS,
     build_sites,
@@ -715,7 +715,7 @@ class Fleet:
             for chart in site.get("charts") or []:
                 point = dict(chart)
                 point["series"] = trace_values(traces.get(chart["chart_id"]))
-                point["series_seconds"] = CHART_STEP_SECONDS
+                point["series_seconds"] = series_seconds(chart["chart_id"])
                 charts.append(point)
             return {
                 "id": site["id"],

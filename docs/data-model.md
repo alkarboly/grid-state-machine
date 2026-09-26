@@ -46,6 +46,7 @@ erDiagram
     float export_kwh
     float solar_kwh
     float ev_kwh
+    float temp_c
   }
   addon_catalog {
     text addon_id PK
@@ -133,7 +134,7 @@ Three charts are computed from that sample. The maintenance manager acts on an a
 | SQLite `metric_logs` | The same sample as `metrics_json`, `component` `disco` | Instrumented 60 |
 | SQLite `observations` | `disco_in_kw`, `disco_out_kw`, `disco_voltage_v`, `frequency_hz`, `contactor`, `islanded` | Instrumented 60 |
 | SQLite `control_points` | The three residuals above, plus the other three charts | Instrumented 60, and any home whose chart is out of limits |
-| Supabase `usage_hours` | Not the sample. The hour integral: `load_kwh` is the panel, `import_kwh` and `export_kwh` are the grid, `solar_kwh` and `ev_kwh` are the add-on kilowatts the disco metered | Published homes, when the clock hour closes |
+| Supabase `usage_hours` | Not the sample. The hour integral: `load_kwh` is the panel, `import_kwh` and `export_kwh` are the grid, `solar_kwh` and `ev_kwh` are the add-on kilowatts the disco metered. `temp_c` is the mean cabinet temperature of every sample in that hour | Published homes, when the clock hour closes |
 | Supabase `unit_latest.addons_json` | The installed ids, not the live kilowatts | Published homes, replaced each tick |
 | Supabase `site_addons` | The same install set, one row per add-on | Homes whose disco list changed |
 

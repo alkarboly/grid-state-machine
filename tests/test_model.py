@@ -337,8 +337,9 @@ class FleetTests(unittest.TestCase):
         sites[0]["fault"] = {"temp_c": 49.0}
         seed_history(sites, now)
         trace = sites[0]["chart_trace"]["base_temp"]
-        self.assertEqual(len(trace), CHART_POINTS)
+        self.assertEqual(len(trace), CHART_HOURS)
         self.assertGreater(min(trace), 3 * sites[0]["temp_sigma_c"])
+        self.assertEqual(len(sites[0]["chart_history"]["base_temp"]), HISTORY)
         self.assertEqual(len(sites[0]["chart_trace"]["frequency"]), CHART_POINTS)
         self.assertLess(max(abs(value) for value in sites[0]["chart_trace"]["frequency"]), 0.025 * 2)
         self.assertEqual(len(sites[0]["state_log"]), STATE_LOG)
@@ -346,7 +347,34 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(sites[0]["state_log"][-1]["grid"], "on")
         self.assertIn("base_temp", sites[0]["state_log"][-1]["alarming"])
         current, *_rest = tick_sites(sites, _grid(0.5), now, 0.0, random.Random(1))
-        self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), CHART_POINTS)
+        self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), CHART_HOURS)
+        self.assertEqual(current[0]["temp_hour"]["n"], 1)
+
+    def test_temperature_averages_every_sample_in_the_clock_hour(self):
+        now = datetime(2026, 9, 26, 1, 59, tzinfo=CENTRAL)
+        sites = build_sites(fleet_size=8)[:1]
+        sites[0]["fault"] = {}
+        note: dict = {}
+        current, *_rest = tick_sites(sites, _grid(0.5), now, 10 / 3600, random.Random(1), note=note)
+        current, *_rest = tick_sites(
+            current, _grid(0.5), now + timedelta(seconds=10), 10 / 3600, random.Random(1), note=note,
+        )
+        bucket = current[0]["temp_hour"]
+        self.assertEqual(bucket["n"], 2)
+        self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), 1)
+        self.assertEqual(len(current[0]["chart_history"]["base_temp"]), 0)
+        self.assertAlmostEqual(
+            current[0]["chart_trace"]["base_temp"][-1], bucket["sum"] / bucket["n"], places=4,
+        )
+        later = now + timedelta(minutes=1)
+        current, *_rest = tick_sites(current, _grid(0.5), later, 10 / 3600, random.Random(1), note=note)
+        closed = note["usage"]
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0]["hour"], 1)
+        self.assertIsNotNone(closed[0]["temp_c"])
+        self.assertEqual(len(current[0]["chart_history"]["base_temp"]), 1)
+        self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), 2)
+        self.assertEqual(current[0]["temp_hour"]["n"], 1)
 
     def test_every_chart_names_a_real_component(self):
         components = {spec["component"] for spec in CHARTS}

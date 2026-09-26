@@ -12,6 +12,8 @@ Create a project. In the SQL editor, run these files in order:
 2. `supabase/migrations/20260926043100_llm_read.sql`
 3. `supabase/migrations/20260926043200_actions.sql`
 
+The eight tables those files create, and what a disco records into them, are [data-model.md](data-model.md).
+
 Or, with the Supabase CLI linked to that project, run `supabase db push` from the repo root.
 
 Copy the project URL and the service-role key into the bot's environment only. Row level security is on and there is no anon policy.

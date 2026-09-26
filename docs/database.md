@@ -78,7 +78,7 @@ One row per tick. This is the object a controller reads in order to decide the n
 
 `signal` and `intensity` are the fleet call applied on this tick. `source` is `rules` or `external`. A home's own grid `source` can be `action` while a `set_signal` row is in force; that override stays on the unit and does not change this row. `zones_json` is a JSON object of load zone to the signal that zone actually ran. Under an external order every zone has the same signal. Under the ladder, a zone with a price can differ.
 
-The Postgres tables the bot and a controller share are created by the SQL files in `supabase/migrations`, in filename order. Local SQLite mirrors the column names. Row level security is enabled and there is no anon policy, so the browser cannot read them. Only the bot's service role can.
+The Postgres tables the bot and a controller share are created by the SQL files in `supabase/migrations`, in filename order. The diagram of those eight tables, and the sample each disco records, is [data-model.md](data-model.md). Local SQLite mirrors the column names. Row level security is enabled and there is no anon policy, so the browser cannot read them. Only the bot's service role can.
 
 `dispatch_orders` is not a local table. It lives in Supabase, and the tick reads the newest row:
 

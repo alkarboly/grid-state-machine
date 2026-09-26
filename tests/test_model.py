@@ -32,6 +32,7 @@ from gridsim.fleet.simulate import (
     load_anchors,
     machine_snapshot,
     metro_summary,
+    _chart,
     seed_history,
     station_summary,
     STATE_LOG,
@@ -316,7 +317,8 @@ class FleetTests(unittest.TestCase):
         current, *_rest = tick_sites(current, _grid(0.5), now, 0.0, random.Random(1))
         current, *_rest = tick_sites(current, _grid(0.5), now + timedelta(seconds=10), 10 / 3600, random.Random(1))
         self.assertEqual(len(current[0]["chart_trace"]["frequency"]), 1)
-        self.assertEqual(len(current[0]["chart_history"]["frequency"]), 2)
+        self.assertEqual(current[0]["sample_bucket"]["frequency"]["n"], 2)
+        self.assertEqual(len(current[0]["chart_history"]["frequency"]), 0)
         current, *_rest = tick_sites(current, _grid(0.5), now + timedelta(minutes=2), 0.0, random.Random(1))
         trace = current[0]["chart_trace"]["frequency"]
         self.assertEqual(len(trace), 3)
@@ -372,6 +374,21 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), 2)
         self.assertEqual(current[0]["temp_hour"]["n"], 1)
 
+    def test_minute_charts_average_every_sample_in_the_clock_minute(self):
+        site = build_sites(fleet_size=8)[0]
+        spec = next(item for item in CHARTS if item["chart_id"] == "disco_voltage")
+        now = datetime(2026, 9, 25, 19, 0, tzinfo=CENTRAL)
+        _chart(site, spec, 240.0, 240.0, 1.2, now)
+        point = _chart(site, spec, 242.4, 240.0, 1.2, now + timedelta(seconds=10))
+        self.assertEqual(site["sample_bucket"]["disco_voltage"]["n"], 2)
+        self.assertAlmostEqual(point["value"], 1.2)
+        self.assertAlmostEqual(point["sigma"], 1.2 / math.sqrt(2), places=3)
+        self.assertAlmostEqual(point["ucl"], 3 * 1.2 / math.sqrt(2), places=3)
+        self.assertEqual(len(site["chart_history"]["disco_voltage"]), 0)
+        _chart(site, spec, 240.0, 240.0, 1.2, now + timedelta(minutes=1))
+        self.assertAlmostEqual(site["chart_history"]["disco_voltage"][0], 1.2)
+        self.assertEqual(site["sample_bucket"]["disco_voltage"]["n"], 1)
+
     def test_arming_temperature_alarms_without_waiting_out_the_hour(self):
         now = datetime(2026, 9, 26, 1, 10, tzinfo=CENTRAL)
         current = build_sites(fleet_size=8)[:1]
@@ -386,6 +403,8 @@ class FleetTests(unittest.TestCase):
         chart = next(item for item in current[0]["charts"] if item["chart_id"] == "base_temp")
         self.assertIn("beyond_3sigma", chart["rules"])
         self.assertTrue(chart["alarm"])
+        self.assertAlmostEqual(chart["z"], 4.0, places=2)
+        self.assertAlmostEqual(chart["sigma"], current[0]["temp_sigma_c"] / math.sqrt(360), places=3)
 
     def test_every_chart_names_a_real_component(self):
         components = {spec["component"] for spec in CHARTS}

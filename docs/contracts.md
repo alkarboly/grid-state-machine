@@ -86,7 +86,7 @@ The snapshot also carries the live control flags. They are not copied onto every
 | `signal_override` | `null`, or `{"signal", "intensity"}` while a `set_signal` is in force. |
 | `armed` | Chart ids the next tick will drive to +4σ. |
 | `addons` | Add-on ids on the disco. |
-| `chart_history` | Residuals the run rules just used, one list per `chart_id`, oldest first, at most 24. |
+| `chart_history` | Completed bucket residuals the run rules just used, one list per `chart_id`, oldest first, at most 24. |
 
 Identity does not move with the tick. Capacity, power limit, centers, fault, and place stay on the site row. Restoring a home is that identity, plus this snapshot, plus open `unit_actions`. The actions put `offline` and `signal_override` back on the next tick. `chart_history` puts the run rules back. The 30-hour chart trace is the drawing, not this snapshot.
 

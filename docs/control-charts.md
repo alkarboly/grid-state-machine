@@ -1,12 +1,14 @@
 # Control charts
 
-Each battery keeps six individuals charts. The charted number is the residual `measured - expected`. The center line is 0. The limits are `±3 * sigma` for that battery and that chart. A chart is `in_control` when no rule has fired.
+Each battery keeps six X-bar charts. The charted number is the mean residual in the bucket, the average of `measured − expected` over the ticks in that point. The center line is 0. σ in the table is the given standard for one tick. The limits on a point are `±3 * σ / √n`, where n is how many ticks are in that point. A chart is `in_control` when no rule has fired.
+
+The standard is given. It is not estimated from the trace, so a fault cannot widen its own limits. Healthy sensor noise sits inside the standard. The chart reacts when the subgroup mean leaves `±3 σ/√n`.
 
 `expected` is the operating point, not a fleet-wide constant. Cabinet temperature is the lagged temperature the thermal model predicts for this unit at the power it is actually moving. A hot reading during discharge is in control when it matches that lag. A reading that jumps to the steady-state value in one tick is ahead of the model.
 
 ## Families
 
-Every chart also names the `component` it belongs to. In the unit view the meter is drawn as part of the grid box, so `disco_meter_delta` opens from Grid. The chart itself draws the center line and the ±1σ, ±2σ, and ±3σ lines. Limits in the table stay `±3 * sigma`.
+Every chart also names the `component` it belongs to. In the unit view the meter is drawn as part of the grid box, so `disco_meter_delta` opens from Grid. The chart itself draws the center line and the ±1σ, ±2σ, and ±3σ lines of the point on screen. Those lines use `σ / √n` for the samples already in that point.
 
 | `chart_id` | `component` | `family` | What it catches | `sigma` |
 | --- | --- | --- | --- | --- |
@@ -16,6 +18,8 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 | `frequency` | `disco` | `electrical` | Frequency leaves 60 Hz. This is a grid event, not a cabinet fault. It is charted so the two are not mixed. | 0.025 Hz |
 | `soc_tracking` | `base` | `energy` | Reported state of charge leaves the coulomb count. Capacity fade or a BMS offset. | 0.45 kWh |
 | `dispatch_response` | `base` | `response` | Achieved kilowatts leave the command. Inverter derate or a battery that ignores dispatch. The residual is 0 while the command is 0. | 0.40 kW |
+
+`sigma` in the table is the one-tick standard. A minute chart has 6 ticks. The temperature chart has 360. The limit drawn for a full bucket is `±3 * sigma / √n`.
 
 `grid` and `panel` carry no charts. The grid metrics are ERCOT context rather than a measurement of this home, and the panel reports a single load number that the meter and disco already chart between them.
 
@@ -47,7 +51,7 @@ Each alarming code opens one `scheduled_service` ticket. A warning posts nothing
 
 The reset is a short outage: the base is `offline` until the estimate ends. A reset that clears disarms the chart and writes `return_online`. A reset that does not clear keeps the same row, sets `stage` to `ticket`, sets `actor` to `llm`, and extends `ends_at` by the service estimate. The agent note is gathered from that home: z, measured, state of charge, temperature, and load. `payload.escalation` lists each stage with its estimate and result.
 
-`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the maintenance manager opens the ticket for that code. `armed: false` clears it, and the home is healthy again. An armed chart replaces the measured value for that tick. For temperature, that triggered residual is the open hour's point, so the healthy samples already in the hour do not hide it. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick places that residual at +4 times `σ / √n` for a full bucket, so the point is past the completed-subgroup limits and the maintenance manager opens the ticket for that code. `armed: false` clears it, and the home is healthy again. An armed chart does not average the trigger into the healthy samples already in the bucket. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
 
 ## Rules
 
@@ -75,9 +79,9 @@ So:
 
 ## Point contract
 
-One row per battery per chart per tick. `value` is the residual. `series` is only on the live API, not in the table. It is the last 30 hours, oldest first. Five charts keep one residual per minute: the newest sample in that minute wins, a missed minute is null, and `series_seconds` is 60. `base_temp` keeps one residual per clock hour: the mean of every sample in that hour, including the simulated samples written at startup, a missed hour is null, and `series_seconds` is 3600. The unit view draws that whole window, with the newest point at the right. The run rules for the minute charts still see every tick. `base_temp` run rules see completed hour means, and the open hour is the point being judged. Which metric uses which bucket is [metrics.md](metrics.md).
+One row per battery per chart per tick. `value` is the subgroup-mean residual. `sigma`, `ucl`, and `lcl` on that row are for the mean: `sigma` is the one-tick standard divided by `√n`, and the limits are `±3` times that. `n` is the number of ticks already in the open bucket, or the full bucket when the chart is armed. `series` is only on the live API, not in the table. It is the last 30 hours, oldest first. Five charts keep one mean per minute: every tick in that minute, including the simulated samples written at startup, a missed minute is null, and `series_seconds` is 60. `base_temp` keeps one mean per clock hour: every tick in that hour, a missed hour is null, and `series_seconds` is 3600. The unit view draws that whole window, with the newest point at the right. Run rules see completed buckets and judge them with that point's `σ / √n`. The open bucket is the point being judged, so seven on one side is seven minutes, or seven hours for temperature. Which metric uses which bucket is [metrics.md](metrics.md).
 
-Startup fills that window before the first tick. The values are simulated, then bucketed the same way as live samples. Every chart starts as noise around zero. Later ticks replace the newest minute, or the open temperature hour, with the live residual. An armed chart replaces that newest point with a residual at +4 sigma.
+Startup fills that window before the first tick. The values are simulated tick samples, then averaged the same way as live samples. Every chart starts as noise around zero, inside the given limits. Later ticks replace the open minute, or the open temperature hour, with the live mean. An armed chart replaces that newest point with a residual at +4 times the full-bucket `σ / √n`.
 
 ```json
 {

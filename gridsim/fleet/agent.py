@@ -13,11 +13,11 @@ from datetime import datetime, timedelta
 from gridsim.fleet.actions import OPEN, market_rate, new_action
 from gridsim.llm import write_ticket
 from gridsim.timeutil import iso
-from gridsim.fleet.charts import CHARTS
+from gridsim.fleet.charts import CHARTS, mean_sigma, subgroup_size
 from gridsim.fleet.simulate import HOUR_MEAN_KW, panel_kw
 
-# A manual trigger places the residual this many sigma past the center,
-# which is outside the ±3 sigma limits.
+# A manual trigger places the subgroup mean this many chart-sigmas past the center,
+# which is outside the ±3 σ/√n limits of a completed bucket.
 ARM_Z = 4.0
 
 # Dollars per MWh on the simulated curve (18 + 90 × demand percentile).
@@ -38,6 +38,8 @@ def forced_measurement(site: dict, chart_id: str, measured: float, expected: flo
     if not width:
         spec = next(item for item in CHARTS if item["chart_id"] == chart_id)
         width = spec["sigma"] or 1.0
+    # +4 subgroup-sigmas sits outside the ±3 σ/√n limits of a completed bucket.
+    width = mean_sigma(width, subgroup_size(chart_id))
     return expected + ARM_Z * width
 
 

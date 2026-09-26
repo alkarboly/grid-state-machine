@@ -118,7 +118,7 @@ The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample
 | `contactor`, `islanded` | Whether the home is grid-tied | Open and islanded only when the grid is turned off. Scheduled service does not open the contactor. |
 | `addons[].kw` | Add-on power the Pi is metering | `solar` is 5 kW times a daylight fraction, zero at night. `ev_charger` is 7.2 kW times 0.85 from 17:00 through 21:00, and zero otherwise. |
 
-Three charts are computed from that sample. The maintenance manager acts on an alarm past ±3σ. `frequency` is charted and left alone.
+Three charts are computed from that sample. Each point is the mean of the ticks in the minute, and the alarm limit is ±3 times the one-tick standard divided by the square root of that count. The maintenance manager acts on an alarm past those limits. `frequency` is charted and left alone.
 
 | `chart_id` | Residual | `sigma` |
 | --- | --- | --- |

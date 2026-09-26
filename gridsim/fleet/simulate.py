@@ -19,7 +19,9 @@ from gridsim.fleet.charts import (
     CHARTS,
     HISTORY,
     evaluate,
+    mean_sigma,
     series_seconds,
+    subgroup_size,
 )
 from gridsim.fleet.actions import addon_power
 from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order
@@ -433,8 +435,8 @@ def _remember_trace(
 ) -> None:
     """One residual per bucket for the last 30 hours.
 
-    A minute chart keeps the newest sample in that minute. Temperature keeps the
-    hour mean, so a later tick in the same hour replaces the open point.
+    The value is the mean of every sample in that bucket. A later tick in the
+    same minute, or the same temperature hour, replaces the open point.
     """
     step = CHART_STEP_SECONDS if step_seconds is None else step_seconds
     limit = CHART_POINTS if cap is None else cap
@@ -771,9 +773,9 @@ def seed_history(sites: list[dict], now: datetime) -> None:
     """Fill the chart trace and the state log before the first live tick.
 
     The values are simulated. A faulted chart sits at that fault for the whole
-    window. A healthy chart is noise around zero. Temperature samples in each
-    clock hour are averaged before they are drawn. Live ticks replace the newest
-    minute, or the open temperature hour, and append the log.
+    window. A healthy chart is noise around zero. Each drawn point is the mean
+    of the tick samples in that bucket: a clock minute, or a clock hour for
+    temperature. Live ticks replace the open bucket and append the log.
     """
     slot = int(now.timestamp()) // CHART_STEP_SECONDS
     hours = [
@@ -789,22 +791,29 @@ def seed_history(sites: list[dict], now: datetime) -> None:
         for spec in CHARTS:
             chart_id = spec["chart_id"]
             buf = array.array("f", [0.0]) * CHART_POINTS
+            per_bucket = max(1, CHART_STEP_SECONDS // config.TICK_SECONDS)
             if chart_id == "dispatch_response" and fault.get("response_scale") is not None:
                 for index, hour in enumerate(hours):
                     center, sigma = _trace_level(site, chart_id, hour)
-                    buf[index] = center + (rng.random() - 0.5) * sigma
+                    total = 0.0
+                    for _ in range(per_bucket):
+                        total += center + (rng.random() - 0.5) * sigma
+                    buf[index] = total / per_bucket
             else:
                 center, sigma = _trace_level(site, chart_id, 12)
                 span = sigma * 1.6
                 for index in range(CHART_POINTS):
-                    buf[index] = center + (rng.random() - 0.5) * span
+                    total = 0.0
+                    for _ in range(per_bucket):
+                        total += center + (rng.random() - 0.5) * span
+                    buf[index] = total / per_bucket
             if chart_id == "base_temp":
                 buf, hour_slot = _hour_means(buf, slot)
                 marks[chart_id] = hour_slot
-                closed = list(buf[:-1])
-                site.setdefault("chart_history", {})["base_temp"] = closed[-HISTORY:]
             else:
                 marks[chart_id] = slot
+            closed = list(buf[:-1])
+            site.setdefault("chart_history", {})[chart_id] = closed[-HISTORY:]
             traces[chart_id] = buf
         site["chart_trace"] = traces
         site["chart_mark"] = marks
@@ -870,58 +879,47 @@ def seed_history(sites: list[dict], now: datetime) -> None:
 
 
 def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
-    """Tick residuals stay short for the run rules. The trace is what the unit view draws."""
-    if spec["chart_id"] == "base_temp":
-        return _chart_temp(site, spec, measured, expected, sigma, now)
-    history = site["chart_history"].setdefault(spec["chart_id"], [])
-    point = evaluate(spec, measured, expected, sigma if sigma is not None else spec["sigma"], history)
-    history.append(point["value"])
-    del history[:-HISTORY]
-    _remember_trace(site, spec["chart_id"], now, point["value"])
-    return point
+    """X-bar point for the open bucket.
 
-
-def _chart_temp(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
-    """Cabinet temperature is the mean of every sample in the open clock hour.
-
-    An armed chart is a trigger. That tick's residual is the point, so the
-    maintenance manager sees the fault without waiting out the healthy samples
-    already in the hour.
+    The plotted value is the mean of every tick in that minute, or that hour
+    for temperature. Limits are ±3 times the one-tick standard over the square
+    root of the samples in the point, so they match the mean being judged.
+    An armed chart skips the average and places the point at +4 of those
+    completed-bucket limits. Run rules see completed buckets, not each tick.
     """
-    sigma = float(sigma if sigma is not None else spec["sigma"])
-    if spec["chart_id"] in (site.get("armed") or ()):
-        history = site["chart_history"].setdefault("base_temp", [])
-        point = evaluate(spec, measured, expected, sigma, history)
-        _remember_trace(
-            site, "base_temp", now, point["value"],
-            step_seconds=series_seconds("base_temp"), cap=CHART_HOURS,
-        )
+    chart_id = spec["chart_id"]
+    step = series_seconds(chart_id)
+    cap = CHART_HOURS if chart_id == "base_temp" else CHART_POINTS
+    individual = float(sigma if sigma is not None else spec["sigma"])
+    history = site["chart_history"].setdefault(chart_id, [])
+    if chart_id in (site.get("armed") or ()):
+        point = evaluate(spec, measured, expected, mean_sigma(individual, subgroup_size(chart_id)), history)
+        _remember_trace(site, chart_id, now, point["value"], step_seconds=step, cap=cap)
         return point
-    slot = int(now.timestamp()) // series_seconds("base_temp")
-    history = site["chart_history"].setdefault("base_temp", [])
-    bucket = site.get("temp_hour")
+    slot = int(now.timestamp()) // step
+    buckets = site.setdefault("sample_bucket", {})
+    bucket = buckets.get(chart_id)
     if bucket is None or bucket.get("slot") != slot:
         if bucket and bucket.get("n"):
             history.append(bucket["sum"] / bucket["n"])
             del history[:-HISTORY]
         elif bucket is None:
-            mark = site.get("chart_mark", {}).get("base_temp")
-            trace = site.get("chart_trace", {}).get("base_temp")
+            mark = site.get("chart_mark", {}).get(chart_id)
+            trace = site.get("chart_trace", {}).get(chart_id)
             if mark is not None and mark != slot and trace:
                 history.append(float(trace[-1]))
                 del history[:-HISTORY]
         bucket = {"slot": slot, "sum": 0.0, "m": 0.0, "e": 0.0, "n": 0}
-        site["temp_hour"] = bucket
+        buckets[chart_id] = bucket
     bucket["sum"] += measured - expected
     bucket["m"] += measured
     bucket["e"] += expected
     bucket["n"] += 1
     count = bucket["n"]
-    point = evaluate(spec, bucket["m"] / count, bucket["e"] / count, sigma, history)
-    _remember_trace(
-        site, "base_temp", now, point["value"],
-        step_seconds=series_seconds("base_temp"), cap=CHART_HOURS,
-    )
+    point = evaluate(spec, bucket["m"] / count, bucket["e"] / count, mean_sigma(individual, count), history)
+    _remember_trace(site, chart_id, now, point["value"], step_seconds=step, cap=cap)
+    if chart_id == "base_temp":
+        site["temp_hour"] = bucket
     return point
 
 

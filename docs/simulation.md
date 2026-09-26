@@ -28,7 +28,7 @@ These are modelled addresses. They are not customer locations.
 
 ### Faults
 
-Every home starts healthy. A home is faulted only while you arm a chart on it. The next tick reports that residual at +4 sigma, past the limits. The maintenance manager opens one ticket and tries a system reset when that fault allows it. If the reset is assumed not to clear the fault, the same ticket escalates and the agent writes the visit. The fleet manager stays off that home while the ticket is open. Frequency is charted and left alone. The estimates are in [control-charts.md](control-charts.md).
+Every home starts healthy. A home is faulted only while you arm a chart on it. The next tick reports that residual at +4 full-bucket chart sigmas, past the limits. The maintenance manager opens one ticket and tries a system reset when that fault allows it. If the reset is assumed not to clear the fault, the same ticket escalates and the agent writes the visit. The fleet manager stays off that home while the ticket is open. Frequency is charted and left alone. The estimates are in [control-charts.md](control-charts.md).
 
 ## Home load
 
@@ -38,7 +38,7 @@ The live target is `hour_kw` for the clock hour, times `0.85 + 0.30 * demand_per
 
 Each tick adds panel kilowatts times elapsed hours to an open bucket. When the clock hour changes, that bucket closes as one `usage_hours` row. `load_kwh` on that row is the panel, not grid import.
 
-Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own. Cabinet temperature samples in one clock hour, including the simulated history written at startup, are averaged. That mean is `usage_hours.temp_c` when the hour closes, and it is the `base_temp` point. The diagram still shows the latest tick. The buckets are [metrics.md](metrics.md).
+Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own. Every tick is a sample. Voltage, meter in and out, disco voltage, frequency, and state of charge are averaged across the clock minute before they become a chart point. Cabinet temperature is averaged across the clock hour. The simulated history written at startup uses the same means. The chart limits are `±3 σ/√n` for the ticks in that point. The temperature mean is `usage_hours.temp_c` when the hour closes, and it is the `base_temp` point. The diagram still shows the latest tick. The buckets are [metrics.md](metrics.md).
 
 ## Interchange
 
@@ -52,7 +52,7 @@ The fleet ledger adds those same quantities across every unit. Pushing, pulling,
 
 Each battery has its own one-way efficiency `eta`, drawn between 0.94 and 0.975. State of charge moves with wall-clock time unless `SIM_TIME_SCALE` is set above 1. Scale multiplies elapsed time inside the battery integral only. Log timestamps stay on the wall clock.
 
-The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count plus a bias. A healthy battery has bias 0. Arming `soc_tracking` forces the chart residual to +4 sigma without changing that bias.
+The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count plus a bias. A healthy battery has bias 0. Arming `soc_tracking` forces the chart residual to +4 full-bucket chart sigmas without changing that bias.
 
 ## Dispatch
 
@@ -111,7 +111,7 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 
 `return_online` is written by the simulator, not by the controller. Its `actor` is the actor of the service it closes.
 
-`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. That arm is the only fault. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
+`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 full-bucket chart sigmas. That arm is the only fault. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
 
 ### Maintenance manager
 

@@ -1,10 +1,19 @@
-"""Individuals control charts. Field names match docs/control-charts.md."""
+"""X-bar control charts. Field names match docs/control-charts.md.
+
+Each point is the mean of the tick samples in one bucket. The catalog sigma is
+the given standard for one tick. Limits use that standard over the square root
+of the sample count, and they are not refit from the trace.
+"""
 
 from __future__ import annotations
 
+import math
+
+from gridsim.config import TICK_SECONDS
+
 LIMIT_SIGMA = 3.0
 WARN_SIGMA = 2.0
-# Tick residuals kept for the run rules. The drawn series is the 30-hour trace.
+# Completed bucket means kept for the run rules. The drawn series is the 30-hour trace.
 HISTORY = 24
 CHART_HOURS = 30
 CHART_STEP_SECONDS = 60
@@ -16,6 +25,16 @@ def series_seconds(chart_id: str) -> int:
     if chart_id == "base_temp":
         return 3600
     return CHART_STEP_SECONDS
+
+
+def subgroup_size(chart_id: str) -> int:
+    """Tick samples in a completed bucket. A minute is 6. An hour of temperature is 360."""
+    return max(1, series_seconds(chart_id) // TICK_SECONDS)
+
+
+def mean_sigma(individual: float, samples: int) -> float:
+    """Standard deviation of the mean of `samples` observations with the given one-tick standard."""
+    return float(individual) / math.sqrt(max(1, int(samples)))
 
 
 def trace_values(samples) -> list:
@@ -96,6 +115,9 @@ CHARTS = (
 
 def evaluate(spec: dict, measured: float, expected: float, sigma: float, history: list[float]) -> dict:
     """Chart the residual measured - expected. Limits are ±3 sigma around 0.
+
+    `sigma` is the standard deviation of this point. For a subgroup mean that is
+    the one-tick standard divided by the square root of the sample count.
 
     `alarm` and `warning` are severity; `in_control` and `rules` are the statistics.
     They differ on purpose: a run rule fires on about 1.6% of healthy charts, which

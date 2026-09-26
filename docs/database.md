@@ -38,7 +38,7 @@ The component contract from [contracts.md](contracts.md). One row per battery pe
 
 That is about 830 rows a tick instead of 39,000, and the unit view still reads live values for any battery because the simulation state lives in memory. `instrumented` on `/api/site/{id}` says whether a unit is in the cohort.
 
-Every home also keeps a `state_log` in that same memory: one log-state row per tick, last 180. The row shape, and the current `snapshot` that adds the live flags, are in [contracts.md](contracts.md). The unit view shows the log. It is not written to SQLite. The rows are fixed-width records in one buffer per home, not one Python object per tick. `GET /api/site/{id}` still returns a log-state object per tick. The control-chart trace is the same kind of memory: the last 30 hours, one residual per minute except cabinet temperature, which is one mean per clock hour. The buckets are [metrics.md](metrics.md). The chart contract is [control-charts.md](control-charts.md). Startup fills both with simulated rows. Neither is a table. `chart_history` on the snapshot is the short run-rule memory, not the 30-hour trace.
+Every home also keeps a `state_log` in that same memory: one log-state row per tick, last 180. The row shape, and the current `snapshot` that adds the live flags, are in [contracts.md](contracts.md). The unit view shows the log. It is not written to SQLite. The rows are fixed-width records in one buffer per home, not one Python object per tick. `GET /api/site/{id}` still returns a log-state object per tick. The control-chart trace is the same kind of memory: the last 30 hours, one mean per minute except cabinet temperature, which is one mean per clock hour. The buckets are [metrics.md](metrics.md). The chart contract is [control-charts.md](control-charts.md). Startup fills both with simulated rows. Neither is a table. `chart_history` on the snapshot is the short run-rule memory, not the 30-hour trace.
 
 ## `observations`
 
@@ -53,6 +53,8 @@ Columns, in order: `ts`, `site_id`, `hour`, `demand_mw`, `demand_percentile`, `s
 The chart contract from [control-charts.md](control-charts.md). One row per battery per chart per tick.
 
 `ts`, `site_id`, `chart_id`, `component`, `family`, `measured`, `expected`, `value`, `sigma`, `ucl`, `lcl`, `z`, `rules_json`, `in_control`.
+
+`measured` and `expected` are the running subgroup means. `value` is their difference. `sigma` is the one-tick standard divided by the square root of the samples in that point, and `ucl` / `lcl` are `±3 * sigma`.
 
 `rules_json` is a JSON array of rule names. An empty array means the point is in control.
 

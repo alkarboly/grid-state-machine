@@ -20,7 +20,7 @@ from gridsim.fleet.charts import (
     HISTORY,
     evaluate,
 )
-from gridsim.fleet.policy import choose_signal, resolve_order
+from gridsim.fleet.policy import choose_signal, explain_signal, resolve_order
 from gridsim.fleet.simulate import (
     COMPONENTS,
     DEMO_FAULTS,
@@ -182,6 +182,17 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(choose_signal(0.5, -400, None, None), "pull")
         self.assertEqual(choose_signal(0.5, 0, None, None), "hold")
         self.assertEqual(choose_signal(0.5, 0, 80, 40), "push")
+        signal, because = explain_signal(0.9, 0, None, None)
+        self.assertEqual(signal, "push")
+        self.assertEqual(because[0]["threshold"], "0.75")
+        signal, because = explain_signal(0.22, 0, None, None)
+        self.assertEqual(signal, "pull")
+        self.assertEqual(because[0]["threshold"], "0.35")
+        signal, because = explain_signal(0.5, -400, None, None)
+        self.assertEqual(signal, "pull")
+        self.assertIn("-200", because[0]["threshold"])
+        _signal, because = explain_signal(0.5, 0, 80, 40)
+        self.assertIn("44 $/MWh", because[0]["line"])
         self.assertIsNone(resolve_order(None, 0.5))
         self.assertIsNone(resolve_order({"signal": "auto"}, 0.5))
         self.assertEqual(resolve_order({"signal": "hold"}, 0.9), ("hold", 0.0, "external"))

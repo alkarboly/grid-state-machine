@@ -388,6 +388,15 @@ h2 {
 .group h3 span { letter-spacing: 0; text-transform: none; }
 .group h3 .flag { color: var(--alarm); }
 .note { margin: 7px 0 0; font-size: 11px; }
+.decision { padding: 4px 0 8px; }
+.decision b { font-weight: 550; font-size: 12px; }
+.because { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.because mark {
+  background: #3d3424;
+  color: var(--ink);
+  padding: 0 3px;
+}
+.because.procedure { color: var(--ink); }
 
 .code-key { display: grid; gap: 10px; }
 .code { margin: 0; }

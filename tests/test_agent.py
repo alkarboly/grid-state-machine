@@ -121,6 +121,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(pulled[0]["payload"]["signal"], "pull")
         self.assertEqual(pulled[0]["payload"]["reason"], "price")
         self.assertIn("from profile", pulled[0]["note"])
+        self.assertTrue(any(item["threshold"] == "40 $/MWh" for item in pulled[0]["payload"]["because"]))
         self.assertEqual(audit([site], pulled, _grid(0.1), {}, now), [])
 
         used = expected_kw(site, 3, [{"hour": 3, "load_kwh": 5.0}])
@@ -128,6 +129,7 @@ class AgentTests(unittest.TestCase):
         pushed = audit([site], [], _grid(0.5), {"aus-0099": [{"hour": 3, "load_kwh": 5.0}]}, now)
         self.assertEqual(pushed[0]["payload"]["signal"], "push")
         self.assertIn("from usage", pushed[0]["note"])
+        self.assertTrue(any("1.25" in item["threshold"] for item in pushed[0]["payload"]["because"]))
 
         quiet = _bare(set())
         quiet["agent_dispatch"] = True
@@ -142,6 +144,9 @@ class AgentTests(unittest.TestCase):
         site["agent_dispatch"] = True
         rows = audit([site], [], _grid(0.1), {}, now)
         self.assertEqual([row["kind"] for row in rows], ["scheduled_service"])
+        self.assertIn("±3σ", rows[0]["note"])
+        self.assertIn("Compare the disco", rows[0]["note"])
+        self.assertEqual(rows[0]["payload"]["because"][0]["threshold"], "±3σ")
         self.assertNotIn("price", {row["payload"].get("reason") for row in rows})
 
     def test_hold_replaces_an_open_price_call(self):

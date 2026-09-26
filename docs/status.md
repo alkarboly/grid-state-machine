@@ -18,11 +18,11 @@ Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `in
 
 Feeder lines from homes to substations are gone. The pale ring marks the selected unit. The right panel collapses, and its ledger sums every unit. Inside a city or a substation, **back** sits on the map. Opening a battery draws no line back to its city.
 
-The sim agent runs after each tick's charts. An alarming code gets the registered `steps` (`actor` `sim`) on the next tick. Frequency is left alone. A warning is left alone. `POST /api/agent` arms any chart, or all of them, so the residual is forced to +4 sigma. The same route sets dispatch on one home: push or pull from the simulated (or ERCOT) rate and that home's expected load, using closed usage hours when they exist. The unit view has the triggers and shows the call the agent chose, including a hold. A card in the top left draws 24 hours of ERCOT demand and the price, including a 6-hour forecast. The sim agent reads that same trace when it chooses push or pull.
+The sim agent runs after each tick's charts. An alarming code gets the registered `steps` (`actor` `sim`) on the next tick. Frequency is left alone. A warning is left alone. `POST /api/agent` arms any chart, or all of them, so the residual is forced to +4 sigma. The same route sets dispatch on one home: push or pull from the simulated (or ERCOT) rate and that home's expected load, using closed usage hours when they exist. The unit view has the triggers and shows the call the agent chose, including a hold. A card in the top left draws 24 hours of ERCOT demand and the price, including a 6-hour forecast. The sim agent reads that same trace when it chooses push or pull. Each home keeps a state log of recent ticks, and each control chart draws the last 30 hours. Startup fills both with simulated rows. The header shows the sim time on the right.
 
 ## In the working tree
 
-Every home keeps a state log of recent ticks. The unit view shows it, newest first. Each control chart draws the last 30 hours, one residual per minute, and startup fills that window and the state log with simulated rows. The header shows the sim time on the right. The side panel starts open on the Agent list: decisions from the sim agent and the remote model.
+A decision from the ladder, the sim agent, the remote model, or a user post carries the clause that fired. The sidebar marks the threshold. A maintenance row then quotes the procedure for that code.
 
 ## Not standing yet
 

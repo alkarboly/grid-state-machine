@@ -82,17 +82,76 @@ def day_shape(points: list[dict] | None) -> dict | None:
     return {"demand_mw": round(current, 1), "rank": round(rank, 4), "shape": shape}
 
 
-def choose_unit_signal(rate: float, expected: float, typical: float, shape: dict | None = None) -> str:
-    """Push into a high price, a heavy hour, or the peak of the day. Pull in a trough or ahead of a ramp."""
+def _clause(line: str, threshold: str) -> dict:
+    return {"line": line, "threshold": threshold}
+
+
+def price_call(rate: float, expected: float, typical: float, shape: dict | None = None) -> tuple[str, list[dict]]:
+    """The call, and each clause that fired. `threshold` is the limit to highlight."""
     quiet = expected <= typical
     peak = bool(shape and shape.get("shape") == "peak")
-    if rate >= HIGH_RATE or expected >= typical * HEAVY or peak:
-        return "push"
     trough = bool(shape and shape.get("shape") == "trough")
     ramp = bool(shape and shape.get("shape") == "ramp")
+    rank = float(shape["rank"]) if shape and shape.get("rank") is not None else None
+    heavy = expected >= typical * HEAVY
+    fired: list[dict] = []
+    if rate >= HIGH_RATE or heavy or peak:
+        signal = "push"
+        if rate >= HIGH_RATE:
+            fired.append(_clause(
+                f"price {rate:.0f} $/MWh ≥ {HIGH_RATE:.0f} $/MWh",
+                f"{HIGH_RATE:.0f} $/MWh",
+            ))
+        if heavy:
+            fired.append(_clause(
+                f"expected {expected:.2f} kW ≥ {HEAVY:.2f}× typical {typical:.2f} kW",
+                f"{HEAVY:.2f}×",
+            ))
+        if peak:
+            place = f"rank {rank:.2f} " if rank is not None else ""
+            fired.append(_clause(f"day peak, {place}≥ {PEAK_RANK:.2f}", f"{PEAK_RANK:.2f}"))
+        return signal, fired
     if quiet and (rate <= LOW_RATE or trough or ramp):
-        return "pull"
-    return "hold"
+        signal = "pull"
+        if rate <= LOW_RATE:
+            fired.append(_clause(
+                f"price {rate:.0f} $/MWh ≤ {LOW_RATE:.0f} $/MWh",
+                f"{LOW_RATE:.0f} $/MWh",
+            ))
+        fired.append(_clause(
+            f"expected {expected:.2f} kW ≤ typical {typical:.2f} kW",
+            f"typical {typical:.2f} kW",
+        ))
+        if trough:
+            place = f"rank {rank:.2f} " if rank is not None else ""
+            fired.append(_clause(f"day trough, {place}≤ {TROUGH_RANK:.2f}", f"{TROUGH_RANK:.2f}"))
+        if ramp:
+            fired.append(_clause(f"forecast mean ≥ {RAMP:.2f}× now", f"{RAMP:.2f}×"))
+        return signal, fired
+    fired.append(_clause(
+        f"price {rate:.0f} $/MWh is between {LOW_RATE:.0f} and {HIGH_RATE:.0f} $/MWh",
+        f"{LOW_RATE:.0f} and {HIGH_RATE:.0f}",
+    ))
+    if not heavy:
+        fired.append(_clause(
+            f"expected {expected:.2f} kW is below {HEAVY:.2f}× typical {typical:.2f} kW",
+            f"{HEAVY:.2f}×",
+        ))
+    day = shape.get("shape") if shape else None
+    if day in ("trough", "ramp") and not quiet:
+        fired.append(_clause(
+            f"expected {expected:.2f} kW is above typical {typical:.2f} kW, so a {day} does not pull",
+            f"typical {typical:.2f} kW",
+        ))
+    elif day in (None, "mid"):
+        fired.append(_clause("day is mid, not a peak, trough, or ramp", "peak, trough, or ramp"))
+    return "hold", fired
+
+
+def choose_unit_signal(rate: float, expected: float, typical: float, shape: dict | None = None) -> str:
+    """Push into a high price, a heavy hour, or the peak of the day. Pull in a trough or ahead of a ramp."""
+    signal, _because = price_call(rate, expected, typical, shape)
+    return signal
 
 
 def _open_code(actions: list[dict], site_id: str, chart_id: str, kind: str) -> bool:
@@ -128,11 +187,13 @@ def _price_signals(actions: list[dict], site_id: str) -> set[str]:
     return found
 
 
-def _price_note(rate: float, expected: float, source: str, shape: dict | None) -> str:
-    place = ""
-    if shape and shape.get("shape") not in (None, "mid"):
-        place = f", day {shape['shape']}"
-    return f"Price {rate:.0f} USD/MWh{place}, expected load {expected:.2f} kW from {source}"
+def _price_note(because: list[dict], expected: float, source: str, shape: dict | None) -> str:
+    note = "; ".join(item["line"] for item in because)
+    note += f". Expected {expected:.2f} kW from {source}"
+    shape_name = shape.get("shape") if shape else None
+    if shape_name not in (None, "mid") and shape_name not in note:
+        note += f", day {shape_name}"
+    return note
 
 
 def audit(
@@ -160,11 +221,20 @@ def audit(
                 if kind == "set_signal":
                     payload["signal"] = step["signal"]
                     payload["intensity"] = step.get("intensity", 0)
+                zed = chart.get("z")
+                limit = "±3σ"
+                if zed is None:
+                    because = [_clause(f"alarm beyond {limit}", limit)]
+                    lead = f"Alarm beyond {limit}."
+                else:
+                    because = [_clause(f"z {zed} beyond {limit}", limit)]
+                    lead = f"Alarm beyond {limit} (z {zed})."
+                payload["because"] = because
                 row = new_action(
                     site["id"],
                     kind,
                     now,
-                    note=spec["action"],
+                    note=f"{lead} {spec['action']}",
                     payload=payload,
                     actor="sim",
                 )
@@ -175,13 +245,15 @@ def audit(
             continue
         expected, source = expected_kw(site, now.hour, usage_by_site.get(site["id"]) or [])
         shape = day_shape(grid.get("day"))
-        signal = choose_unit_signal(rate, expected, typical_kw(float(site.get("load_scale") or 1.0)), shape)
+        typical = typical_kw(float(site.get("load_scale") or 1.0))
+        signal, because = price_call(rate, expected, typical, shape)
         site["agent_call"] = {
             "signal": signal,
             "rate": rate,
             "expected_kw": round(expected, 2),
             "source": source,
             "day": shape["shape"] if shape else None,
+            "because": because,
         }
         open_signals = _price_signals(pending, site["id"])
         if signal in open_signals:
@@ -193,8 +265,8 @@ def audit(
             site["id"],
             "set_signal",
             now,
-            note=_price_note(rate, expected, source, shape),
-            payload={"signal": signal, "intensity": level, "reason": "price"},
+            note=_price_note(because, expected, source, shape),
+            payload={"signal": signal, "intensity": level, "reason": "price", "because": because},
             actor="sim",
         )
         created.append(row)

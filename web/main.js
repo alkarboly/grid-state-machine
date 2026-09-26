@@ -620,6 +620,52 @@ function decisionLabel(action) {
   return actionTitle(action);
 }
 
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+}
+
+function markLine(clause) {
+  let line = escapeHtml(clause.line || "");
+  const mark = escapeHtml(clause.threshold || "");
+  if (mark && line.includes(mark)) line = line.replace(mark, `<mark>${mark}</mark>`);
+  return `<p class="because">${line}</p>`;
+}
+
+function clausesFor(action) {
+  const payload = action.payload || {};
+  const stored = payload.because || action.because || [];
+  if (stored.length) return stored;
+  if (payload.chart_id) return [{ line: "alarm beyond ±3σ. Follow the procedure.", threshold: "±3σ" }];
+  if (payload.reason !== "price") return [];
+  const note = action.note || "";
+  const clauses = [];
+  const price = note.match(/Price (\d+)/);
+  if (price) {
+    const rate = Number(price[1]);
+    if (rate >= 70) clauses.push({ line: `price ${rate} $/MWh ≥ 70 $/MWh`, threshold: "70 $/MWh" });
+    else if (rate <= 40) clauses.push({ line: `price ${rate} $/MWh ≤ 40 $/MWh`, threshold: "40 $/MWh" });
+  }
+  if (note.includes("day peak")) clauses.push({ line: "day peak, rank ≥ 0.75", threshold: "0.75" });
+  if (note.includes("day trough")) clauses.push({ line: "day trough, rank ≤ 0.35", threshold: "0.35" });
+  if (note.includes("day ramp")) clauses.push({ line: "forecast mean ≥ 1.08× now", threshold: "1.08×" });
+  return clauses;
+}
+
+function reasonHtml(action) {
+  const because = clausesFor(action);
+  const marked = because.map(markLine).join("");
+  const note = action.note || "";
+  const joined = because.map((clause) => clause.line).filter(Boolean).join("; ");
+  let extra = "";
+  if (note && joined && note.startsWith(joined)) {
+    const rest = note.slice(joined.length).replace(/^[.\s]+/, "");
+    if (rest) extra = `<p class="because">${escapeHtml(rest)}</p>`;
+  } else if (note && !because.some((clause) => clause.line && note.includes(clause.line))) {
+    extra = `<p class="because procedure">${escapeHtml(note)}</p>`;
+  }
+  return marked + extra;
+}
+
 function nowBlock(data) {
   const market = data.market || {};
   const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
@@ -627,26 +673,56 @@ function nowBlock(data) {
   const call = data.dispatch
     ? `${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)} · ${data.dispatch.source}`
     : "—";
+  const because = (data.dispatch && data.dispatch.because) || [];
   return `<div class="stack ledger">
       ${row("price", `${fmt(market.rate_usd_mwh, 1)} $/MWh · ${basis}`)}
       ${row("day", shape)}
       ${row("fleet call", call)}
     </div>
-    <p class="muted note">Push at 70 $/MWh, at 1.25× a typical hour, or on a peak. Pull when this hour is at or below typical and the price is 40 or below, or the day is a trough or a ramp. An alarming code outranks that call. Frequency is left alone.</p>`;
+    ${because.map(markLine).join("")}`;
+}
+
+function decisionEntries(data) {
+  const calls = (data.calls || []).map((call) => ({
+    ts: call.ts || "",
+    site: "fleet",
+    actor: call.who || "rules",
+    title: call.signal || "hold",
+    status: "",
+    because: call.because || [],
+    note: "",
+    payload: {},
+  }));
+  const actions = (data.actions || [])
+    .filter((action) => action.actor === "sim" || action.actor === "llm" || action.actor === "api")
+    .map((action) => ({
+      ts: action.ts || "",
+      site: action.site_id,
+      actor: action.actor,
+      title: decisionLabel(action),
+      status: action.status || "",
+      because: (action.payload || {}).because || [],
+      note: action.note || "",
+      payload: action.payload || {},
+    }));
+  return [...calls, ...actions].sort((a, b) => b.ts.localeCompare(a.ts));
 }
 
 function agentBlock(data) {
-  const actions = (data.actions || []).filter((action) => action.actor === "sim" || action.actor === "llm");
-  const rows = actions.length
-    ? actions
-        .map((action) => {
-          const when = (action.ts || "").slice(11, 16);
-          return `<button type="button" class="unit-row" data-site="${action.site_id}">
-            <span>${action.site_id}</span><em>${when} · ${decisionLabel(action)} · ${action.actor} · ${action.status}</em>
-          </button>`;
+  const entries = decisionEntries(data);
+  const rows = entries.length
+    ? entries
+        .map((entry) => {
+          const when = entry.ts.slice(11, 16);
+          const status = entry.status ? ` · ${entry.status}` : "";
+          const hit = entry.site && entry.site !== "fleet" ? ` data-site="${entry.site}"` : "";
+          return `<div class="decision"${hit}>
+            <div class="unit-row"><span>${entry.site}</span><em>${when} · ${entry.title} · ${entry.actor}${status}</em></div>
+            ${reasonHtml(entry)}
+          </div>`;
         })
         .join("")
-    : `<p class="muted">No agent decisions yet. An alarming code posts its step. A home set to dispatch gets push or pull from the price and its expected load.</p>`;
+    : `<p class="muted">No decisions yet. The ladder, an alarming code, a price call, and a posted action each leave the clause that fired.</p>`;
   return `<div class="roster">${rows}</div>`;
 }
 
@@ -723,10 +799,10 @@ function renderPanel(data) {
         .join("")
     : `<p class="muted">Every chart in this view is inside its limits.</p>`;
 
-  const actionCount = (data.actions || []).length;
+  const actionCount = decisionEntries(data).length;
   panelBody.innerHTML = `
     ${fold("now", "Now", nowBlock(data))}
-    ${fold("agent", `Agent${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, agentBlock(data))}
+    ${fold("agent", `Decisions${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, agentBlock(data))}
     ${fold(
       "attention",
       `Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
@@ -938,9 +1014,6 @@ function agentControls(site) {
   }).join("");
   const allOn = (site.charts || []).length > 0 && (site.charts || []).every((chart) => armed.includes(chart.chart_id));
   const dispatchOn = !!site.dispatch;
-  const price = (site.actions || []).find(
-    (row) => (row.payload || {}).reason === "price" && (row.status === "pending" || row.status === "active"),
-  );
   const call = site.agent_call;
   const place = call && call.day && call.day !== "mid" ? ` · ${call.day}` : "";
   const market = payload && payload.market;
@@ -950,9 +1023,14 @@ function agentControls(site) {
   const context = market
     ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
     : "";
+  const openActions = (site.actions || []).filter((row) => row.status === "pending" || row.status === "active");
+  const covered = openActions.some((row) => ((row.payload || {}).because || []).length);
+  const callMarks = call && !covered ? (call.because || []).map(markLine).join("") : "";
   const callLine = call
-    ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>`
+    ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>
+       ${callMarks}`
     : "";
+  const openReasons = openActions.map((row) => `<div class="decision"><b>${decisionLabel(row)}</b>${reasonHtml(row)}</div>`).join("");
   return `<div class="arms">
       ${buttons}
       <button type="button" class="arm${allOn ? " on" : ""}" data-arm="all" data-on="${allOn ? "1" : "0"}">${allOn ? "clear all codes" : "trigger all codes"}</button>
@@ -960,7 +1038,7 @@ function agentControls(site) {
     </div>
     ${context}
     ${callLine}
-    ${price ? `<p class="muted note">${price.note}</p>` : ""}`;
+    ${openReasons}`;
 }
 
 async function postAgent(node) {
@@ -1097,7 +1175,7 @@ panelToggle.addEventListener("click", () => {
   panelOpen = !panelOpen;
   document.querySelector("main").classList.toggle("collapsed", !panelOpen);
   panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
-  panelToggle.textContent = panelOpen ? "hide" : "agent";
+  panelToggle.textContent = panelOpen ? "hide" : "decisions";
 });
 
 panel.addEventListener("toggle", (event) => {

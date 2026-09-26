@@ -135,7 +135,7 @@ One row per home per clock hour, written when that hour closes. `ts` is the firs
 
 ### `unit_actions`
 
-One row per action. `id` is a hex string the writer chooses, or one the bot generates. `kind` is `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`, or `return_online`. `status` is `pending`, `active`, `done`, or `cancelled`. `actor` is `llm`, `api`, or `sim`. `payload` holds `signal` and `intensity` for a set-signal, or `addon_id` for an add-on change. A sim-agent code response also holds `chart_id`. A price call holds `reason` `price`. `starts_at` and `ends_at` bound a service or a signal override.
+One row per action. `id` is a hex string the writer chooses, or one the bot generates. `kind` is `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`, or `return_online`. `status` is `pending`, `active`, `done`, or `cancelled`. `actor` is `llm`, `api`, or `sim`. `payload` holds `signal` and `intensity` for a set-signal, or `addon_id` for an add-on change. A sim-agent code response also holds `chart_id`. A price call holds `reason` `price`. Either may hold `because`, a list of `{line, threshold}` for the clause that fired. `starts_at` and `ends_at` bound a service or a signal override.
 
 ### `addon_catalog` and `site_addons`
 

@@ -2,6 +2,70 @@
 
 from __future__ import annotations
 
+# The ladder in simulation.md, in the same order.
+LMP_PUSH_FLOOR = 40.0
+LMP_PUSH_RATIO = 1.1
+LMP_PULL_CAP = 25.0
+LMP_PULL_RATIO = 0.9
+DEMAND_PUSH = 0.75
+DEMAND_PULL = 0.35
+STORAGE_PUSH = 200.0
+STORAGE_PULL = -200.0
+
+
+def explain_signal(
+    demand_percentile: float,
+    storage_gen_mw: float | None,
+    lmp: float | None,
+    lmp_mean: float | None,
+) -> tuple[str, list[dict]]:
+    """The call, and the clause that fired. `threshold` is the limit to highlight."""
+    if lmp is not None and lmp_mean is not None:
+        push_at = max(LMP_PUSH_FLOOR, lmp_mean * LMP_PUSH_RATIO)
+        if lmp >= push_at:
+            limit = f"{push_at:.0f} $/MWh"
+            line = (
+                f"load-zone price {lmp:.0f} $/MWh ≥ {limit}"
+                f" (greater of {LMP_PUSH_FLOOR:.0f} and {LMP_PUSH_RATIO:.1f}× the mean {lmp_mean:.0f})"
+            )
+            return "push", [{"line": line, "threshold": limit}]
+        pull_at = min(LMP_PULL_CAP, lmp_mean * LMP_PULL_RATIO)
+        if lmp <= pull_at:
+            limit = f"{pull_at:.0f} $/MWh"
+            line = (
+                f"load-zone price {lmp:.0f} $/MWh ≤ {limit}"
+                f" (lesser of {LMP_PULL_CAP:.0f} and {LMP_PULL_RATIO:.1f}× the mean {lmp_mean:.0f})"
+            )
+            return "pull", [{"line": line, "threshold": limit}]
+    if demand_percentile >= DEMAND_PUSH:
+        return "push", [{
+            "line": f"demand percentile {demand_percentile:.2f} ≥ {DEMAND_PUSH:.2f}",
+            "threshold": f"{DEMAND_PUSH:.2f}",
+        }]
+    if demand_percentile <= DEMAND_PULL:
+        return "pull", [{
+            "line": f"demand percentile {demand_percentile:.2f} ≤ {DEMAND_PULL:.2f}",
+            "threshold": f"{DEMAND_PULL:.2f}",
+        }]
+    storage = storage_gen_mw or 0.0
+    if storage >= STORAGE_PUSH:
+        return "push", [{
+            "line": f"storage {storage:.0f} MW ≥ {STORAGE_PUSH:.0f} MW",
+            "threshold": f"{STORAGE_PUSH:.0f} MW",
+        }]
+    if storage <= STORAGE_PULL:
+        return "pull", [{
+            "line": f"storage {storage:.0f} MW ≤ {STORAGE_PULL:.0f} MW",
+            "threshold": f"{STORAGE_PULL:.0f} MW",
+        }]
+    return "hold", [{
+        "line": (
+            f"demand percentile {demand_percentile:.2f} is between {DEMAND_PULL:.2f} and {DEMAND_PUSH:.2f},"
+            f" and storage {storage:.0f} MW is inside ±{STORAGE_PUSH:.0f} MW"
+        ),
+        "threshold": f"{DEMAND_PULL:.2f} and {DEMAND_PUSH:.2f}",
+    }]
+
 
 def choose_signal(
     demand_percentile: float,
@@ -9,21 +73,8 @@ def choose_signal(
     lmp: float | None,
     lmp_mean: float | None,
 ) -> str:
-    if lmp is not None and lmp_mean is not None:
-        if lmp >= max(40.0, lmp_mean * 1.1):
-            return "push"
-        if lmp <= min(25.0, lmp_mean * 0.9):
-            return "pull"
-    if demand_percentile >= 0.75:
-        return "push"
-    if demand_percentile <= 0.35:
-        return "pull"
-    storage = storage_gen_mw or 0.0
-    if storage >= 200:
-        return "push"
-    if storage <= -200:
-        return "pull"
-    return "hold"
+    signal, _because = explain_signal(demand_percentile, storage_gen_mw, lmp, lmp_mean)
+    return signal
 
 
 def intensity(signal: str, demand_percentile: float) -> float:

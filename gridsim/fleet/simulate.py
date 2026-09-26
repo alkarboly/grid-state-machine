@@ -13,7 +13,7 @@ from pathlib import Path
 from gridsim import config
 from gridsim.fleet.charts import CHART_POINTS, CHART_STEP_SECONDS, CHARTS, HISTORY, evaluate
 from gridsim.fleet.actions import addon_power
-from gridsim.fleet.policy import choose_signal, intensity, resolve_order
+from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order
 from gridsim.timeutil import iso
 
 # Late-summer central-air hour means, kW. Daily sum is about 54 kWh before load_scale.
@@ -891,14 +891,19 @@ def tick_sites(
     if note is not None:
         if fleet_call:
             applied_signal, applied_level, applied_source = fleet_call
+            because = [{
+                "line": f"external order {applied_signal}. The ladder is not running.",
+                "threshold": "external order",
+            }]
         else:
-            applied_signal = choose_signal(percentile, storage, None, None)
+            applied_signal, because = explain_signal(percentile, storage, None, None)
             applied_level = intensity(applied_signal, percentile)
             applied_source = "rules"
         note["frequency_hz"] = round(frequency_hz, 4)
         note["signal"] = applied_signal
         note["intensity"] = round(applied_level, 3)
         note["source"] = applied_source
+        note["because"] = because
         note["zones"] = zone_signals
         note["usage"] = closed_usage
     return updated, logs, observations, points

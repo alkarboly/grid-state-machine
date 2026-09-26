@@ -240,7 +240,8 @@ class Fleet:
         self.fleet = rollup([], iso(now_central()))
         self.grid = _neutral_grid()
         self._pending: dict | None = None
-        self.applied = {"signal": "hold", "intensity": 0.0, "source": "rules", "zones": {}}
+        self.applied = {"signal": "hold", "intensity": 0.0, "source": "rules", "zones": {}, "because": []}
+        self.calls: list[dict] = []
         self.snapshot: dict | None = None
         self.market: dict | None = None
         self.actions: list[dict] = []
@@ -502,7 +503,9 @@ class Fleet:
                 "intensity": note["intensity"],
                 "source": note["source"],
                 "zones": note["zones"],
+                "because": note.get("because") or [],
             }
+            self._remember_call(now)
             row = _snapshot(self.grid, self.fleet, self.applied, note["frequency_hz"])
             self.snapshot = row
             self._last_tick = now
@@ -598,6 +601,23 @@ class Fleet:
         closed = [action for action in self.actions if action.get("status") not in OPEN]
         self.actions = closed[-160:] + open_rows
 
+    def _remember_call(self, now) -> None:
+        """Keep a fleet decision when the call or the clause that fired changes."""
+        because = self.applied.get("because") or []
+        signature = (self.applied.get("signal"), self.applied.get("source"), tuple(item.get("line") for item in because))
+        if self.calls and self.calls[-1].get("signature") == signature:
+            return
+        self.calls.append(
+            {
+                "ts": iso(now),
+                "who": self.applied.get("source") or "rules",
+                "signal": self.applied.get("signal") or "hold",
+                "because": because,
+                "signature": signature,
+            }
+        )
+        del self.calls[:-24]
+
     def scene(self) -> dict:
         """Map payload. One row per battery, small enough to poll at fleet scale."""
         with self._lock:
@@ -637,10 +657,15 @@ class Fleet:
                     "signal": self.applied["signal"],
                     "intensity": self.applied["intensity"],
                     "source": self.applied["source"],
+                    "because": self.applied.get("because") or [],
                 },
+                "calls": [
+                    {key: value for key, value in row.items() if key != "signature"}
+                    for row in reversed(self.calls[-12:])
+                ],
                 "market": self.market,
                 "actions": sorted(
-                    (row for row in self.actions if row.get("actor") in ("sim", "llm")),
+                    (row for row in self.actions if row.get("actor") in ("sim", "llm", "api")),
                     key=lambda row: row.get("ts") or "",
                     reverse=True,
                 )[:40],

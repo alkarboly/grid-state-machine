@@ -71,6 +71,8 @@ The ladder, used whenever no order is set, is evaluated in this order:
 
 Steps 1 to 6 run per home, so two load zones can be given different calls when their prices disagree. Intensity is 0 on hold, and otherwise at least 0.35, rising as the percentile moves further into the push or pull region.
 
+The fleet call keeps the clause that fired as `because`: `{line, threshold}`. `line` is the comparison, and `threshold` is the limit in that line (0.75, 0.35, 200 MW, −200 MW, or the load-zone price bar). `GET /api/scene` puts the current clause on `dispatch.because`. `calls` gains a row when the signal or that clause changes, so the sidebar can show why the fleet is pushing or pulling. An external order's clause is that the ladder is not running.
+
 ### Who actually answers
 
 The signal is a call, not a command, and two per-unit values decide whether it lands:
@@ -107,9 +109,9 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 
 After the charts for a tick are written, the process audits them and appends `unit_actions` with `actor` `sim`. The following tick applies those rows. This is separate from `LLM_URL`, which stays outside the tick.
 
-An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. A code response outranks the price call below: while one is open, that home is not given a price signal.
+An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. The note starts with the alarm past ±3σ, then the procedure for that code. `payload.because` is `{line, threshold}` with threshold `±3σ`. A code response outranks the price call below: while one is open, that home is not given a price signal.
 
-`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home. `GET /api/agent` lists homes that are armed or set to dispatch. `GET /api/site/{id}` includes `armed`, `dispatch`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, and `day`). The unit view has a trigger for each code on the open box, plus trigger-all and the dispatch switch. Those flags live in the process. A restart clears them.
+`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home. `GET /api/agent` lists homes that are armed or set to dispatch. `GET /api/site/{id}` includes `armed`, `dispatch`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view has a trigger for each code on the open box, plus trigger-all and the dispatch switch. Those flags live in the process. A restart clears them.
 
 On a home with `dispatch` set, and with no open code response, the agent reads the [day trace](ercot-sources.md) and posts `set_signal`:
 
@@ -117,7 +119,7 @@ On a home with `dispatch` set, and with no open code response, the agent reads t
 - `pull` when this hour's expected load is at or below a typical hour and any of these hold: the rate is at most 40 $/MWh, demand is in the trough (at or below the 35th percentile), or the forecast is a ramp (its mean is at least 8% above the newest actual, and the hour is not already a peak or a trough)
 - `hold` only to replace an open price call that no longer matches. The choice is still stored on the home as `agent_call` and shown in the unit view. `agent_call.day` is `peak`, `trough`, `ramp`, `mid`, or null when the trace is empty.
 
-Expected load is the mean of that home's closed `usage_hours` for this hour of the day. With no closed hour yet, it is `HOUR_MEAN_KW[hour] × load_scale`. A typical hour is the mean of that profile times `load_scale`. The rate is [the market rate](#market-rate). Intensity is 1 on push and pull, so the call reaches the home, and 0 on hold. `payload.reason` is `price`. The note names the rate, the day shape when it is a peak, a trough, or a ramp, the expected kilowatts, and `usage` or `profile`.
+Expected load is the mean of that home's closed `usage_hours` for this hour of the day. With no closed hour yet, it is `HOUR_MEAN_KW[hour] × load_scale`. A typical hour is the mean of that profile times `load_scale`. The rate is [the market rate](#market-rate). Intensity is 1 on push and pull, so the call reaches the home, and 0 on hold. `payload.reason` is `price`. `payload.because` lists each clause that fired, `{line, threshold}`, so a push names 70 $/MWh, 1.25× a typical hour, or peak rank 0.75, and a pull names 40 $/MWh, a quiet hour at or below typical, trough rank 0.35, or a ramp of 1.08×. The note repeats those lines, then the expected kilowatts, `usage` or `profile`, and the day shape when it is a peak, a trough, or a ramp.
 
 ### Add-ons
 

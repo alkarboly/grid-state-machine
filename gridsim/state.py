@@ -697,6 +697,7 @@ class Fleet:
                 metrics = site.get("metrics") or {}
                 base = metrics.get("base") or {}
                 care = metrics.get("maintenance") or {}
+                grid = metrics.get("grid") or {}
                 flagged = care.get("alarming") or []
                 row = {
                     "id": site["id"],
@@ -705,6 +706,8 @@ class Fleet:
                     "lat": site["lat"],
                     "lon": site["lon"],
                     "state": site.get("state", "hold"),
+                    "signal": site.get("signal", grid.get("signal", "hold")),
+                    "source": grid.get("source", "rules"),
                     "soc_pct": base.get("soc_pct"),
                     "alarm": bool(flagged),
                     "offline": bool(site.get("offline")),

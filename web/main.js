@@ -117,6 +117,7 @@ function labelSprite(text, options = {}) {
   const padX = options.padX ?? 28;
   const padY = options.padY ?? 14;
   const lineHeight = options.lineHeight || 1.04;
+  const color = options.color || "#8d887f";
   const element = document.createElement("canvas");
   const ctx = element.getContext("2d");
   const font = `${weight} ${size}px 'Segoe UI', sans-serif`;
@@ -127,7 +128,32 @@ function labelSprite(text, options = {}) {
   element.width = width;
   element.height = height;
   ctx.font = font;
-  ctx.fillStyle = "#8d887f";
+  if (options.backdrop) {
+    const backdrop = typeof options.backdrop === "object" ? options.backdrop : {};
+    const radius = backdrop.radius ?? 12;
+    const line = backdrop.lineWidth ?? 2;
+    const left = line * 0.5;
+    const top = line * 0.5;
+    const right = width - line * 0.5;
+    const bottom = height - line * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(left + radius, top);
+    ctx.lineTo(right - radius, top);
+    ctx.quadraticCurveTo(right, top, right, top + radius);
+    ctx.lineTo(right, bottom - radius);
+    ctx.quadraticCurveTo(right, bottom, right - radius, bottom);
+    ctx.lineTo(left + radius, bottom);
+    ctx.quadraticCurveTo(left, bottom, left, bottom - radius);
+    ctx.lineTo(left, top + radius);
+    ctx.quadraticCurveTo(left, top, left + radius, top);
+    ctx.closePath();
+    ctx.fillStyle = backdrop.fill || "rgba(14,16,20,0.9)";
+    ctx.fill();
+    ctx.lineWidth = line;
+    ctx.strokeStyle = backdrop.stroke || "rgba(122,132,149,0.85)";
+    ctx.stroke();
+  }
+  ctx.fillStyle = color;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const step = size * lineHeight;
@@ -278,11 +304,21 @@ function ensureHub(metro, share) {
   return hub;
 }
 
-function modeOf(item) {
+function flowState(item, preferAction = false, forcedSignal = null) {
+  if (!item) return "hold";
+  if (forcedSignal === "push" || forcedSignal === "pull" || forcedSignal === "hold") return forcedSignal;
+  const signal = item.signal;
+  if (preferAction && item.source === "action" && (signal === "push" || signal === "pull" || signal === "hold")) {
+    return signal;
+  }
+  return item.state || signal || "hold";
+}
+
+function modeOf(item, preferAction = false, forcedSignal = null) {
   if (!item) return "hold";
   const availability = item.metrics?.base?.availability;
   if (item.offline || availability === "offline") return "offline";
-  return item.alarm ? "alarm" : item.state || "hold";
+  return item.alarm ? "alarm" : flowState(item, preferAction, forcedSignal);
 }
 
 function viewDistance() {
@@ -308,8 +344,19 @@ function stackYard(data) {
     metroStack = null;
     return null;
   }
+  const overrideRows = (data.actions || [])
+    .filter((action) => {
+      if (action.kind !== "set_signal") return false;
+      if (action.status !== "active" && action.status !== "pending") return false;
+      const signal = action.payload?.signal;
+      return signal === "push" || signal === "pull" || signal === "hold";
+    })
+    .sort((a, b) => (b.ts || "").localeCompare(a.ts || "") || (b.id || "").localeCompare(a.id || ""));
   const stamp = (data.fleet || {}).ts || "";
-  const signature = `${focusedMetro}|${stamp}|${data.sites.length}`;
+  const overrideStamp = overrideRows
+    .map((action) => `${action.site_id}:${action.status}:${action.payload?.signal || ""}:${action.ts || ""}`)
+    .join("|");
+  const signature = `${focusedMetro}|${stamp}|${data.sites.length}|${overrideStamp}`;
   if (signature === metroStackSig && metroStack) return metroStack;
   const stations = (data.stations || [])
     .filter((station) => station.metro === focusedMetro)
@@ -337,6 +384,12 @@ function stackYard(data) {
     stationRows.set(station.id, { row, delay });
   });
   const lanes = new Map(stations.map((station) => [station.id, { pull: [], push: [], hold: [] }]));
+  const overrides = new Map();
+  for (const action of overrideRows) {
+    const signal = action.payload?.signal;
+    const siteId = action.site_id;
+    if (siteId && !overrides.has(siteId)) overrides.set(siteId, signal);
+  }
   const targetX = new Float32Array(data.sites.length);
   const targetZ = new Float32Array(data.sites.length);
   const visible = new Uint8Array(data.sites.length);
@@ -346,8 +399,9 @@ function stackYard(data) {
     const bucket = lanes.get(site.station);
     if (!bucket) continue;
     visible[index] = 1;
-    if (site.state === "push") bucket.push.push(index);
-    else if (site.state === "pull") bucket.pull.push(index);
+    const flow = flowState(site, true, overrides.get(site.id) || null);
+    if (flow === "push") bucket.push.push(index);
+    else if (flow === "pull") bucket.pull.push(index);
     else bucket.hold.push(index);
   }
   function packLane(indices, base, side, rows) {
@@ -378,7 +432,7 @@ function stackYard(data) {
     packLane(bucket.push, row.row, 1, STACK.laneRows);
     packLane(bucket.hold, row.row, 0, STACK.holdRows);
   }
-  metroStack = { stationRows, targetX, targetZ, visible };
+  metroStack = { stationRows, targetX, targetZ, visible, overrides };
   metroStackSig = signature;
   return metroStack;
 }
@@ -430,7 +484,9 @@ function renderUnits(data) {
     let x = point.x;
     let y = point.y;
     let z = point.z;
-    TINT.setHex(COLOR[modeOf(site)]);
+    const forcedSignal = yard ? (yard.overrides?.get(site.id) || null) : null;
+    const flow = flowState(site, Boolean(yard), forcedSignal);
+    TINT.setHex(COLOR[modeOf(site, Boolean(yard), forcedSignal)]);
     if (yard) {
       const row = yard.stationRows.get(site.station);
       const delay = row ? row.delay : 0;
@@ -441,9 +497,10 @@ function renderUnits(data) {
       z = point.z + (targetZ - point.z) * unfold;
       if (unfold > 0.75) {
         const wave = now + index * 0.61;
-        if (site.state === "pull" || site.state === "push") {
-          const pulse = Math.abs(Math.sin(wave)) * 0.0022 * unfold;
-          x += site.state === "push" ? pulse : -pulse;
+        if (flow === "pull" || flow === "push") {
+          const pulseScale = forcedSignal ? 0.0052 : 0.0022;
+          const pulse = Math.abs(Math.sin(wave)) * pulseScale * unfold;
+          x += flow === "push" ? pulse : -pulse;
         } else {
           z += Math.sin(wave * 0.65) * STACK.holdDrift * unfold;
           y += (0.0004 + Math.abs(Math.sin(wave * 0.5)) * STACK.holdLift) * unfold;
@@ -506,9 +563,16 @@ function ensureStation(station) {
   group.add(mark);
   const label = labelSprite(stackStationName(station.name), {
     size: 38,
-    padX: 20,
-    padY: 12,
+    padX: 24,
+    padY: 14,
     lineHeight: 1.14,
+    color: "#e7e1d6",
+    backdrop: {
+      fill: "rgba(14,16,20,0.92)",
+      stroke: "rgba(126,136,152,0.9)",
+      radius: 12,
+      lineWidth: 2,
+    },
   });
   label.center.set(0.5, 1);
   label.position.set(0, 0.04, 0.045);
@@ -549,9 +613,9 @@ function renderStations(data) {
       entry.mark.scale.set(size, size, 1);
       entry.mark.visible = false;
       entry.mark.material.color.setHex(0xe4e8ef);
-      entry.label.center.set(0, 0.5);
-      entry.label.position.set(0.018, 0.026, 0);
-      fitLabel(entry.label, Math.min(0.094, 0.022 + dist * 0.01));
+      entry.label.center.set(1, 0.5);
+      entry.label.position.set(-0.048, 0.026, 0);
+      fitLabel(entry.label, Math.min(0.11, 0.032 + dist * 0.011));
       entry.label.visible = labelsOn && unfold > 0.5;
     }
     return;
@@ -659,7 +723,7 @@ function renderDay(data) {
   }
   const demand = spark(points, "demand_mw");
   const price = spark(points, "rate_usd_mwh");
-  const basis = latest.rate_basis === "ercot" ? `<span class="ercot">ERCOT</span>` : "";
+  const basis = latest.rate_basis === "ercot" ? "" : `<span class="ercot">simulated</span>`;
   const line = (drawn, tone) => `<svg class="day-svg" viewBox="0 0 ${drawn.width} ${drawn.height}" aria-hidden="true">
       ${drawn.nowX === null ? "" : `<line class="day-now" x1="${drawn.nowX.toFixed(1)}" y1="0" x2="${drawn.nowX.toFixed(1)}" y2="${drawn.height}" />`}
       <path class="${tone}" d="${drawn.actual}" />
@@ -817,7 +881,7 @@ function markLine(clause) {
 
 function nowBlock(data) {
   const market = data.market || {};
-  const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+  const basis = market.rate_basis === "ercot" ? "live" : "simulated";
   const shape = data.shape && data.shape.shape ? data.shape.shape : "—";
   const call = data.dispatch
     ? `${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)} · ${data.dispatch.source}`
@@ -1406,7 +1470,7 @@ function simControls(site) {
   if (component === "grid") {
     const market = payload && payload.market;
     const shape = payload && payload.shape;
-    const basis = market && market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+    const basis = market && market.rate_basis === "ercot" ? "live" : "simulated";
     const day = shape && shape.shape ? ` · ${shape.shape}` : "";
     const context = market
       ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
@@ -2131,7 +2195,7 @@ function stageView(data) {
       key: `station:${station.id}`,
       kicker: "service area",
       title: station.name,
-      sub: `${metro ? metro.name : "ERCOT"} · ${fmt(station.units)} homes`,
+      sub: `${metro ? metro.name : "Texas"} · ${fmt(station.units)} homes`,
       sites: fleetSites.filter((site) => site.station === station.id),
     };
   }
@@ -2151,7 +2215,7 @@ function stageView(data) {
     key: "state:ercot",
     kicker: "state",
     title: "Texas",
-    sub: `ERCOT · ${fmt(fleetSites.length)} homes`,
+    sub: `Texas · ${fmt(fleetSites.length)} homes`,
     sites: fleetSites,
   };
 }

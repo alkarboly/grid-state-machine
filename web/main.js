@@ -8,11 +8,11 @@ function api(path) {
 }
 
 const COLOR = {
-  pull: 0x4c9be8,
-  push: 0xf0a03a,
-  hold: 0x9dbe92,
-  alarm: 0xe15b4c,
-  offline: 0x8d8794,
+  pull: 0x35b6ff,
+  push: 0xff8c34,
+  hold: 0x7ed5a1,
+  alarm: 0xff5f73,
+  offline: 0x8f95a4,
   hub: 0x7b7568,
   land: 0x181a20,
   border: 0x515762,
@@ -71,6 +71,17 @@ let fillHold = false;
 let cityStarted = 0;
 let cityT = 1;
 let cityHold = false;
+let metroStackSig = "";
+let metroStack = null;
+
+const STACK = {
+  laneOffset: 0.028,
+  laneStep: 0.011,
+  holdStep: 0.007,
+  rowStep: 0.0064,
+  laneRows: 8,
+  holdRows: 6,
+};
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -273,10 +284,91 @@ function arcCurve(from, to) {
 
 const TINT = new THREE.Color();
 
-function stationSpread(stations) {
+function stackYard(data) {
+  if (!focusedMetro || focusedStation) {
+    metroStackSig = "";
+    metroStack = null;
+    return null;
+  }
+  const stamp = (data.fleet || {}).ts || "";
+  const signature = `${focusedMetro}|${stamp}|${data.sites.length}`;
+  if (signature === metroStackSig && metroStack) return metroStack;
+  const stations = (data.stations || [])
+    .filter((station) => station.metro === focusedMetro)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!stations.length) {
+    metroStackSig = signature;
+    metroStack = null;
+    return null;
+  }
+  const metro = (data.metros || []).find((item) => item.id === focusedMetro);
+  const center = metro
+    ? project(metro.lat, metro.lon, NODE_Y)
+    : stations.reduce((sum, station) => sum.add(project(station.lat, station.lon, NODE_Y)), new THREE.Vector3())
+      .multiplyScalar(1 / stations.length);
+  const rowGap = Math.max(0.011, Math.min(0.037, 0.5 / Math.max(stations.length, 1)));
+  const span = rowGap * Math.max(stations.length - 1, 0);
+  const stationRows = new Map();
+  stations.forEach((station, index) => {
+    const row = new THREE.Vector3(
+      center.x,
+      NODE_Y,
+      center.z + (index * rowGap - span * 0.5),
+    );
+    const delay = (index / Math.max(stations.length, 1)) * 0.56;
+    stationRows.set(station.id, { row, delay });
+  });
+  const lanes = new Map(stations.map((station) => [station.id, { pull: [], push: [], hold: [] }]));
+  const targetX = new Float32Array(data.sites.length);
+  const targetZ = new Float32Array(data.sites.length);
+  const visible = new Uint8Array(data.sites.length);
+  for (let index = 0; index < data.sites.length; index += 1) {
+    const site = data.sites[index];
+    if (site.metro !== focusedMetro) continue;
+    const bucket = lanes.get(site.station);
+    if (!bucket) continue;
+    visible[index] = 1;
+    if (site.state === "push") bucket.push.push(index);
+    else if (site.state === "pull") bucket.pull.push(index);
+    else bucket.hold.push(index);
+  }
+  function packLane(indices, base, side, rows) {
+    for (let spot = 0; spot < indices.length; spot += 1) {
+      const unit = indices[spot];
+      const col = Math.floor(spot / rows);
+      const row = spot % rows;
+      const rowsHere = Math.min(rows, indices.length - col * rows);
+      const rowOffset = (row - (rowsHere - 1) * 0.5) * STACK.rowStep;
+      let x = base.x;
+      if (side) x += side * (STACK.laneOffset + col * STACK.laneStep);
+      else if (col > 0) {
+        const ring = Math.ceil(col / 2);
+        const dir = col % 2 ? -1 : 1;
+        x += dir * ring * STACK.holdStep;
+      }
+      targetX[unit] = x;
+      targetZ[unit] = base.z + rowOffset;
+    }
+  }
+  for (const [stationId, bucket] of lanes.entries()) {
+    const row = stationRows.get(stationId);
+    if (!row) continue;
+    bucket.pull.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
+    bucket.push.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
+    bucket.hold.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
+    packLane(bucket.pull, row.row, -1, STACK.laneRows);
+    packLane(bucket.push, row.row, 1, STACK.laneRows);
+    packLane(bucket.hold, row.row, 0, STACK.holdRows);
+  }
+  metroStack = { stationRows, targetX, targetZ, visible };
+  metroStackSig = signature;
+  return metroStack;
+}
+
+function stationSpread(data) {
   const spread = new Map();
-  if (!focusedMetro || focusedStation) return spread;
-  const group = (stations || []).filter((station) => station.metro === focusedMetro);
+  if (!focusedMetro || focusedStation || stackYard(data)) return spread;
+  const group = (data.stations || []).filter((station) => station.metro === focusedMetro);
   group.forEach((station, index) => {
     const delay = (index / Math.max(group.length, 1)) * 0.55;
     spread.set(station.id, {
@@ -290,6 +382,12 @@ function stationSpread(stations) {
 function stationOrigin(stationId, data, centers) {
   let origin = centers.get(stationId);
   if (origin) return origin;
+  const yard = stackYard(data);
+  const row = yard?.stationRows.get(stationId);
+  if (row) {
+    centers.set(stationId, row.row);
+    return row.row;
+  }
   const station = (data.stations || []).find((item) => item.id === stationId);
   origin = station ? project(station.lat, station.lon, NODE_Y) : null;
   if (origin) centers.set(stationId, origin);
@@ -299,24 +397,34 @@ function stationOrigin(stationId, data, centers) {
 function renderUnits(data) {
   const positions = particles.geometry.attributes.position;
   const colors = particles.geometry.attributes.color;
-  const spread = stationSpread(data.stations);
+  const yard = stackYard(data);
+  const spread = stationSpread(data);
   const centers = new Map();
+  const now = performance.now() * 0.0043;
   shown.fill(0);
   let drawn = 0;
   let marked = false;
   for (let index = 0; index < data.sites.length; index += 1) {
     const site = data.sites[index];
     if (focusedStation && site.station !== focusedStation) continue;
+    if (yard && !yard.visible[index]) continue;
     const point = project(site.lat, site.lon, NODE_Y);
     let x = point.x;
     let y = point.y;
     let z = point.z;
     TINT.setHex(COLOR[modeOf(site)]);
-    const opening = spread.get(site.station);
-    if (opening && site.metro === focusedMetro && opening.homes < 1) {
-      const origin = stationOrigin(site.station, data, centers) || point;
-      x = origin.x + (point.x - origin.x) * opening.homes;
-      z = origin.z + (point.z - origin.z) * opening.homes;
+    if (yard) {
+      const row = yard.stationRows.get(site.station);
+      const delay = row ? row.delay : 0;
+      const unfold = cityT >= 1 ? 1 : easeOut((cityT - delay) / 0.46);
+      const targetX = yard.targetX[index];
+      const targetZ = yard.targetZ[index];
+      x = point.x + (targetX - point.x) * unfold;
+      z = point.z + (targetZ - point.z) * unfold;
+      if (unfold > 0.75 && (site.state === "pull" || site.state === "push")) {
+        const pulse = Math.abs(Math.sin(now + index * 0.61)) * 0.0022 * unfold;
+        x += site.state === "push" ? pulse : -pulse;
+      }
     } else if (focusedStation) {
       const delay = (drawn % 20) / 20 * 0.28;
       const local = easeOut((stageT - delay) / 0.72);
@@ -326,6 +434,13 @@ function renderUnits(data) {
       const origin = stationOrigin(site.station, data, centers) || point;
       x = origin.x + (point.x - origin.x) * sx;
       z = origin.z + (point.z - origin.z) * sz;
+    } else {
+      const opening = spread.get(site.station);
+      if (opening && site.metro === focusedMetro && opening.homes < 1) {
+        const origin = stationOrigin(site.station, data, centers) || point;
+        x = origin.x + (point.x - origin.x) * opening.homes;
+        z = origin.z + (point.z - origin.z) * opening.homes;
+      }
     }
     placed[index * 3] = x;
     placed[index * 3 + 1] = y;
@@ -381,14 +496,43 @@ function ensureStation(station) {
 // Substation diamonds take over once the camera is inside a city. The metro
 // hub is the state-scale mark; up close it sits on empty downtown.
 function renderStations(data) {
+  const yard = stackYard(data);
+  if (yard) {
+    for (const hub of hubs.values()) hub.group.visible = false;
+    const dist = viewDistance();
+    const labelsOn = dist < 6 || cityT > 0.78;
+    for (const station of data.stations || []) {
+      const entry = ensureStation(station);
+      const row = yard.stationRows.get(station.id);
+      if (!row || station.metro !== focusedMetro) {
+        entry.group.visible = false;
+        continue;
+      }
+      const unfold = cityT >= 1 ? 1 : easeOut((cityT - row.delay) / 0.46);
+      const geo = project(station.lat, station.lon, 0.025);
+      entry.group.position.set(
+        geo.x + (row.row.x - geo.x) * unfold,
+        0.025,
+        geo.z + (row.row.z - geo.z) * unfold,
+      );
+      entry.group.visible = unfold > 0.08;
+      const size = (0.009 + Math.min(0.007, station.units / 16000)) * unfold;
+      entry.mark.scale.set(size, size, 1);
+      entry.mark.material.color.setHex(0xe4e8ef);
+      fitLabel(entry.label, Math.min(0.095, 0.02 + dist * 0.01));
+      entry.label.visible = labelsOn && unfold > 0.62;
+    }
+    return;
+  }
   const dist = viewDistance();
   const show = dist < 8 || Boolean(focusedStation);
-  const spread = stationSpread(data.stations);
+  const spread = stationSpread(data);
   for (const hub of hubs.values()) hub.group.visible = !show;
   const target = controls.target;
   const reach = 0.28 + dist * 0.08;
   for (const station of data.stations || []) {
     const entry = ensureStation(station);
+    entry.group.position.copy(project(station.lat, station.lon, 0.025));
     if (focusedStation) {
       entry.group.visible = false;
       continue;
@@ -1527,12 +1671,16 @@ function ensureScreen() {
 
 const POINTER = new THREE.Vector3();
 
-function screenPoint(lat, lon, rect) {
-  POINTER.set((lon - ORIGIN.lon) * LON_SCALE, NODE_Y, ORIGIN.lat - lat).project(camera);
+function screenFromWorld(point, rect) {
+  POINTER.copy(point).project(camera);
   return {
     x: (POINTER.x * 0.5 + 0.5) * rect.width,
     y: (-POINTER.y * 0.5 + 0.5) * rect.height,
   };
+}
+
+function screenPoint(lat, lon, rect) {
+  return screenFromWorld(project(lat, lon, NODE_Y), rect);
 }
 
 function nearestOf(items, x, y, rect, limit) {
@@ -1555,7 +1703,9 @@ function nearestStation(x, y, rect) {
   for (const station of payload.stations || []) {
     const entry = stationMarks.get(station.id);
     if (entry && !entry.group.visible) continue;
-    const point = screenPoint(station.lat, station.lon, rect);
+    const point = entry
+      ? screenFromWorld(entry.group.position, rect)
+      : screenPoint(station.lat, station.lon, rect);
     const dist = Math.hypot(point.x - x, point.y - y);
     if (dist < bestDist) {
       bestDist = dist;
@@ -1588,7 +1738,9 @@ function focusMetro(metro) {
       cityStarted = 0;
     }
     const point = project(metro.lat, metro.lon, 0);
-    focusPoint = { x: point.x, z: point.z, distance: 1.7, pose: "city" };
+    const stationCount = (payload?.stations || []).filter((item) => item.metro === metro.id).length;
+    const distance = Math.max(1.7, Math.min(3.2, 1.25 + stationCount * 0.06));
+    focusPoint = { x: point.x, z: point.z, distance, pose: "city" };
     placeHash(`#metro/${metro.id}`);
   }
   if (payload) {
@@ -1885,6 +2037,7 @@ const stageCard = document.getElementById("stage");
 const stageTitle = document.getElementById("stage-title");
 const stageSub = document.getElementById("stage-sub");
 const stageCounts = document.getElementById("stage-counts");
+let stageSignature = "";
 
 function poseOffset(point) {
   if (point.pose === "station") return [0.983, 0.182];
@@ -1918,32 +2071,88 @@ function glide() {
   }
 }
 
-function renderStage(station) {
-  if (!station) {
+function stageView(data) {
+  const fleetSites = data?.sites || [];
+  if (!fleetSites.length) return null;
+  if (modal.open && selected) {
+    const site = fleetSites.find((item) => item.id === selected);
+    if (!site) return null;
+    const station = (data.stations || []).find((item) => item.id === site.station);
+    const metro = (data.metros || []).find((item) => item.id === site.metro);
+    return {
+      key: `site:${site.id}`,
+      kicker: "home",
+      title: site.id,
+      sub: `${metro ? metro.name : site.metro} · ${station ? station.name : site.station} · 1 home`,
+      sites: [site],
+    };
+  }
+  if (focusedStation) {
+    const station = (data.stations || []).find((item) => item.id === focusedStation);
+    if (!station) return null;
+    const metro = (data.metros || []).find((item) => item.id === station.metro);
+    return {
+      key: `station:${station.id}`,
+      kicker: "service area",
+      title: station.name,
+      sub: `${metro ? metro.name : "ERCOT"} · ${fmt(station.units)} homes`,
+      sites: fleetSites.filter((site) => site.station === station.id),
+    };
+  }
+  if (focusedMetro) {
+    const metro = (data.metros || []).find((item) => item.id === focusedMetro);
+    const sites = fleetSites.filter((site) => site.metro === focusedMetro);
+    const stations = (data.stations || []).filter((item) => item.metro === focusedMetro);
+    return {
+      key: `metro:${focusedMetro}`,
+      kicker: "metro",
+      title: metro ? metro.name : focusedMetro,
+      sub: `${fmt(sites.length)} homes · ${fmt(stations.length)} substations`,
+      sites,
+    };
+  }
+  return {
+    key: "state:ercot",
+    kicker: "state",
+    title: "Texas",
+    sub: `ERCOT · ${fmt(fleetSites.length)} homes`,
+    sites: fleetSites,
+  };
+}
+
+function renderStage(data) {
+  const view = stageView(data);
+  if (!view) {
     stageCard.hidden = true;
+    stageSignature = "";
     return;
   }
-  if (stageCard.hidden || stageCard.dataset.id !== station.id) {
-    stageCard.dataset.id = station.id;
+  if (stageCard.hidden || stageCard.dataset.key !== view.key) {
+    stageCard.dataset.key = view.key;
     stageCard.hidden = false;
     stageCard.classList.remove("in");
     void stageCard.offsetWidth;
     stageCard.classList.add("in");
   }
-  const metro = (payload.metros || []).find((item) => item.id === station.metro);
+  const stamp = (data.fleet || {}).ts || "";
+  const signature = `${view.key}|${stamp}`;
+  if (signature === stageSignature) return;
+  stageSignature = signature;
+
+  const kicker = stageCard.querySelector(".stage-kicker");
+  if (kicker) kicker.textContent = view.kicker;
   let pushing = 0;
   let pulling = 0;
   let holding = 0;
   let flagged = 0;
-  for (const site of payload.sites) {
-    if (site.station !== station.id) continue;
+  for (const site of view.sites) {
     if (site.alarm) flagged += 1;
     if (site.state === "push") pushing += 1;
     else if (site.state === "pull") pulling += 1;
     else holding += 1;
   }
-  stageTitle.textContent = station.name;
-  stageSub.textContent = `${metro ? metro.name : "ERCOT"} · ${fmt(station.units)} homes`;
+  stageTitle.textContent = view.title;
+  stageSub.textContent = view.sub;
   stageCounts.innerHTML = `
     <span class="key push"><i></i>${fmt(pushing)} pushing</span>
     <span class="key pull"><i></i>${fmt(pulling)} pulling</span>
@@ -1974,20 +2183,17 @@ function present() {
       }
     }
     stageT = 1;
-    if (!stageCard.hidden || particles.material.size !== 6) {
-      stageCard.hidden = true;
-      particles.material.size = 6;
-    }
+    if (particles.material.size !== 6) particles.material.size = 6;
+    if (payload) renderStage(payload);
     return;
   }
   if (!station) {
     stageT = 1;
     cityT = 1;
-    if (!stageCard.hidden || particles.material.size !== 6) {
-      stageCard.hidden = true;
-      particles.material.size = 6;
-      if (payload) renderUnits(payload);
-    }
+    const changed = particles.material.size !== 6;
+    if (changed) particles.material.size = 6;
+    if (changed && payload) renderUnits(payload);
+    if (payload) renderStage(payload);
     return;
   }
   if (fillHold && !focusPoint) {
@@ -1999,7 +2205,7 @@ function present() {
   particles.material.size = 6 + 4 * easeOut(stageT);
   renderUnits(payload);
   renderStations(payload);
-  renderStage(station);
+  renderStage(payload);
 }
 
 const backButton = document.getElementById("back");

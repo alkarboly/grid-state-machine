@@ -484,6 +484,7 @@ const CX = DIA.bx + DIA.bw / 2;
 const modal = document.getElementById("unit");
 let component = "base";
 let expanded = new Set();
+let diagramShape = null;
 
 function flowOf(down, up) {
   if (down > 0.005) return { dir: 1, kw: down, tone: "pull" };
@@ -491,10 +492,12 @@ function flowOf(down, up) {
   return { dir: 0, kw: 0, tone: "idle" };
 }
 
-function flowStyle(kw) {
-  const width = 1.3 + Math.min(kw, 12) * 0.1;
-  const duration = Math.max(0.5, 2.1 - Math.min(kw, 11) * 0.14);
-  return `stroke-width:${width.toFixed(2)};animation-duration:${duration.toFixed(2)}s`;
+function flowWidth(kw) {
+  return (1.3 + Math.min(kw, 12) * 0.1).toFixed(2);
+}
+
+function flowPace(kw) {
+  return `animation-duration:${Math.max(0.5, 2.1 - Math.min(kw, 11) * 0.14).toFixed(2)}s`;
 }
 
 function arrowDown(x, y, up, tone) {
@@ -503,16 +506,16 @@ function arrowDown(x, y, up, tone) {
   return `<polygon class="head ${tone}" points="${x - t},${base} ${x + t},${base} ${x},${y}" />`;
 }
 
-function vFlow(top, bottom, flow) {
+function vFlow(id, top, bottom, flow) {
   const mid = (top + bottom) / 2;
   const rail = `<line class="rail" x1="${CX}" y1="${top}" x2="${CX}" y2="${bottom}" />`;
   const text = flow.dir ? `${fmt(flow.kw, 2)} kW` : "idle";
-  const label = `<text class="flow-kw ${flow.tone}" x="${CX + 14}" y="${mid}" dominant-baseline="middle">${text}</text>`;
+  const label = `<text class="flow-kw ${flow.tone}" data-flow="${id}" x="${CX + 14}" y="${mid}" dominant-baseline="middle">${text}</text>`;
   if (!flow.dir) return rail + label;
   const up = flow.dir < 0;
   const [from, to] = up ? [bottom, top] : [top, bottom];
   return `${rail}
-    <line class="flow ${flow.tone}" x1="${CX}" y1="${from}" x2="${CX}" y2="${to}" style="${flowStyle(flow.kw)}" />
+    <line class="flow ${flow.tone}" data-line="${id}" x1="${CX}" y1="${from}" x2="${CX}" y2="${to}" stroke-width="${flowWidth(flow.kw)}" style="${flowPace(flow.kw)}" />
     ${arrowDown(CX, to, up, flow.tone)}${label}`;
 }
 
@@ -520,9 +523,9 @@ function hFlow(y, left, right, kw) {
   const rail = `<line class="rail" x1="${left}" y1="${y}" x2="${right}" y2="${y}" />`;
   const head = `<polygon class="head hold" points="${right - 6},${y - 4.6} ${right - 6},${y + 4.6} ${right},${y} " />`;
   return `${rail}
-    <line class="flow hold" x1="${left}" y1="${y}" x2="${right}" y2="${y}" style="${flowStyle(kw)}" />
+    <line class="flow hold" data-line="panel" x1="${left}" y1="${y}" x2="${right}" y2="${y}" stroke-width="${flowWidth(kw)}" style="${flowPace(kw)}" />
     ${head}
-    <text class="flow-kw hold" x="${(left + right) / 2}" y="${y - 11}" text-anchor="middle">${fmt(kw, 2)} kW</text>`;
+    <text class="flow-kw hold" data-flow="panel" x="${(left + right) / 2}" y="${y - 11}" text-anchor="middle">${fmt(kw, 2)} kW</text>`;
 }
 
 function block(id, y, name, note, opts = {}) {
@@ -536,13 +539,15 @@ function block(id, y, name, note, opts = {}) {
     <rect class="blk-bg" x="${x}" y="${y}" width="${w}" height="${h}" rx="3" />
     <rect class="blk-edge" x="${x}" y="${y}" width="2.5" height="${h}" />
     <text class="blk-name" x="${x + 16}" y="${y + 24}">${name}</text>
-    <text class="blk-note" x="${x + 16}" y="${y + 42}">${note}</text>
+    <text class="blk-note" data-note="${id}" x="${x + 16}" y="${y + 42}">${note}</text>
     ${opts.state ? `<circle class="blk-dot" cx="${x + w - 15}" cy="${y + 19}" r="3.2" />` : ""}
     ${opts.extra || ""}
   </g>`;
 }
 
-function diagram(site) {
+// Everything the diagram shows, computed once so the build and the in-place
+// patch cannot drift apart.
+function readUnit(site) {
   const m = site.metrics || {};
   const grid = m.grid || {};
   const meter = m.meter || {};
@@ -550,38 +555,92 @@ function diagram(site) {
   const house = m.panel || {};
   const base = m.base || {};
   const charts = site.charts || [];
-  const state = (id) => {
+  const stateOf = (id) => {
     const mine = charts.filter((chart) => chart.component === id);
     if (mine.some((chart) => chart.alarm)) return "flagged";
     if (mine.some((chart) => chart.warning)) return "watch";
-    return null;
+    return "";
   };
+  return {
+    mode: modeOf(site),
+    soc: Math.min(1, Math.max(0, (base.soc_pct ?? 0) / 100)),
+    notes: {
+      grid:
+        grid.lmp_usd_mwh == null
+          ? `${grid.signal || "hold"} · LMP pending`
+          : `${grid.signal || "hold"} · ${fmt(grid.lmp_usd_mwh, 2)} $/MWh`,
+      meter: `${fmt(meter.voltage_v, 1)} V`,
+      disco: `${fmt(disco.frequency_hz, 3)} Hz · ${disco.contactor || "closed"}`,
+      panel: `${fmt(house.load_kw, 2)} kW`,
+      base: `${fmt(base.soc_pct, 1)}% · ${fmt(base.temp_c, 1)} °C`,
+    },
+    blocks: {
+      grid: stateOf("grid"),
+      meter: stateOf("meter"),
+      disco: stateOf("disco"),
+      panel: stateOf("panel"),
+      base: stateOf("base"),
+    },
+    flows: {
+      grid: flowOf(grid.in_kw, grid.out_kw),
+      meter: flowOf(meter.in_kw, meter.out_kw),
+      base: flowOf(base.charge_kw, base.discharge_kw),
+      panel: { dir: 1, kw: house.load_kw || 0, tone: "hold" },
+    },
+  };
+}
 
-  const soc = Math.min(1, Math.max(0, (base.soc_pct ?? 0) / 100));
-  const mode = modeOf(site);
+function diagram(site, view) {
   const barX = DIA.bx + 16;
   const barW = DIA.bw - 32;
   const socBar = `
     <rect class="soc-track" x="${barX}" y="${ROWS.base + 58}" width="${barW}" height="5" rx="2.5" />
-    <rect class="soc-fill ${mode}" x="${barX}" y="${ROWS.base + 58}" width="${(barW * soc).toFixed(1)}" height="5" rx="2.5" />`;
+    <rect class="soc-fill ${view.mode}" data-soc="1" x="${barX}" y="${ROWS.base + 58}" width="${(barW * view.soc).toFixed(1)}" height="5" rx="2.5" />`;
 
   return `<svg viewBox="0 0 ${DIA.w} ${DIA.h}" class="diagram">
     <text class="rail-cap" x="${CX}" y="10" text-anchor="middle">substation · transformer · ${site.load_zone}</text>
     <line class="rail dotted" x1="${CX}" y1="18" x2="${CX}" y2="${ROWS.grid}" />
 
-    ${block("grid", ROWS.grid, "Grid", grid.lmp_usd_mwh == null ? `${grid.signal || "hold"} · LMP pending` : `${grid.signal || "hold"} · ${fmt(grid.lmp_usd_mwh, 2)} $/MWh`, { state: state("grid") })}
-    ${vFlow(ROWS.grid + DIA.bh, ROWS.meter, flowOf(grid.in_kw, grid.out_kw))}
+    ${block("grid", ROWS.grid, "Grid", view.notes.grid, { state: view.blocks.grid })}
+    ${vFlow("grid", ROWS.grid + DIA.bh, ROWS.meter, view.flows.grid)}
 
-    ${block("meter", ROWS.meter, "Meter", `${fmt(meter.voltage_v, 1)} V`, { state: state("meter") })}
-    ${vFlow(ROWS.meter + DIA.bh, ROWS.disco, flowOf(meter.in_kw, meter.out_kw))}
+    ${block("meter", ROWS.meter, "Meter", view.notes.meter, { state: view.blocks.meter })}
+    ${vFlow("meter", ROWS.meter + DIA.bh, ROWS.disco, view.flows.meter)}
 
-    ${block("disco", ROWS.disco, "Disco", `${fmt(disco.frequency_hz, 3)} Hz · ${disco.contactor || "closed"}`, { state: state("disco") })}
-    ${hFlow(ROWS.disco + DIA.bh / 2, DIA.bx + DIA.bw, DIA.px, house.load_kw || 0)}
-    ${block("panel", ROWS.disco, "Panel", `${fmt(house.load_kw, 2)} kW`, { x: DIA.px, w: DIA.pw, state: state("panel") })}
-    ${vFlow(ROWS.disco + DIA.bh, ROWS.base, flowOf(base.charge_kw, base.discharge_kw))}
+    ${block("disco", ROWS.disco, "Disco", view.notes.disco, { state: view.blocks.disco })}
+    ${hFlow(ROWS.disco + DIA.bh / 2, DIA.bx + DIA.bw, DIA.px, view.flows.panel.kw)}
+    ${block("panel", ROWS.disco, "Panel", view.notes.panel, { x: DIA.px, w: DIA.pw, state: view.blocks.panel })}
+    ${vFlow("base", ROWS.disco + DIA.bh, ROWS.base, view.flows.base)}
 
-    ${block("base", ROWS.base, "Base", `${fmt(base.soc_pct, 1)}% · ${fmt(base.temp_c, 1)} °C`, { h: DIA.baseH, extra: socBar, state: state("base") })}
+    ${block("base", ROWS.base, "Base", view.notes.base, { h: DIA.baseH, extra: socBar, state: view.blocks.base })}
   </svg>`;
+}
+
+// Anything that changes the shape of the drawing. Numbers alone are patched in
+// place, so the flow animation is not restarted on every poll.
+function diagramKey(site, view) {
+  return [
+    site.id,
+    component,
+    view.mode,
+    ...Object.entries(view.blocks).map(([id, state]) => `${id}:${state}`),
+    ...Object.entries(view.flows).map(([id, flow]) => `${id}:${flow.dir}:${flow.tone}`),
+  ].join("|");
+}
+
+function patchDiagram(holder, view) {
+  for (const [id, text] of Object.entries(view.notes)) {
+    const node = holder.querySelector(`[data-note="${id}"]`);
+    if (node) node.textContent = text;
+  }
+  for (const [id, flow] of Object.entries(view.flows)) {
+    const label = holder.querySelector(`[data-flow="${id}"]`);
+    if (label) label.textContent = flow.dir ? `${fmt(flow.kw, 2)} kW` : "idle";
+    const line = holder.querySelector(`[data-line="${id}"]`);
+    if (line) line.setAttribute("stroke-width", flowWidth(flow.kw));
+  }
+  const fill = holder.querySelector("[data-soc]");
+  if (fill) fill.setAttribute("width", ((DIA.bw - 32) * view.soc).toFixed(1));
 }
 
 function metricRow(label, text, chartId) {
@@ -615,6 +674,30 @@ function chartCard(chart) {
   </div>`;
 }
 
+// The charts hanging off the other blocks, so a sparse tab still tells you
+// where the rest of the unit is and gets you there in one click.
+function elsewhere(site) {
+  const rest = (site.charts || []).filter((chart) => chart.component !== component);
+  if (!rest.length) return "";
+  const rows = rest
+    .map((chart) => {
+      const tone = chart.alarm ? "flag" : chart.warning ? "watch" : "muted";
+      const status = chart.alarm ? "alarm" : chart.warning ? "watch" : "in control";
+      const name = (COMPONENTS.find((item) => item.id === chart.component) || {}).name || chart.component;
+      return `<button type="button" class="else-row" data-component="${chart.component}" data-chart="${chart.chart_id}">
+        <span>${chart.title}</span>
+        <em>${name}</em>
+        <i class="${tone}">${status}</i>
+        <b>${fmt(chart.value, 2)} ${chart.unit}</b>
+      </button>`;
+    })
+    .join("");
+  return `<div class="dt-else">
+    <div class="dt-cap">elsewhere on this unit</div>
+    ${rows}
+  </div>`;
+}
+
 function renderUnit() {
   const site = unitDetail;
   if (!modal.open || !site) return;
@@ -629,24 +712,44 @@ function renderUnit() {
     + (site.instrumented ? " · full-rate telemetry" : "");
   document.getElementById("unit-mode").className = `mode ${mode}`;
   document.getElementById("unit-mode").innerHTML = `<i></i>${mode}`;
-  document.getElementById("unit-diagram").innerHTML = diagram(site);
+
+  const view = readUnit(site);
+  const holder = document.getElementById("unit-diagram");
+  const key = diagramKey(site, view);
+  if (key === diagramShape) {
+    patchDiagram(holder, view);
+  } else {
+    holder.innerHTML = diagram(site, view);
+    diagramShape = key;
+  }
 
   const tabs = COMPONENTS.map(
     (item) => `<button type="button" data-component="${item.id}" class="${item.id === component ? "on" : ""}">${item.name}</button>`,
   ).join("");
+  const rows = METRIC_ROWS[component];
+  const split = rows.length > 4;
 
-  document.getElementById("unit-detail").innerHTML = `
+  const detail = document.getElementById("unit-detail");
+  const scrolled = detail.scrollTop;
+  detail.innerHTML = `
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>
-    <div class="stack">${METRIC_ROWS[component]
+    <div class="stack${split ? " split" : ""}"${split ? ` style="--rows:${Math.ceil(rows.length / 2)}"` : ""}>${rows
       .map(([label, format, chartId]) => metricRow(label, format(metrics), chartId))
       .join("")}</div>
     <div class="dt-charts">
       <div class="dt-cap">control charts${charts.length ? "" : " — none on this component"}</div>
-      ${charts.length ? charts.map(chartCard).join("") : `<p class="muted">Charts live on the meter, disco, and base. Click those blocks.</p>`}
+      ${charts.length
+        ? charts.map(chartCard).join("")
+        : `<div class="dt-empty">
+            <p>Nothing is charted here.</p>
+            <p class="muted">The ${spec.name.toLowerCase()} is a pass-through in this model. Charts hang off the meter, the disco, and the base.</p>
+          </div>`}
     </div>
+    ${elsewhere(site)}
   `;
+  detail.scrollTop = scrolled;
 }
 
 async function loadUnit(id) {
@@ -659,13 +762,14 @@ async function loadUnit(id) {
   }
 }
 
-async function openUnit(id) {
+async function openUnit(id, block = null) {
   selected = id;
   const detail = await loadUnit(id);
   if (!detail) return;
   unitDetail = detail;
   const flagged = (detail.charts || []).find((chart) => chart.alarm) || (detail.charts || []).find((chart) => chart.warning);
-  component = flagged ? flagged.component : "base";
+  const known = COMPONENTS.some((item) => item.id === block);
+  component = known ? block : flagged ? flagged.component : "base";
   expanded = new Set(flagged ? [flagged.chart_id] : []);
   if (!modal.open) modal.showModal();
   if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
@@ -712,19 +816,22 @@ modal.addEventListener("click", (event) => {
     return;
   }
   const blockHit = event.target.closest("[data-component]");
-  if (blockHit) {
+  const chartHit = event.target.closest("[data-chart]");
+  if (blockHit && !chartHit) {
     component = blockHit.dataset.component;
     renderUnit();
     return;
   }
-  const chartHit = event.target.closest("[data-chart]");
   if (chartHit) {
     const id = chartHit.dataset.chart;
-    if (chartHit.dataset.scroll) expanded.add(id);
+    // A jump from another component has to switch tabs before it can scroll.
+    const jump = blockHit && blockHit.dataset.component !== component;
+    if (jump) component = blockHit.dataset.component;
+    if (jump || chartHit.dataset.scroll) expanded.add(id);
     else if (expanded.has(id)) expanded.delete(id);
     else expanded.add(id);
     renderUnit();
-    if (chartHit.dataset.scroll) {
+    if (jump || chartHit.dataset.scroll) {
       document.getElementById(`chart-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }
@@ -858,9 +965,10 @@ function frame() {
 }
 
 // A unit id in the hash opens that battery, so a link points at one cabinet.
+// Add a block, as in #hou-0002/disco, and it opens on that block.
 poll().then(() => {
-  const wanted = decodeURIComponent(location.hash.slice(1));
-  if (wanted) openUnit(wanted);
+  const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (wanted) openUnit(wanted, block);
 });
 setInterval(poll, 5000);
 frame();

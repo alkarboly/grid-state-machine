@@ -243,8 +243,8 @@ h2 {
 /* unit modal */
 
 dialog#unit {
-  width: min(1000px, 94vw);
-  height: min(780px, 90vh);
+  width: min(1340px, 92vw);
+  height: min(910px, 90vh);
   max-width: none;
   max-height: none;
   padding: 0;
@@ -286,7 +286,7 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 404px 1fr;
+  grid-template-columns: minmax(340px, 40%) 1fr;
   grid-template-rows: minmax(0, 1fr);
 }
 .unit-chain {
@@ -304,13 +304,68 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
   color: #5a5f68;
   margin-bottom: 10px;
 }
-.unit-detail { min-height: 0; padding: 18px 24px 28px; overflow: auto; }
+.unit-detail {
+  min-height: 0;
+  padding: 18px 24px 28px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
 .unit-detail, .unit-chain, aside { scrollbar-width: thin; scrollbar-color: #33373f transparent; }
 
 .dt-name { margin: 16px 0 4px; font-size: 14px; font-weight: 550; }
 .dt-role { margin: 0 0 4px; color: var(--muted); font-size: 12px; max-width: 46em; }
 .dt-charts { margin-top: 26px; }
 .dt-charts .dt-cap { margin-bottom: 14px; }
+
+.unit-detail .stack { max-width: 540px; }
+.unit-detail .stack.split {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(var(--rows), auto);
+  grid-template-columns: 1fr 1fr;
+  column-gap: 44px;
+  max-width: none;
+}
+.unit-detail .chart svg { height: 82px; }
+
+.dt-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 190px;
+  padding: 24px 28px;
+  border: 1px dashed #24272e;
+}
+.dt-empty p { margin: 0; font-size: 12px; }
+.dt-empty .muted { max-width: 42em; }
+
+/* Pushed to the foot of the column, so a component with one chart does not
+   trail off into empty space. */
+.dt-else { margin-top: auto; padding-top: 30px; }
+.else-row {
+  display: grid;
+  grid-template-columns: 1fr auto 82px 120px;
+  align-items: baseline;
+  gap: 14px;
+  width: 100%;
+  padding: 7px 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.else-row:hover { color: #fff; }
+.else-row:hover em { color: var(--ink); }
+.else-row em { font-style: normal; color: #5a5f68; font-size: 11px; }
+.else-row i { font-style: normal; font-size: 11px; text-align: right; }
+.else-row b { font-weight: 450; text-align: right; font-variant-numeric: tabular-nums; }
+.else-row .flag { color: var(--alarm); }
+.else-row .watch { color: var(--watch); }
 
 /* one-line diagram */
 
@@ -412,10 +467,11 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
   dialog#unit[open] { animation: none; }
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 860px) {
   .unit-body { grid-template-columns: 1fr; grid-template-rows: auto auto; overflow: auto; }
   .unit-chain { border-right: 0; border-bottom: 1px solid var(--line); }
   .unit-detail { overflow: visible; }
+  .unit-detail .stack.split { display: block; }
   #unit-diagram { flex: none; }
   .diagram { height: auto; }
 }

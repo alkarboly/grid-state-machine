@@ -57,7 +57,9 @@ Every box is a control. Clicking one shows that component's metrics and only the
 
 Metrics that a chart watches are themselves clickable and open that chart. Clicking a chart header expands it to the measured value, the expected operating point, sigma, and the limits.
 
-The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet.
+Under the charts, **elsewhere on this unit** lists the charts that hang off the other blocks with their component, status, and current value. Clicking one switches blocks and opens that chart. The grid and the panel carry no charts of their own, so without it those two blocks would be a dead end.
+
+The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to one cabinet. Append a block, as in `/#hou-0002/disco`, to open on that block.
 
 ## Persistence
 

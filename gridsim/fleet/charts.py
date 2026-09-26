@@ -9,6 +9,7 @@ HISTORY = 24
 CHARTS = (
     {
         "chart_id": "disco_meter_delta",
+        "component": "meter",
         "family": "measurement",
         "title": "Meter agreement",
         "unit": "kW",
@@ -16,6 +17,7 @@ CHARTS = (
     },
     {
         "chart_id": "base_temp",
+        "component": "base",
         "family": "thermal",
         "title": "Cabinet temperature",
         "unit": "°C",
@@ -23,6 +25,7 @@ CHARTS = (
     },
     {
         "chart_id": "disco_voltage",
+        "component": "disco",
         "family": "electrical",
         "title": "Service voltage",
         "unit": "V",
@@ -30,6 +33,7 @@ CHARTS = (
     },
     {
         "chart_id": "frequency",
+        "component": "disco",
         "family": "electrical",
         "title": "Frequency",
         "unit": "Hz",
@@ -37,6 +41,7 @@ CHARTS = (
     },
     {
         "chart_id": "soc_tracking",
+        "component": "base",
         "family": "energy",
         "title": "State-of-charge tracking",
         "unit": "kWh",
@@ -44,6 +49,7 @@ CHARTS = (
     },
     {
         "chart_id": "dispatch_response",
+        "component": "base",
         "family": "response",
         "title": "Dispatch response",
         "unit": "kW",
@@ -74,6 +80,7 @@ def evaluate(spec: dict, measured: float, expected: float, sigma: float, history
 
     return {
         "chart_id": spec["chart_id"],
+        "component": spec["component"],
         "family": spec["family"],
         "title": spec["title"],
         "unit": spec["unit"],

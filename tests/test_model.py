@@ -154,6 +154,13 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(set(observations[0]), {"ts", "site_id", *OBSERVATION_FIELDS})
         self.assertEqual({point["chart_id"] for point in points}, {spec["chart_id"] for spec in CHARTS})
 
+    def test_every_chart_names_a_real_component(self):
+        components = {spec["component"] for spec in CHARTS}
+        self.assertTrue(components <= set(COMPONENTS), components - set(COMPONENTS))
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        _sites, _logs, _obs, points = tick_sites(build_sites(), _grid(0.5), now, 0.0, random.Random(4))
+        self.assertTrue(all(point["component"] in COMPONENTS for point in points))
+
     def test_each_battery_has_its_own_baseline(self):
         scales = {site["load_scale"] for site in build_sites()}
         temps = {site["temp_center_c"] for site in build_sites()}

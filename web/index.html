@@ -18,6 +18,27 @@
     </aside>
   </main>
   <div id="tip" hidden></div>
+  <dialog id="unit" aria-labelledby="unit-id">
+    <div class="unit">
+      <div class="unit-head">
+        <div>
+          <h2 id="unit-id"></h2>
+          <div class="sub" id="unit-sub"></div>
+        </div>
+        <div class="unit-head-end">
+          <div id="unit-mode"></div>
+          <button type="button" id="unit-close" aria-label="Close">close</button>
+        </div>
+      </div>
+      <div class="unit-body">
+        <div class="unit-chain">
+          <div class="unit-chain-cap">one-line diagram</div>
+          <div id="unit-diagram"></div>
+        </div>
+        <div class="unit-detail" id="unit-detail"></div>
+      </div>
+    </div>
+  </dialog>
   <script type="importmap">
     {
       "imports": {

@@ -36,4 +36,6 @@ The chain is grid → meter → disco → panel → base.
 
 `out_of_control` and `warning` are arrays of `chart_id`. `alarm` is true when `out_of_control` is not empty.
 
+Every control chart names the component it belongs to. The mapping is in [control-charts.md](control-charts.md) and it is what lets the unit view hang each chart off its box in the chain.
+
 The flat machine-learning row for the same tick is the `observations` table in [database.md](database.md). It carries the same measurements in columns, plus `physical_soc_kwh`, which is the coulomb count rather than the reported state of charge.

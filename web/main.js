@@ -339,27 +339,33 @@ function renderPanel(data) {
   if (!selected || !data.sites.some((site) => site.id === selected)) {
     selected = (data.sites.find((site) => site.alarm) || data.sites[0]).id;
   }
-  const site = data.sites.find((item) => item.id === selected);
-  const metrics = site.metrics || {};
-  const grid = metrics.grid || {};
-  const meter = metrics.meter || {};
-  const disco = metrics.disco || {};
-  const house = metrics.panel || {};
-  const base = metrics.base || {};
-  const mode = modeOf(site);
-
   const chips = FAMILIES.map(
     (name) => `<button type="button" data-family="${name}" class="${name === family ? "on" : ""}">${name}</button>`,
   ).join("");
-  const charts = chartsFor(site)
-    .map(
-      (chart) => `
-    <div class="chart">
-      <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
-      ${chartSvg(chart)}
-      <p class="${chart.in_control ? "muted" : "flag"}">${chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ")} · z ${fmt(chart.z, 1)}</p>
-    </div>`,
-    )
+
+  const cities = new Map();
+  for (const site of data.sites) {
+    if (!cities.has(site.city)) cities.set(site.city, []);
+    cities.get(site.city).push(site);
+  }
+  const groups = [...cities]
+    .map(([city, sites]) => {
+      const flagged = sites.filter((site) => site.alarm).length;
+      const rows = sites
+        .map((site) => {
+          const classes = [modeOf(site)];
+          if (!focused(site)) classes.push("dim");
+          if (site.id === selected) classes.push("on");
+          return `<button type="button" class="unit-row ${classes.join(" ")}" data-site="${site.id}">
+            <i></i><span>${site.id}</span><em>${fmt(site.soc_pct, 0)}%</em>
+          </button>`;
+        })
+        .join("");
+      return `<div class="group">
+        <h3>${city}${flagged ? `<span class="flag">${flagged} flagged</span>` : ""}</h3>
+        <div class="roster">${rows}</div>
+      </div>`;
+    })
     .join("");
 
   const constraints = (data.constraints || []).slice(0, 4);
@@ -373,38 +379,253 @@ function renderPanel(data) {
     : `<p class="muted">Arcs between stations appear once the ERCOT key is set and both station codes are in station_geo.json.</p>`;
 
   panel.innerHTML = `
-    <h2>${site.id}</h2>
-    <div class="sub">${site.city} · ${site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline</div>
-    <div class="mode ${mode}"><i></i>${mode}</div>
+    <h2>Fleet</h2>
+    <div class="sub">${data.sites.length} units · ${data.sites.filter((site) => site.alarm).length} flagged · click a unit for its one-line diagram</div>
     <div class="chips">${chips}</div>
-    ${charts}
-    <div class="stack">
-      <h3>Grid</h3>
-      ${row("in", `${fmt(grid.in_kw, 2)} kW`)}
-      ${row("out", `${fmt(grid.out_kw, 2)} kW`)}
-      ${row("LMP", grid.lmp_usd_mwh == null ? "—" : `${fmt(grid.lmp_usd_mwh, 2)} $/MWh`)}
-      <h3>Meter</h3>
-      ${row("in", `${fmt(meter.in_kw, 2)} kW`)}
-      ${row("out", `${fmt(meter.out_kw, 2)} kW`)}
-      ${row("voltage", `${fmt(meter.voltage_v, 1)} V`)}
-      <h3>Disco</h3>
-      ${row("in", `${fmt(disco.in_kw, 2)} kW`)}
-      ${row("out", `${fmt(disco.out_kw, 2)} kW`)}
-      ${row("voltage", `${fmt(disco.voltage_v, 1)} V`)}
-      ${row("frequency", `${fmt(disco.frequency_hz, 3)} Hz`)}
-      <h3>Panel</h3>
-      ${row("load", `${fmt(house.load_kw, 2)} kW`)}
-      <h3>Base</h3>
-      ${row("state of charge", `${fmt(base.soc_pct, 1)}%`)}
-      ${row("discharge", `${fmt(base.discharge_kw, 2)} of ${fmt(base.commanded_discharge_kw, 2)} kW`)}
-      ${row("charge", `${fmt(base.charge_kw, 2)} of ${fmt(base.commanded_charge_kw, 2)} kW`)}
-      ${row("temperature", `${fmt(base.temp_c, 1)} °C`)}
-    </div>
+    ${groups}
     <div class="constraints">
       <h3>Binding constraints</h3>
       ${constraintHtml}
     </div>
   `;
+}
+
+/* ---------- unit modal ---------- */
+
+const COMPONENTS = [
+  { id: "grid", name: "Grid", role: "Utility interchange at the site, plus the ERCOT context that drove dispatch." },
+  { id: "meter", name: "Meter", role: "Service meter. Billing-grade measurement of the flow the disco also sees." },
+  { id: "disco", name: "Disco", role: "Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise." },
+  { id: "panel", name: "Electrical panel", role: "House load downstream of the battery interconnect." },
+  { id: "base", name: "Base", role: "Battery cabinet. Charge and discharge are what the battery did. The commanded pair is what dispatch asked for." },
+];
+
+// Rows are [label, formatter, chart_id]. A row with a chart is clickable.
+const METRIC_ROWS = {
+  grid: [
+    ["in", (m) => `${fmt(m.in_kw, 2)} kW`],
+    ["out", (m) => `${fmt(m.out_kw, 2)} kW`],
+    ["signal", (m) => m.signal || "—"],
+    ["LMP", (m) => (m.lmp_usd_mwh == null ? "—" : `${fmt(m.lmp_usd_mwh, 2)} $/MWh`)],
+    ["ERCOT demand", (m) => `${fmt(m.demand_mw)} MW`],
+    ["demand percentile", (m) => `${fmt((m.demand_percentile ?? 0) * 100, 0)}%`],
+    ["storage on the grid", (m) => `${fmt(m.storage_gen_mw)} MW`],
+    ["snapshot", (m) => (m.grid_as_of ? m.grid_as_of.slice(11, 19) : "—")],
+  ],
+  meter: [
+    ["in", (m) => `${fmt(m.in_kw, 2)} kW`, "disco_meter_delta"],
+    ["out", (m) => `${fmt(m.out_kw, 2)} kW`, "disco_meter_delta"],
+    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`],
+    ["energy imported", (m) => `${fmt(m.energy_in_kwh, 2)} kWh`],
+    ["energy exported", (m) => `${fmt(m.energy_out_kwh, 2)} kWh`],
+  ],
+  disco: [
+    ["in", (m) => `${fmt(m.in_kw, 2)} kW`],
+    ["out", (m) => `${fmt(m.out_kw, 2)} kW`],
+    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`, "disco_voltage"],
+    ["frequency", (m) => `${fmt(m.frequency_hz, 3)} Hz`, "frequency"],
+    ["contactor", (m) => m.contactor || "—"],
+    ["islanded", (m) => (m.islanded ? "yes" : "no")],
+  ],
+  panel: [
+    ["load", (m) => `${fmt(m.load_kw, 2)} kW`],
+    ["voltage", (m) => `${fmt(m.voltage_v, 1)} V`],
+  ],
+  base: [
+    ["state of charge", (m) => `${fmt(m.soc_pct, 1)}%`, "soc_tracking"],
+    ["energy stored", (m) => `${fmt(m.soc_kwh, 2)} of ${fmt(m.capacity_kwh, 1)} kWh`, "soc_tracking"],
+    ["power limit", (m) => `${fmt(m.power_limit_kw, 1)} kW`],
+    ["charge", (m) => `${fmt(m.charge_kw, 2)} kW`, "dispatch_response"],
+    ["commanded charge", (m) => `${fmt(m.commanded_charge_kw, 2)} kW`, "dispatch_response"],
+    ["discharge", (m) => `${fmt(m.discharge_kw, 2)} kW`, "dispatch_response"],
+    ["commanded discharge", (m) => `${fmt(m.commanded_discharge_kw, 2)} kW`, "dispatch_response"],
+    ["temperature", (m) => `${fmt(m.temp_c, 1)} °C`, "base_temp"],
+  ],
+};
+
+const DIA = { w: 360, h: 540, bx: 36, bw: 152, bh: 58, baseH: 80, px: 248, pw: 102 };
+const ROWS = { grid: 44, meter: 176, disco: 308, base: 440 };
+const CX = DIA.bx + DIA.bw / 2;
+
+const modal = document.getElementById("unit");
+let component = "base";
+let expanded = new Set();
+
+function flowOf(down, up) {
+  if (down > 0.005) return { dir: 1, kw: down, tone: "pull" };
+  if (up > 0.005) return { dir: -1, kw: up, tone: "push" };
+  return { dir: 0, kw: 0, tone: "idle" };
+}
+
+function flowStyle(kw) {
+  const width = 1.3 + Math.min(kw, 12) * 0.1;
+  const duration = Math.max(0.5, 2.1 - Math.min(kw, 11) * 0.14);
+  return `stroke-width:${width.toFixed(2)};animation-duration:${duration.toFixed(2)}s`;
+}
+
+function arrowDown(x, y, up, tone) {
+  const t = 4.6;
+  const base = up ? y + t + 1.5 : y - t - 1.5;
+  return `<polygon class="head ${tone}" points="${x - t},${base} ${x + t},${base} ${x},${y}" />`;
+}
+
+function vFlow(top, bottom, flow) {
+  const mid = (top + bottom) / 2;
+  const rail = `<line class="rail" x1="${CX}" y1="${top}" x2="${CX}" y2="${bottom}" />`;
+  const text = flow.dir ? `${fmt(flow.kw, 2)} kW` : "idle";
+  const label = `<text class="flow-kw ${flow.tone}" x="${CX + 14}" y="${mid}" dominant-baseline="middle">${text}</text>`;
+  if (!flow.dir) return rail + label;
+  const up = flow.dir < 0;
+  const [from, to] = up ? [bottom, top] : [top, bottom];
+  return `${rail}
+    <line class="flow ${flow.tone}" x1="${CX}" y1="${from}" x2="${CX}" y2="${to}" style="${flowStyle(flow.kw)}" />
+    ${arrowDown(CX, to, up, flow.tone)}${label}`;
+}
+
+function hFlow(y, left, right, kw) {
+  const rail = `<line class="rail" x1="${left}" y1="${y}" x2="${right}" y2="${y}" />`;
+  const head = `<polygon class="head hold" points="${right - 6},${y - 4.6} ${right - 6},${y + 4.6} ${right},${y} " />`;
+  return `${rail}
+    <line class="flow hold" x1="${left}" y1="${y}" x2="${right}" y2="${y}" style="${flowStyle(kw)}" />
+    ${head}
+    <text class="flow-kw hold" x="${(left + right) / 2}" y="${y - 11}" text-anchor="middle">${fmt(kw, 2)} kW</text>`;
+}
+
+function block(id, y, name, note, opts = {}) {
+  const x = opts.x ?? DIA.bx;
+  const w = opts.w ?? DIA.bw;
+  const h = opts.h ?? DIA.bh;
+  const classes = ["blk"];
+  if (component === id) classes.push("on");
+  if (opts.state) classes.push(opts.state);
+  return `<g class="${classes.join(" ")}" data-component="${id}" tabindex="0" role="button" aria-label="${name}">
+    <rect class="blk-bg" x="${x}" y="${y}" width="${w}" height="${h}" rx="3" />
+    <rect class="blk-edge" x="${x}" y="${y}" width="2.5" height="${h}" />
+    <text class="blk-name" x="${x + 16}" y="${y + 24}">${name}</text>
+    <text class="blk-note" x="${x + 16}" y="${y + 42}">${note}</text>
+    ${opts.state ? `<circle class="blk-dot" cx="${x + w - 15}" cy="${y + 19}" r="3.2" />` : ""}
+    ${opts.extra || ""}
+  </g>`;
+}
+
+function diagram(site) {
+  const m = site.metrics || {};
+  const grid = m.grid || {};
+  const meter = m.meter || {};
+  const disco = m.disco || {};
+  const house = m.panel || {};
+  const base = m.base || {};
+  const charts = site.charts || [];
+  const state = (id) => {
+    const mine = charts.filter((chart) => chart.component === id);
+    if (mine.some((chart) => !chart.in_control)) return "flagged";
+    if (mine.some((chart) => chart.warning)) return "watch";
+    return null;
+  };
+
+  const soc = Math.min(1, Math.max(0, (base.soc_pct ?? 0) / 100));
+  const mode = modeOf(site);
+  const barX = DIA.bx + 16;
+  const barW = DIA.bw - 32;
+  const socBar = `
+    <rect class="soc-track" x="${barX}" y="${ROWS.base + 58}" width="${barW}" height="5" rx="2.5" />
+    <rect class="soc-fill ${mode}" x="${barX}" y="${ROWS.base + 58}" width="${(barW * soc).toFixed(1)}" height="5" rx="2.5" />`;
+
+  return `<svg viewBox="0 0 ${DIA.w} ${DIA.h}" class="diagram">
+    <text class="rail-cap" x="${CX}" y="10" text-anchor="middle">substation · transformer · ${site.load_zone}</text>
+    <line class="rail dotted" x1="${CX}" y1="18" x2="${CX}" y2="${ROWS.grid}" />
+
+    ${block("grid", ROWS.grid, "Grid", grid.lmp_usd_mwh == null ? `${grid.signal || "hold"} · LMP pending` : `${grid.signal || "hold"} · ${fmt(grid.lmp_usd_mwh, 2)} $/MWh`, { state: state("grid") })}
+    ${vFlow(ROWS.grid + DIA.bh, ROWS.meter, flowOf(grid.in_kw, grid.out_kw))}
+
+    ${block("meter", ROWS.meter, "Meter", `${fmt(meter.voltage_v, 1)} V`, { state: state("meter") })}
+    ${vFlow(ROWS.meter + DIA.bh, ROWS.disco, flowOf(meter.in_kw, meter.out_kw))}
+
+    ${block("disco", ROWS.disco, "Disco", `${fmt(disco.frequency_hz, 3)} Hz · ${disco.contactor || "closed"}`, { state: state("disco") })}
+    ${hFlow(ROWS.disco + DIA.bh / 2, DIA.bx + DIA.bw, DIA.px, house.load_kw || 0)}
+    ${block("panel", ROWS.disco, "Panel", `${fmt(house.load_kw, 2)} kW`, { x: DIA.px, w: DIA.pw, state: state("panel") })}
+    ${vFlow(ROWS.disco + DIA.bh, ROWS.base, flowOf(base.charge_kw, base.discharge_kw))}
+
+    ${block("base", ROWS.base, "Base", `${fmt(base.soc_pct, 1)}% · ${fmt(base.temp_c, 1)} °C`, { h: DIA.baseH, extra: socBar, state: state("base") })}
+  </svg>`;
+}
+
+function metricRow(label, text, chartId) {
+  if (!chartId) return row(label, text);
+  return `<button type="button" class="metric-link" data-chart="${chartId}" data-scroll="1">
+    <span>${label}</span><b>${text}</b>
+  </button>`;
+}
+
+function chartCard(chart) {
+  const open = expanded.has(chart.chart_id);
+  const status = chart.in_control ? (chart.warning ? "watch" : "in control") : chart.rules.join(", ");
+  const tone = chart.in_control ? (chart.warning ? "watch" : "muted") : "flag";
+  const detail = open
+    ? `<div class="chart-facts">
+        ${row("measured", `${fmt(chart.measured, 3)} ${chart.unit}`)}
+        ${row("expected", `${fmt(chart.expected, 3)} ${chart.unit}`)}
+        ${row("residual", `${fmt(chart.value, 3)} ${chart.unit}`)}
+        ${row("sigma", fmt(chart.sigma, 3))}
+        ${row("limits", `${fmt(chart.lcl, 3)} to ${fmt(chart.ucl, 3)}`)}
+        ${row("family", chart.family)}
+      </div>`
+    : "";
+  return `<div class="chart${open ? " open" : ""}" id="chart-${chart.chart_id}">
+    <button type="button" class="chart-head" data-chart="${chart.chart_id}">
+      <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
+    </button>
+    ${chartSvg(chart)}
+    <p class="${tone}">${status} · z ${fmt(chart.z, 1)}</p>
+    ${detail}
+  </div>`;
+}
+
+function renderUnit(data) {
+  if (!modal.open) return;
+  const site = data.sites?.find((item) => item.id === selected);
+  if (!site) {
+    modal.close();
+    return;
+  }
+  const spec = COMPONENTS.find((item) => item.id === component) || COMPONENTS[0];
+  const metrics = (site.metrics || {})[component] || {};
+  const charts = (site.charts || []).filter((chart) => chart.component === component);
+  const mode = modeOf(site);
+
+  document.getElementById("unit-id").textContent = site.id;
+  document.getElementById("unit-sub").textContent =
+    `${site.city} · ${site.load_zone} · load ×${fmt(site.load_scale, 2)} · ${fmt(site.temp_center_c, 1)} °C baseline`;
+  document.getElementById("unit-mode").className = `mode ${mode}`;
+  document.getElementById("unit-mode").innerHTML = `<i></i>${mode}`;
+  document.getElementById("unit-diagram").innerHTML = diagram(site);
+
+  const tabs = COMPONENTS.map(
+    (item) => `<button type="button" data-component="${item.id}" class="${item.id === component ? "on" : ""}">${item.name}</button>`,
+  ).join("");
+
+  document.getElementById("unit-detail").innerHTML = `
+    <div class="chips tabs">${tabs}</div>
+    <h3 class="dt-name">${spec.name}</h3>
+    <p class="dt-role">${spec.role}</p>
+    <div class="stack">${METRIC_ROWS[component]
+      .map(([label, format, chartId]) => metricRow(label, format(metrics), chartId))
+      .join("")}</div>
+    <div class="dt-charts">
+      <div class="dt-cap">control charts${charts.length ? "" : " — none on this component"}</div>
+      ${charts.length ? charts.map(chartCard).join("") : `<p class="muted">Charts live on the meter, disco, and base. Click those blocks.</p>`}
+    </div>
+  `;
+}
+
+function openUnit(id) {
+  selected = id;
+  const site = payload?.sites?.find((item) => item.id === id);
+  const flagged = (site?.charts || []).find((chart) => !chart.in_control);
+  component = flagged ? flagged.component : "base";
+  expanded = new Set(flagged ? [flagged.chart_id] : []);
+  if (!modal.open) modal.showModal();
+  renderUnit(payload);
 }
 
 function nearestSite(clientX, clientY) {
@@ -428,12 +649,56 @@ function nearestSite(clientX, clientY) {
 }
 
 panel.addEventListener("click", (event) => {
+  if (!payload) return;
   const chip = event.target.closest("[data-family]");
-  if (!chip || !payload) return;
-  family = chip.dataset.family;
-  renderSites(payload);
-  renderPanel(payload);
+  if (chip) {
+    family = chip.dataset.family;
+    renderSites(payload);
+    renderPanel(payload);
+    return;
+  }
+  const unit = event.target.closest("[data-site]");
+  if (unit) openUnit(unit.dataset.site);
 });
+
+modal.addEventListener("click", (event) => {
+  if (event.target === modal) {
+    modal.close();
+    return;
+  }
+  const blockHit = event.target.closest("[data-component]");
+  if (blockHit) {
+    component = blockHit.dataset.component;
+    renderUnit(payload);
+    return;
+  }
+  const chartHit = event.target.closest("[data-chart]");
+  if (chartHit) {
+    const id = chartHit.dataset.chart;
+    if (chartHit.dataset.scroll) expanded.add(id);
+    else if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+    renderUnit(payload);
+    if (chartHit.dataset.scroll) {
+      document.getElementById(`chart-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+});
+
+modal.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const blockHit = event.target.closest("g[data-component]");
+  if (!blockHit) return;
+  event.preventDefault();
+  component = blockHit.dataset.component;
+  renderUnit(payload);
+});
+
+modal.addEventListener("close", () => {
+  if (payload) renderPanel(payload);
+});
+
+document.getElementById("unit-close").addEventListener("click", () => modal.close());
 
 canvas.addEventListener("pointermove", (event) => {
   const site = payload?.sites?.find((item) => item.id === nearestSite(event.clientX, event.clientY));
@@ -454,10 +719,11 @@ canvas.addEventListener("pointerleave", () => {
   tip.hidden = true;
 });
 
-canvas.addEventListener("pointerdown", (event) => {
+canvas.addEventListener("click", (event) => {
   const hit = nearestSite(event.clientX, event.clientY);
   if (!hit || !payload) return;
-  selected = hit;
+  tip.hidden = true;
+  openUnit(hit);
   renderSites(payload);
   renderPanel(payload);
 });
@@ -479,6 +745,7 @@ async function poll() {
     renderSites(payload);
     renderStats(payload);
     renderPanel(payload);
+    renderUnit(payload);
   } catch (error) {
     panel.innerHTML = `<p class="muted">Scene unavailable. ${error.message}</p>`;
   }

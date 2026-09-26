@@ -38,9 +38,11 @@ Columns, in order: `ts`, `site_id`, `hour`, `demand_mw`, `demand_percentile`, `s
 
 The chart contract from [control-charts.md](control-charts.md). One row per battery per chart per tick.
 
-`ts`, `site_id`, `chart_id`, `family`, `measured`, `expected`, `value`, `sigma`, `ucl`, `lcl`, `z`, `rules_json`, `in_control`.
+`ts`, `site_id`, `chart_id`, `component`, `family`, `measured`, `expected`, `value`, `sigma`, `ucl`, `lcl`, `z`, `rules_json`, `in_control`.
 
 `rules_json` is a JSON array of rule names. An empty array means the point is in control.
+
+`component` is the box in the chain that owns the chart, so labels can be grouped by hardware as well as by family.
 
 ## Caps
 

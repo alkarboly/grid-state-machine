@@ -34,7 +34,17 @@ Two kinds of arc are drawn, and they mean different things:
 - **Feeder arcs** connect a battery to its city hub. This is the modeled distribution relationship, the same grouping as `load_zone`. The arc takes the battery's dispatch color, so a glance shows which part of the fleet is exporting.
 - **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between city hubs, because ERCOT data does not support that topology.
 
-Choosing a maintenance family in the panel dims every battery whose charts in that family are in control, so the map answers one question at a time.
+Choosing a maintenance family in the side panel dims every battery whose charts in that family are in control, so the map answers one question at a time.
+
+## Unit view
+
+The side panel is the fleet roster. Clicking a node on the map or a row in the roster opens one unit.
+
+The unit view is a one-line diagram of the chain in [contracts.md](contracts.md): grid, meter, disco, panel, base. The connectors carry the measured flow, so the arrow direction is import or export and the dash speed and line weight follow the kilowatts. The panel branch leaves the disco sideways because house load is the one leg that never reverses.
+
+Every box is a control. Clicking one shows that component's metrics and only the control charts that name it, which is why `component` is part of the chart contract. A box carries a red mark when one of its charts is out of limits and an amber one when a chart is only in warning, so the fault is visible on the hardware before anything is clicked.
+
+Metrics that a chart watches are themselves clickable and open that chart. Clicking a chart header expands it to the measured value, the expected operating point, sigma, and the limits.
 
 ## Persistence
 

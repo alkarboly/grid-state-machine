@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS control_points (
   ts TEXT NOT NULL,
   site_id TEXT NOT NULL,
   chart_id TEXT NOT NULL,
+  component TEXT NOT NULL,
   family TEXT NOT NULL,
   measured REAL NOT NULL,
   expected REAL NOT NULL,
@@ -105,6 +106,8 @@ LOG_CAP = 20000
 OBSERVATION_CAP = 20000
 CONTROL_CAP = 60000
 
+_ADDED_COLUMNS = (("control_points", "component", "TEXT NOT NULL DEFAULT ''"),)
+
 _OBSERVATION_COLUMNS = (
     "ts", "site_id", "hour", "demand_mw", "demand_percentile", "storage_gen_mw", "lmp_usd_mwh",
     "signal", "grid_in_kw", "grid_out_kw", "meter_in_kw", "meter_out_kw", "meter_voltage_v",
@@ -119,7 +122,17 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.executescript(_SCHEMA)
+    _add_missing_columns(conn)
     return conn
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS leaves older files behind when a column is added."""
+    for table, column, decl in _ADDED_COLUMNS:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
 
 
 def insert_raw(conn: sqlite3.Connection, source: str, fetched_at: str, body: Any) -> None:
@@ -218,12 +231,13 @@ def insert_tick(conn: sqlite3.Connection, logs: list[dict], observations: list[d
     conn.executemany(
         """
         INSERT INTO control_points (
-          ts, site_id, chart_id, family, measured, expected, value, sigma, ucl, lcl, z, rules_json, in_control
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ts, site_id, chart_id, component, family, measured, expected, value, sigma, ucl, lcl, z, rules_json, in_control
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
-                point["ts"], point["site_id"], point["chart_id"], point["family"],
+                point["ts"], point["site_id"], point["chart_id"], point["component"],
+                point["family"],
                 point["measured"], point["expected"], point["value"], point["sigma"],
                 point["ucl"], point["lcl"], point["z"], json.dumps(point["rules"]),
                 1 if point["in_control"] else 0,

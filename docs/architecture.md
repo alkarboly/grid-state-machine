@@ -46,7 +46,7 @@ Every battery is one particle, coloured by what it actually did this tick: amber
 
 Left-drag orbits the camera, the wheel zooms, and right-drag pans the orbit target. The target stays inside a box around the state, so a long drag cannot lose Texas.
 
-Past a city-scale distance each distribution substation is a diamond in the middle of the homes that supply it. Clicking a metro in the side panel, or opening `/#metro/austin`, flies to that distance.
+The homes in a neighborhood sit on a hex around one modeled distribution substation. That substation, not the downtown dot, is the center of the patch. Hovering the city dot names the metro and how many substations it holds. Clicking it flies in. Hovering a substation diamond names it and how many units supply it. Clicking the diamond flies closer and dims every unit that supplies a different substation. `/#metro/austin` and `/#station/aus-s03` open those same views. The side panel metro list does too.
 
 Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 

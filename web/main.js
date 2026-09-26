@@ -59,6 +59,7 @@ let unitDetail = null;
 let family = "all";
 let screen = null;
 let focusPoint = null;
+let focusedStation = null;
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -85,26 +86,34 @@ function buildMap() {
   scene.add(border);
 }
 
-function labelSprite(text, share) {
-  const size = 256;
+function labelSprite(text) {
+  const label = text.toUpperCase();
   const element = document.createElement("canvas");
-  element.width = size;
-  element.height = 64;
   const ctx = element.getContext("2d");
+  const font = "600 44px 'Segoe UI', sans-serif";
+  ctx.font = font;
+  const padX = 28;
+  const width = Math.ceil(ctx.measureText(label).width) + padX * 2;
+  const height = 80;
+  element.width = width;
+  element.height = height;
+  ctx.font = font;
   ctx.fillStyle = "#8d887f";
-  ctx.font = "600 24px 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.letterSpacing = "5px";
-  ctx.fillText(text.toUpperCase(), size / 2, 34);
+  ctx.fillText(label, width / 2, height / 2);
   const texture = new THREE.CanvasTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
   );
-  const scale = 1.5 + Math.min(0.9, share * 4);
-  sprite.scale.set(scale, scale * 0.25, 1);
+  sprite.userData.aspect = width / height;
   return sprite;
+}
+
+function fitLabel(sprite, height) {
+  const aspect = sprite.userData.aspect || 4;
+  sprite.scale.set(height * aspect, height, 1);
 }
 
 function flatRing(inner, outer, color, opacity) {
@@ -178,16 +187,27 @@ const constraintArcs = new THREE.LineSegments(
 );
 scene.add(constraintArcs);
 
-// Direction only. The distance scales with how far the metro's units spread.
+// Direction the name grows, away from the homes. The anchor is the edge of the
+// sprite that stays next to the city, so the letters are not covered by dots.
 const LABEL_OFFSET = {
   n: [0, -1],
   s: [0, 1],
   e: [1, 0],
   w: [-1, 0],
-  ne: [0.75, -0.75],
-  nw: [-0.75, -0.75],
-  sw: [-0.75, 0.75],
-  se: [0.75, 0.75],
+  ne: [0.7, -0.7],
+  nw: [-0.7, -0.7],
+  sw: [-0.7, 0.7],
+  se: [0.7, 0.7],
+};
+const LABEL_ANCHOR = {
+  n: [0.5, 0],
+  s: [0.5, 1],
+  e: [0, 0.5],
+  w: [1, 0.5],
+  ne: [0, 0],
+  nw: [1, 0],
+  se: [0, 1],
+  sw: [1, 1],
 };
 
 const hubs = new Map();
@@ -204,11 +224,16 @@ function ensureHub(metro, share) {
   dot.rotation.x = -Math.PI / 2;
   group.add(dot, flatRing(size * 2.1, size * 2.3, COLOR.hub, 0.45));
   if (share >= LABEL_SHARE) {
-    const label = labelSprite(metro.name, share);
-    const [dx, dz] = LABEL_OFFSET[metro.label] || LABEL_OFFSET.n;
-    // Clear the cloud: a Rayleigh scale reaches about 1.6 scales for most units.
-    const reach = 0.5 + (metro.radius_km || 15) / 110.574 * 1.9;
-    label.position.set(dx * reach * 1.1, 0.02, dz * reach);
+    const label = labelSprite(metro.name);
+    const dir = metro.label || "n";
+    const [dx, dz] = LABEL_OFFSET[dir] || LABEL_OFFSET.n;
+    const [ax, ay] = LABEL_ANCHOR[dir] || LABEL_ANCHOR.n;
+    fitLabel(label, 0.24 + Math.min(0.1, share * 0.35));
+    label.center.set(ax, ay);
+    const len = Math.hypot(dx, dz) || 1;
+    // Sit the near edge just outside the neighborhood, not through the middle of it.
+    const reach = 0.28 + (metro.radius_km || 15) / 111 * 0.72;
+    label.position.set((dx / len) * reach, 0.05, (dz / len) * reach);
     group.add(label);
   }
   group.position.copy(project(metro.lat, metro.lon, 0.012));
@@ -250,7 +275,7 @@ function renderUnits(data) {
     const point = project(site.lat, site.lon, NODE_Y);
     positions.setXYZ(drawn, point.x, point.y, point.z);
     TINT.setHex(COLOR[modeOf(site)]);
-    if (!focused(site)) TINT.lerp(LAND, 0.78);
+    if (!focused(site) || (focusedStation && site.station !== focusedStation)) TINT.lerp(LAND, 0.9);
     colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
     drawn += 1;
     if (site.id === selected) {
@@ -275,9 +300,9 @@ function ensureStation(station) {
   mark.rotation.x = -Math.PI / 2;
   mark.rotation.z = Math.PI / 4;
   group.add(mark);
-  const label = labelSprite(station.name, 0.04);
-  label.scale.set(0.42, 0.1, 1);
-  label.position.set(0, 0.04, 0.06);
+  const label = labelSprite(station.name);
+  label.center.set(0.5, 1);
+  label.position.set(0, 0.04, 0.045);
   label.visible = false;
   group.add(label);
   group.position.copy(project(station.lat, station.lon, 0.025));
@@ -299,12 +324,15 @@ function renderStations(data) {
   for (const station of data.stations || []) {
     const entry = ensureStation(station);
     const near = Math.hypot(entry.group.position.x - target.x, entry.group.position.z - target.z);
-    entry.group.visible = show && near < reach + 0.15;
-    const size = Math.max(0.006, Math.min(0.014, 0.004 * dist));
+    const chosen = station.id === focusedStation;
+    entry.group.visible = show && (chosen || near < reach + 0.15);
+    const size = chosen
+      ? Math.max(0.012, Math.min(0.028, 0.012 * dist))
+      : Math.max(0.006, Math.min(0.014, 0.004 * dist));
     entry.mark.scale.set(size, size, 1);
-    const labelWidth = Math.min(0.26, 0.06 * dist);
-    entry.label.scale.set(labelWidth, labelWidth * 0.24, 1);
-    entry.label.visible = show && dist < 4.5 && near < reach;
+    entry.mark.material.color.setHex(chosen ? 0xf4f0e8 : 0xd5dbe2);
+    fitLabel(entry.label, chosen ? Math.min(0.16, 0.04 * dist) : Math.min(0.11, 0.028 * dist));
+    entry.label.visible = show && (chosen || (dist < 4.5 && near < reach));
   }
 }
 
@@ -924,14 +952,11 @@ panel.addEventListener("click", (event) => {
   if (metroHit) {
     const id = metroHit.dataset.metro;
     if (id === "all") {
-      focusPoint = { x: 0, z: 0.4, distance: 20 };
+      focusMetro(null);
       return;
     }
     const metro = (payload.metros || []).find((item) => item.id === id);
-    if (metro) {
-      const point = project(metro.lat, metro.lon, 0);
-      focusPoint = { x: point.x, z: point.z, distance: 1.7 };
-    }
+    if (metro) focusMetro(metro);
   }
 });
 
@@ -993,6 +1018,68 @@ function ensureScreen() {
   return screen;
 }
 
+const POINTER = new THREE.Vector3();
+
+function screenPoint(lat, lon, rect) {
+  POINTER.set((lon - ORIGIN.lon) * LON_SCALE, NODE_Y, ORIGIN.lat - lat).project(camera);
+  return {
+    x: (POINTER.x * 0.5 + 0.5) * rect.width,
+    y: (-POINTER.y * 0.5 + 0.5) * rect.height,
+  };
+}
+
+function nearestOf(items, x, y, rect, limit) {
+  let best = null;
+  let bestDist = limit;
+  for (const item of items || []) {
+    const point = screenPoint(item.lat, item.lon, rect);
+    const dist = Math.hypot(point.x - x, point.y - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = item;
+    }
+  }
+  return best;
+}
+
+function focusMetro(metro) {
+  focusedStation = null;
+  if (!metro) {
+    focusPoint = { x: 0, z: 0.4, distance: 20 };
+  } else {
+    const point = project(metro.lat, metro.lon, 0);
+    focusPoint = { x: point.x, z: point.z, distance: 1.7 };
+  }
+  if (payload) renderScene(payload);
+}
+
+function focusStation(station) {
+  focusedStation = station.id;
+  const point = project(station.lat, station.lon, 0);
+  focusPoint = { x: point.x, z: point.z, distance: 0.36 };
+  if (payload) renderScene(payload);
+  if (location.hash !== `#station/${station.id}`) {
+    history.replaceState(null, "", `#station/${station.id}`);
+  }
+}
+
+function pointerTarget(event) {
+  if (!payload) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  camera.updateMatrixWorld();
+  if (viewDistance() < 8) {
+    const station = nearestOf(payload.stations, x, y, rect, 22);
+    if (station) return { kind: "station", station };
+  } else {
+    const metro = nearestOf(payload.metros, x, y, rect, 26);
+    if (metro) return { kind: "metro", metro };
+  }
+  const site = nearestSite(event.clientX, event.clientY);
+  return site ? { kind: "site", site } : null;
+}
+
 function nearestSite(clientX, clientY) {
   const points = ensureScreen();
   if (!points) return null;
@@ -1012,17 +1099,25 @@ function nearestSite(clientX, clientY) {
 }
 
 canvas.addEventListener("pointermove", (event) => {
-  const site = nearestSite(event.clientX, event.clientY);
-  if (!site) {
+  const hit = pointerTarget(event);
+  if (!hit) {
     tip.hidden = true;
     canvas.style.cursor = "grab";
     return;
   }
   tip.hidden = false;
-  const station = (payload.stations || []).find((item) => item.id === site.station);
-  tip.innerHTML = `<b>${site.id}</b> ${modeOf(site)} · ${fmt(site.soc_pct, 0)}%${
-    station ? `<br>supplies ${station.name}` : ""
-  }${site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""}`;
+  if (hit.kind === "metro") {
+    const stations = (payload.stations || []).filter((item) => item.metro === hit.metro.id).length;
+    tip.innerHTML = `<b>${hit.metro.name}</b><br>${fmt(hit.metro.units)} units · ${fmt(stations)} substations`;
+  } else if (hit.kind === "station") {
+    tip.innerHTML = `<b>${hit.station.name}</b> distribution substation<br>${fmt(hit.station.units)} units supply it`;
+  } else {
+    const site = hit.site;
+    const station = (payload.stations || []).find((item) => item.id === site.station);
+    tip.innerHTML = `<b>${site.id}</b> ${modeOf(site)} · ${fmt(site.soc_pct, 0)}%${
+      station ? `<br>supplies ${station.name}` : ""
+    }${site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""}`;
+  }
   tip.style.left = `${event.clientX + 14}px`;
   tip.style.top = `${event.clientY + 14}px`;
   canvas.style.cursor = "pointer";
@@ -1033,10 +1128,18 @@ canvas.addEventListener("pointerleave", () => {
 });
 
 canvas.addEventListener("click", (event) => {
-  const site = nearestSite(event.clientX, event.clientY);
-  if (!site) return;
+  const hit = pointerTarget(event);
+  if (!hit) return;
   tip.hidden = true;
-  openUnit(site.id);
+  if (hit.kind === "metro") {
+    focusMetro(hit.metro);
+    return;
+  }
+  if (hit.kind === "station") {
+    focusStation(hit.station);
+    return;
+  }
+  openUnit(hit.site.id);
 });
 
 controls.addEventListener("change", () => {
@@ -1101,10 +1204,12 @@ poll().then(() => {
   const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
   if (wanted === "metro" && block) {
     const metro = (payload.metros || []).find((item) => item.id === block);
-    if (metro) {
-      const point = project(metro.lat, metro.lon, 0);
-      focusPoint = { x: point.x, z: point.z, distance: 1.7 };
-    }
+    if (metro) focusMetro(metro);
+    return;
+  }
+  if (wanted === "station" && block) {
+    const station = (payload.stations || []).find((item) => item.id === block);
+    if (station) focusStation(station);
     return;
   }
   if (wanted) openUnit(wanted, block);

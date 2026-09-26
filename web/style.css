@@ -178,36 +178,50 @@ main {
 }
 
 #decisions {
-  flex: none;
+  flex: 0 0 auto;
+  max-height: 188px;
   padding: 8px 22px 14px;
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 0;
 }
 
 main.collapsed #decisions { display: none; }
 
 #decision-log {
   overflow: auto;
-  max-height: 132px;
+  max-height: 148px;
 }
 
 .decision {
-  margin: 0;
+  display: grid;
+  grid-template-columns: 4.8em auto minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: baseline;
+  margin: 0 0 6px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
 }
 
-.decision b { color: var(--ink); font-weight: 500; }
+.decision b {
+  grid-column: 2 / -1;
+  color: var(--ink);
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .decision .push { color: var(--push); }
 .decision .pull { color: var(--pull); }
 .decision .hold { color: var(--hold); }
 .decision .alarm { color: var(--alarm); }
 
 .decision button {
+  justify-self: start;
   background: none;
   border: 0;
   padding: 0;
@@ -390,11 +404,19 @@ h2 {
 .stack p {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   margin: 0;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.stack p b { color: var(--ink); font-weight: 450; }
+.stack p span { flex: none; }
+.stack p b {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 450;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 
 .fold { margin-top: 2px; }
 .fold-body { max-height: 220px; overflow: auto; }
@@ -440,8 +462,8 @@ h2 {
 .case.status-active { border-left-color: var(--pull); }
 .case.status-done, .case.status-cancelled { border-left-color: var(--line); }
 .case-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.case-action { font-weight: 550; font-size: 13px; }
-.case-meta { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+.case-action { min-width: 0; font-weight: 550; font-size: 13px; overflow-wrap: anywhere; }
+.case-meta { margin: 2px 0 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .timer { color: var(--ink); font-variant-numeric: tabular-nums; }
 .case-site {
   padding: 0;
@@ -468,11 +490,12 @@ h2 {
 .status.alarm { color: var(--alarm); border-color: var(--alarm); }
 .alert {
   display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   column-gap: 8px;
+  row-gap: 2px;
   align-items: center;
   width: 100%;
+  min-width: 0;
   padding: 7px 9px;
   border: 1px solid var(--line);
   border-left: 2px solid var(--alarm);
@@ -483,19 +506,38 @@ h2 {
   cursor: pointer;
 }
 .alert .status { grid-row: 1 / span 2; }
-.alert-id { color: var(--ink); font-variant-numeric: tabular-nums; }
-.alert em { color: var(--alarm); font-style: normal; font-size: 12px; }
+.alert-id { min-width: 0; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.alert em {
+  min-width: 0;
+  color: var(--alarm);
+  font-style: normal;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .alert:hover { border-color: #4a4f59; }
-.alert.case-row em { color: var(--muted); }
+.alert.case-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+.alert.case-row .status { grid-row: 1; grid-column: 1; }
+.alert.case-row .alert-id { grid-row: 1; grid-column: 2; }
+.alert.case-row .timer { grid-row: 1; grid-column: 3; }
+.alert.case-row .case-step,
+.alert.case-row .case-est,
+.alert.case-row .escalation {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.alert.case-row .case-step { color: var(--ink); font-size: 12px; }
+.alert.case-row .case-est { color: var(--muted); font-size: 11px; }
 .alert.case-row.status-pending { border-left-color: var(--watch); }
 .alert.case-row.status-active { border-left-color: var(--pull); }
 .alert.case-row.status-done,
 .alert.case-row.status-cancelled { border-left-color: var(--line); }
 .alert.case-row .status.pending { color: var(--watch); border-color: var(--watch); }
 .alert.case-row .status.active { color: var(--pull); border-color: var(--pull); }
-.alert.case-row .status { grid-row: 1 / span 3; }
 .alert.case-row .escalation {
-  grid-column: 2;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;

@@ -760,8 +760,7 @@ function caseCard(entry, opts = {}) {
   if (opts.select && opts.site !== false) {
     const payload = entry.payload || {};
     const chart = escapeHtml(payload.chart_id || "");
-    const estimate = payload.estimate_min ? ` · est ${payload.estimate_min}m` : "";
-    const clock = timer ? ` · ${timer}` : "";
+    const estimate = payload.estimate_min ? `<span class="case-est">est ${payload.estimate_min}m</span>` : "";
     const whoLine = named ? escapeHtml(named) : "";
     const trail = (payload.escalation || [])
       .map((item) => `${item.stage} ${item.estimate_min}m ${item.result}`)
@@ -770,7 +769,9 @@ function caseCard(entry, opts = {}) {
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
       ${pill || `<span class="status">case</span>`}
       <span class="alert-id">${escapeHtml(entry.site)}</span>
-      <em>${escapeHtml(entry.title)}${estimate}${clock}</em>
+      ${timer}
+      <span class="case-step">${escapeHtml(entry.title)}</span>
+      ${estimate}
       ${foot ? `<span class="escalation">${foot}</span>` : ""}
     </button>`;
   }
@@ -1687,11 +1688,11 @@ function paintDecisions() {
     const tone = decisionTone(row.text);
     const site = row.site
       ? `<button type="button" data-site="${escapeHtml(row.site)}">${escapeHtml(row.site)}</button>`
-      : "";
+      : `<span></span>`;
     const body = tone
-      ? `<b class="${tone}">${escapeHtml(row.text)}</b>`
-      : `<b>${escapeHtml(row.text)}</b>`;
-    return `<p class="decision" title="${escapeHtml(row.text)}"><span>${escapeHtml(row.time)}</span> ${escapeHtml(row.who)} ${site} ${body}</p>`;
+      ? `<b class="decision-step ${tone}">${escapeHtml(row.text)}</b>`
+      : `<b class="decision-step">${escapeHtml(row.text)}</b>`;
+    return `<p class="decision" title="${escapeHtml(row.text)}"><span class="decision-time">${escapeHtml(row.time)}</span><span>${escapeHtml(row.who)}</span>${site}${body}</p>`;
   }).join("");
   if (stick) decisionBox.scrollTop = decisionBox.scrollHeight;
 }

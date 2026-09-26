@@ -1304,6 +1304,66 @@ function logLine(row) {
   </p>`;
 }
 
+function contractWhy(site, snap, signal, state) {
+  const duty = site.duty;
+  const level = site.intensity;
+  const reserve = site.reserve_frac;
+  const soc = snap.soc_pct;
+  if (snap.offline || snap.availability === "offline") {
+    return "Scheduled service has this base offline, so it holds.";
+  }
+  if (snap.grid === "off") {
+    return "The contactor is open, so this home does not import or export.";
+  }
+  if (signal === "hold") return "The call is hold, so this home does not move.";
+  if (level != null && duty != null && level < duty) {
+    return `Duty ${fmt(duty, 2)} is past intensity ${fmt(level, 2)}, so the call did not reach this home.`;
+  }
+  if (signal === "push" && reserve != null && soc != null && soc <= reserve * 100 + 0.2) {
+    return `Charge is at the ${fmt(reserve * 100, 0)}% reserve, so a push holds.`;
+  }
+  if (signal === "pull" && soc != null && soc >= 94.5) {
+    return "Charge is at the 95% ceiling, so a pull holds.";
+  }
+  if (signal !== state) {
+    const did = state === "push" ? "pushed" : state === "pull" ? "pulled" : "held";
+    return `Called to ${signal}. This battery ${did}.`;
+  }
+  return "This home answered the call.";
+}
+
+function contractCell(name, value, gloss, tone) {
+  return `<div>
+    <span>${name}</span>
+    <b class="${tone || ""}">${value}</b>
+    <em>${gloss}</em>
+  </div>`;
+}
+
+function contractBlock(site) {
+  const snap = site.snapshot || {};
+  const signal = snap.signal || "hold";
+  const state = snap.state || site.state || "hold";
+  const source = snap.source || "rules";
+  const extras = [
+    ["source", source],
+    ["availability", snap.availability || "online"],
+    ["soc_pct", snap.soc_pct == null ? "—" : `${fmt(snap.soc_pct, 0)}%`],
+  ];
+  if (site.duty != null) extras.push(["duty", fmt(site.duty, 2)]);
+  if (site.intensity != null) extras.push(["intensity", fmt(site.intensity, 2)]);
+  if (site.reserve_frac != null) extras.push(["reserve", `${fmt(site.reserve_frac * 100, 0)}%`]);
+  return `<section class="contract" aria-label="Data contract">
+    <p class="unit-chain-cap">contract</p>
+    <div class="contract-pair">
+      ${contractCell("signal", signal, "the call", signal)}
+      ${contractCell("state", state, "what it did", state)}
+    </div>
+    <p class="contract-why">${contractWhy(site, snap, signal, state)}</p>
+    <p class="contract-fields">${extras.map(([name, value]) => `<span><em>${name}</em> ${value}</span>`).join("")}</p>
+  </section>`;
+}
+
 function logBlock(site) {
   const rows = site.state_log || [];
   if (!rows.length) return "";
@@ -1336,19 +1396,22 @@ function renderPanel(data) {
   const ids = sites === fleetSites ? null : new Set(sites.map((site) => site.id));
   const queue = [];
   for (const site of sites) {
-    if (site.alarm) queue.push(site);
+    if (site.alarm || site.grid === "off") queue.push(site);
   }
 
   const queueHtml = queue.length
     ? queue
         .slice(0, 40)
-        .map(
-          (site) => `<button type="button" class="alert" data-site="${site.id}">
+        .map((site) => {
+          const codes = [...(site.flagged || [])];
+          if (site.grid === "off") codes.push("grid off");
+          const block = (site.flagged || [])[0] || "grid";
+          return `<button type="button" class="alert" data-site="${site.id}" data-chart="${block}">
             <span class="status alarm">maintenance</span>
             <span class="alert-id">${site.id}</span>
-            <em>${(site.flagged || []).join(" ")}</em>
-          </button>`,
-        )
+            <em>${codes.join(" ")}</em>
+          </button>`;
+        })
         .join("")
     : `<p class="muted">No maintenance alerts in this view.</p>`;
 
@@ -1764,6 +1827,7 @@ function renderUnit() {
   const scrolled = detail.scrollTop;
   const logSnap = snapState(detail.querySelector(".log-body"));
   detail.innerHTML = `
+    ${contractBlock(site)}
     <div class="chips tabs">${tabs}</div>
     <h3 class="dt-name">${spec.name}</h3>
     <p class="dt-role">${spec.role}</p>

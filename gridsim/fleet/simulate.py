@@ -994,6 +994,8 @@ def tick_sites(
         elif site.get("signal_override"):
             signal, level = site["signal_override"]
             source = "action"
+        # Kept for the unit view. Offline zeros it; a set_signal replaces it.
+        site["level"] = level
         target_kw = max(0.3, panel_kw(site, hour) * scale)
         load_kw = max(
             0.3,

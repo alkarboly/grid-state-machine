@@ -711,6 +711,7 @@ class Fleet:
                     "soc_pct": base.get("soc_pct"),
                     "alarm": bool(flagged),
                     "offline": bool(site.get("offline")),
+                    "grid": "off" if site.get("grid_off") else "on",
                 }
                 if flagged:
                     charts = {chart["chart_id"]: chart for chart in site.get("charts") or []}
@@ -794,6 +795,9 @@ class Fleet:
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),
                 "agent_call": site.get("agent_call"),
+                "duty": site.get("duty"),
+                "reserve_frac": site.get("reserve_frac"),
+                "intensity": site.get("level"),
             }
 
 

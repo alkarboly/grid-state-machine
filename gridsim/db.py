@@ -19,9 +19,100 @@ CREATE TABLE IF NOT EXISTS metric_logs (
   metrics_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS metric_logs_site ON metric_logs (site_id, id);
+CREATE TABLE IF NOT EXISTS sites (
+  site_id TEXT PRIMARY KEY,
+  city TEXT NOT NULL,
+  load_zone TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  capacity_kwh REAL NOT NULL,
+  power_limit_kw REAL NOT NULL,
+  load_scale REAL NOT NULL,
+  temp_center_c REAL NOT NULL,
+  temp_sigma_c REAL NOT NULL,
+  voltage_center_v REAL NOT NULL,
+  voltage_sigma_v REAL NOT NULL,
+  eta REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grid_snapshots (
+  ts TEXT PRIMARY KEY,
+  demand_mw REAL,
+  capacity_mw REAL,
+  available_mw REAL,
+  forecast_demand_mw REAL,
+  demand_percentile REAL,
+  storage_gen_mw REAL,
+  wind_mw REAL,
+  solar_mw REAL,
+  gas_mw REAL,
+  source TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS observations (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  site_id TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  demand_mw REAL,
+  demand_percentile REAL,
+  storage_gen_mw REAL,
+  lmp_usd_mwh REAL,
+  signal TEXT NOT NULL,
+  grid_in_kw REAL NOT NULL,
+  grid_out_kw REAL NOT NULL,
+  meter_in_kw REAL NOT NULL,
+  meter_out_kw REAL NOT NULL,
+  meter_voltage_v REAL NOT NULL,
+  energy_in_kwh REAL NOT NULL,
+  energy_out_kwh REAL NOT NULL,
+  disco_in_kw REAL NOT NULL,
+  disco_out_kw REAL NOT NULL,
+  disco_voltage_v REAL NOT NULL,
+  frequency_hz REAL NOT NULL,
+  contactor TEXT NOT NULL,
+  islanded INTEGER NOT NULL,
+  load_kw REAL NOT NULL,
+  panel_voltage_v REAL NOT NULL,
+  physical_soc_kwh REAL NOT NULL,
+  soc_kwh REAL NOT NULL,
+  soc_pct REAL NOT NULL,
+  commanded_charge_kw REAL NOT NULL,
+  commanded_discharge_kw REAL NOT NULL,
+  charge_kw REAL NOT NULL,
+  discharge_kw REAL NOT NULL,
+  temp_c REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observations_site ON observations (site_id, ts);
+CREATE TABLE IF NOT EXISTS control_points (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  site_id TEXT NOT NULL,
+  chart_id TEXT NOT NULL,
+  family TEXT NOT NULL,
+  measured REAL NOT NULL,
+  expected REAL NOT NULL,
+  value REAL NOT NULL,
+  sigma REAL NOT NULL,
+  ucl REAL NOT NULL,
+  lcl REAL NOT NULL,
+  z REAL NOT NULL,
+  rules_json TEXT NOT NULL,
+  in_control INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS control_points_site ON control_points (site_id, chart_id, ts);
 """
 
 LOG_CAP = 20000
+OBSERVATION_CAP = 20000
+CONTROL_CAP = 60000
+
+_OBSERVATION_COLUMNS = (
+    "ts", "site_id", "hour", "demand_mw", "demand_percentile", "storage_gen_mw", "lmp_usd_mwh",
+    "signal", "grid_in_kw", "grid_out_kw", "meter_in_kw", "meter_out_kw", "meter_voltage_v",
+    "energy_in_kwh", "energy_out_kwh", "disco_in_kw", "disco_out_kw", "disco_voltage_v",
+    "frequency_hz", "contactor", "islanded", "load_kw", "panel_voltage_v", "physical_soc_kwh",
+    "soc_kwh", "soc_pct", "commanded_charge_kw", "commanded_discharge_kw", "charge_kw",
+    "discharge_kw", "temp_c",
+)
 
 
 def connect() -> sqlite3.Connection:
@@ -39,19 +130,108 @@ def insert_raw(conn: sqlite3.Connection, source: str, fetched_at: str, body: Any
     conn.commit()
 
 
-def insert_logs(conn: sqlite3.Connection, rows: list[dict]) -> None:
-    conn.executemany(
-        "INSERT INTO metric_logs (ts, site_id, component, metrics_json) VALUES (?, ?, ?, ?)",
-        [
-            (row["ts"], row["site_id"], row["component"], json.dumps(row["metrics"]))
-            for row in rows
-        ],
-    )
-    count = conn.execute("SELECT COUNT(*) FROM metric_logs").fetchone()[0]
-    if count > LOG_CAP:
-        extra = count - LOG_CAP
+def _trim(conn: sqlite3.Connection, table: str, cap: int) -> None:
+    count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    if count > cap:
+        extra = count - cap
         conn.execute(
-            "DELETE FROM metric_logs WHERE id IN (SELECT id FROM metric_logs ORDER BY id LIMIT ?)",
+            f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} ORDER BY id LIMIT ?)",
             (extra,),
         )
+
+
+def upsert_sites(conn: sqlite3.Connection, sites: list[dict]) -> None:
+    conn.executemany(
+        """
+        INSERT INTO sites (
+          site_id, city, load_zone, lat, lon, capacity_kwh, power_limit_kw,
+          load_scale, temp_center_c, temp_sigma_c, voltage_center_v, voltage_sigma_v, eta
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(site_id) DO UPDATE SET
+          city = excluded.city,
+          load_zone = excluded.load_zone,
+          lat = excluded.lat,
+          lon = excluded.lon,
+          capacity_kwh = excluded.capacity_kwh,
+          power_limit_kw = excluded.power_limit_kw,
+          load_scale = excluded.load_scale,
+          temp_center_c = excluded.temp_center_c,
+          temp_sigma_c = excluded.temp_sigma_c,
+          voltage_center_v = excluded.voltage_center_v,
+          voltage_sigma_v = excluded.voltage_sigma_v,
+          eta = excluded.eta
+        """,
+        [
+            (
+                site["id"], site["city"], site["load_zone"], site["lat"], site["lon"],
+                site["capacity_kwh"], site["power_limit_kw"], site["load_scale"],
+                site["temp_center_c"], site["temp_sigma_c"], site["voltage_center_v"],
+                site["voltage_sigma_v"], site["eta"],
+            )
+            for site in sites
+        ],
+    )
+    conn.commit()
+
+
+def insert_grid(conn: sqlite3.Connection, grid: dict) -> None:
+    if not grid.get("as_of"):
+        return
+    conn.execute(
+        """
+        INSERT INTO grid_snapshots (
+          ts, demand_mw, capacity_mw, available_mw, forecast_demand_mw, demand_percentile,
+          storage_gen_mw, wind_mw, solar_mw, gas_mw, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ts) DO UPDATE SET
+          demand_mw = excluded.demand_mw,
+          capacity_mw = excluded.capacity_mw,
+          available_mw = excluded.available_mw,
+          forecast_demand_mw = excluded.forecast_demand_mw,
+          demand_percentile = excluded.demand_percentile,
+          storage_gen_mw = excluded.storage_gen_mw,
+          wind_mw = excluded.wind_mw,
+          solar_mw = excluded.solar_mw,
+          gas_mw = excluded.gas_mw,
+          source = excluded.source
+        """,
+        (
+            grid["as_of"], grid.get("demand_mw"), grid.get("capacity_mw"), grid.get("available_mw"),
+            grid.get("forecast_demand_mw"), grid.get("demand_percentile"), grid.get("storage_gen_mw"),
+            grid.get("wind_mw"), grid.get("solar_mw"), grid.get("gas_mw"), grid.get("source"),
+        ),
+    )
+    conn.commit()
+
+
+def insert_tick(conn: sqlite3.Connection, logs: list[dict], observations: list[dict], points: list[dict]) -> None:
+    conn.executemany(
+        "INSERT INTO metric_logs (ts, site_id, component, metrics_json) VALUES (?, ?, ?, ?)",
+        [(row["ts"], row["site_id"], row["component"], json.dumps(row["metrics"])) for row in logs],
+    )
+    placeholders = ", ".join("?" for _ in _OBSERVATION_COLUMNS)
+    columns = ", ".join(_OBSERVATION_COLUMNS)
+    conn.executemany(
+        f"INSERT INTO observations ({columns}) VALUES ({placeholders})",
+        [tuple(row[column] for column in _OBSERVATION_COLUMNS) for row in observations],
+    )
+    conn.executemany(
+        """
+        INSERT INTO control_points (
+          ts, site_id, chart_id, family, measured, expected, value, sigma, ucl, lcl, z, rules_json, in_control
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                point["ts"], point["site_id"], point["chart_id"], point["family"],
+                point["measured"], point["expected"], point["value"], point["sigma"],
+                point["ucl"], point["lcl"], point["z"], json.dumps(point["rules"]),
+                1 if point["in_control"] else 0,
+            )
+            for point in points
+        ],
+    )
+    _trim(conn, "metric_logs", LOG_CAP)
+    _trim(conn, "observations", OBSERVATION_CAP)
+    _trim(conn, "control_points", CONTROL_CAP)
     conn.commit()

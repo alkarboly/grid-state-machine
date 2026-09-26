@@ -29,7 +29,6 @@ PUBLIC_API = "https://api.ercot.com/api/public-reports"
 FUEL_MIX_URL = "https://www.ercot.com/api/1/services/read/dashboards/fuel-mix.json"
 SUPPLY_DEMAND_URL = "https://www.ercot.com/api/1/services/read/dashboards/supply-demand.json"
 
-ALARM_Z = 2.5
 TICK_SECONDS = 10
 
 

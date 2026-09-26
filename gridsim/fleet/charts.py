@@ -1,0 +1,90 @@
+"""Individuals control charts. Field names match docs/control-charts.md."""
+
+from __future__ import annotations
+
+LIMIT_SIGMA = 3.0
+WARN_SIGMA = 2.0
+HISTORY = 24
+
+CHARTS = (
+    {
+        "chart_id": "disco_meter_delta",
+        "family": "measurement",
+        "title": "Meter agreement",
+        "unit": "kW",
+        "sigma": 0.20,
+    },
+    {
+        "chart_id": "base_temp",
+        "family": "thermal",
+        "title": "Cabinet temperature",
+        "unit": "°C",
+        "sigma": None,
+    },
+    {
+        "chart_id": "disco_voltage",
+        "family": "electrical",
+        "title": "Service voltage",
+        "unit": "V",
+        "sigma": None,
+    },
+    {
+        "chart_id": "frequency",
+        "family": "electrical",
+        "title": "Frequency",
+        "unit": "Hz",
+        "sigma": 0.025,
+    },
+    {
+        "chart_id": "soc_tracking",
+        "family": "energy",
+        "title": "State-of-charge tracking",
+        "unit": "kWh",
+        "sigma": 0.45,
+    },
+    {
+        "chart_id": "dispatch_response",
+        "family": "response",
+        "title": "Dispatch response",
+        "unit": "kW",
+        "sigma": 0.40,
+    },
+)
+
+
+def evaluate(spec: dict, measured: float, expected: float, sigma: float, history: list[float]) -> dict:
+    """Chart the residual measured - expected. Limits are ±3 sigma around 0."""
+    value = measured - expected
+    sigma = sigma if sigma else spec["sigma"]
+    z = value / sigma if sigma else 0.0
+    rules: list[str] = []
+    if abs(z) >= LIMIT_SIGMA:
+        rules.append("beyond_3sigma")
+
+    run = list(history)[-6:] + [value]
+    if len(run) >= 7 and (all(point > 0 for point in run) or all(point < 0 for point in run)):
+        rules.append("seven_same_side")
+
+    recent = list(history)[-2:] + [value]
+    if len(recent) >= 3 and sigma:
+        above = sum(1 for point in recent if point / sigma >= WARN_SIGMA)
+        below = sum(1 for point in recent if point / sigma <= -WARN_SIGMA)
+        if above >= 2 or below >= 2:
+            rules.append("two_of_three_2sigma")
+
+    return {
+        "chart_id": spec["chart_id"],
+        "family": spec["family"],
+        "title": spec["title"],
+        "unit": spec["unit"],
+        "measured": round(measured, 4),
+        "expected": round(expected, 4),
+        "value": round(value, 4),
+        "sigma": round(sigma, 4),
+        "ucl": round(LIMIT_SIGMA * sigma, 4),
+        "lcl": round(-LIMIT_SIGMA * sigma, 4),
+        "z": round(z, 3),
+        "rules": rules,
+        "in_control": not rules,
+        "warning": abs(z) >= WARN_SIGMA and not rules,
+    }

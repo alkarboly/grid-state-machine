@@ -25,8 +25,8 @@ The chain is grid → meter → disco → panel → base.
 | `meter` | Service meter | `in_kw`, `out_kw`, `voltage_v`, `energy_in_kwh`, `energy_out_kwh` |
 | `disco` | Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz`, `contactor`, `islanded` |
 | `panel` | House load downstream of the battery interconnect | `load_kw`, `voltage_v` |
-| `base` | Battery cabinet | `capacity_kwh`, `power_limit_kw`, `soc_kwh`, `soc_pct`, `charge_kw`, `discharge_kw`, `temp_c` |
-| `maintenance` | Comparison of a live value to the normal band in [simulation.md](simulation.md) | `disco_meter_delta_kw`, `disco_meter_delta_z`, `base_temp_c`, `base_temp_z`, `disco_voltage_v`, `disco_voltage_z`, `alarm` |
+| `base` | Battery cabinet. `charge_kw` and `discharge_kw` are what the battery did. The commanded pair is what dispatch asked for. `soc_kwh` is the reported state of charge. | `capacity_kwh`, `power_limit_kw`, `soc_kwh`, `soc_pct`, `commanded_charge_kw`, `commanded_discharge_kw`, `charge_kw`, `discharge_kw`, `temp_c` |
+| `maintenance` | Which control charts are out of limits. The point shape is in [control-charts.md](control-charts.md). | `alarm`, `out_of_control`, `warning` |
 
 `signal` is `pull`, `push`, or `hold`. Pull charges the battery from the grid. Push discharges toward the grid. Hold does neither.
 
@@ -34,4 +34,6 @@ The chain is grid → meter → disco → panel → base.
 
 `lmp_usd_mwh` is JSON `null` until a settlement-point price exists for that home's load zone.
 
-`alarm` is true when any absolute z-score is at least `2.5`.
+`out_of_control` and `warning` are arrays of `chart_id`. `alarm` is true when `out_of_control` is not empty.
+
+The flat machine-learning row for the same tick is the `observations` table in [database.md](database.md). It carries the same measurements in columns, plus `physical_soc_kwh`, which is the coulomb count rather than the reported state of charge.

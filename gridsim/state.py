@@ -6,7 +6,7 @@ import json
 import threading
 
 from gridsim import config
-from gridsim.db import connect, insert_logs, insert_raw
+from gridsim.db import connect, insert_grid, insert_raw, insert_tick, upsert_sites
 from gridsim.ercot.client import fetch_dashboards, fetch_official
 from gridsim.ercot.normalize import (
     constraints_from_rows,
@@ -64,6 +64,7 @@ class Fleet:
         if self._thread and self._thread.is_alive():
             return
         self._conn = connect()
+        upsert_sites(self._conn, self.sites)
         self.tick()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="gridsim-tick", daemon=True)
@@ -126,10 +127,12 @@ class Fleet:
         else:
             official = "disabled"
 
+        stored_grid = None
         with self._lock:
             if grid is not None:
                 grid["prices"] = prices
                 self.grid = grid
+                stored_grid = {key: value for key, value in grid.items() if key != "prices"}
             elif prices:
                 self.grid["prices"] = prices
             if constraints:
@@ -143,6 +146,8 @@ class Fleet:
                 "bus_lmp_rows": bus_lmp_rows,
                 "fetched_at": fetched_at,
             }
+        if self._conn and stored_grid:
+            insert_grid(self._conn, stored_grid)
 
     def tick(self) -> None:
         now = now_central()
@@ -150,11 +155,11 @@ class Fleet:
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
-            sites, logs = tick_sites(self.sites, self.grid, now, dt_hours)
+            sites, logs, observations, points = tick_sites(self.sites, self.grid, now, dt_hours)
             self.sites = sites
             self._last_tick = now
         if self._conn and logs:
-            insert_logs(self._conn, logs)
+            insert_tick(self._conn, logs, observations, points)
 
     def scene(self) -> dict:
         with self._lock:
@@ -167,6 +172,7 @@ class Fleet:
                     {
                         "id": site["id"],
                         "city": site["city"],
+                        "label": site.get("label", "n"),
                         "load_zone": site["load_zone"],
                         "lat": site["lat"],
                         "lon": site["lon"],
@@ -176,7 +182,11 @@ class Fleet:
                         "charge_kw": base.get("charge_kw"),
                         "discharge_kw": base.get("discharge_kw"),
                         "load_kw": panel.get("load_kw"),
+                        "load_scale": site.get("load_scale"),
+                        "temp_center_c": site.get("temp_center_c"),
+                        "eta": site.get("eta"),
                         "metrics": metrics,
+                        "charts": site.get("charts") or [],
                     }
                 )
             return {

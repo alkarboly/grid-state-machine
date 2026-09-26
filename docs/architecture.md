@@ -15,22 +15,32 @@ ERCOT dashboard JSON
   and, when configured, api.ercot.com public-reports
     → raw_records (SQLite)
     → normalized grid snapshot, constraints, prices
-    → fleet tick (load, dispatch, sensor noise, z-scores)
-    → metric_logs (SQLite)
+    → fleet tick (one battery at a time: load, dispatch, sensor noise, control charts)
+    → metric_logs, observations, control_points (SQLite)
     → GET /api/scene
-    → Three.js map
+    → Three.js map and the selected battery's charts
 ```
 
 There is no login. The map and `/api/scene` are the entry points. Official ERCOT credentials stay in the environment and are never returned by the API.
 
+## Map
+
+The state is a filled outline from `web/geo.js`, with longitude compressed by `cos(31°)` so Texas is not stretched.
+
+Each battery is a node: a dot in the dispatch color, a ring around it filled to state of charge, a red ring when a control chart is out of limits, and a pale ring on the selected one. Nodes sit on two service-territory rings around their city hub, so no two cities overlap and no node hides another. Those rings are layout, not addresses.
+
+Two kinds of arc are drawn, and they mean different things:
+
+- **Feeder arcs** connect a battery to its city hub. This is the modeled distribution relationship, the same grouping as `load_zone`. The arc takes the battery's dispatch color, so a glance shows which part of the fleet is exporting.
+- **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between city hubs, because ERCOT data does not support that topology.
+
+Choosing a maintenance family in the panel dims every battery whose charts in that family are in control, so the map answers one question at a time.
+
 ## Persistence
 
-`data/gridsim.db` holds:
+`data/gridsim.db` holds the tables in [database.md](database.md): raw ERCOT payloads, one utility snapshot per interval, one identity row per battery, component logs, a flat observation row for machine learning, and one control-chart point per battery per chart per tick.
 
-- `raw_records` — unmodified ERCOT payloads
-- `metric_logs` — one row per component per site per tick
-
-The database file is local and gitignored. Restarting the process creates a new fleet state; logs already on disk remain until the row cap drops the oldest.
+The database file is local and gitignored. Column names are the shape intended for Supabase Postgres. Restarting the process creates a new fleet state; rows already on disk remain until the cap drops the oldest.
 
 ## Run
 

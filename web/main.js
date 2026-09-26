@@ -8,11 +8,11 @@ function api(path) {
 }
 
 const COLOR = {
-  pull: 0x35b6ff,
-  push: 0xff8c34,
-  hold: 0x7ed5a1,
-  alarm: 0xff5f73,
-  offline: 0x8f95a4,
+  pull: 0xff9b3d,
+  push: 0x4ed08a,
+  hold: 0x8d95a3,
+  alarm: 0xff4d5f,
+  offline: 0x5f6672,
   hub: 0x7b7568,
   land: 0x181a20,
   border: 0x515762,
@@ -64,8 +64,6 @@ let focusPoint = null;
 let focusedStation = null;
 let focusedMetro = null;
 let stageStarted = 0;
-let stageRadius = 0.05;
-let stageSpan = { x: 0.05, z: 0.05 };
 let stageT = 1;
 let fillHold = false;
 let cityStarted = 0;
@@ -73,17 +71,27 @@ let cityT = 1;
 let cityHold = false;
 let metroStackSig = "";
 let metroStack = null;
+let areaStackSig = "";
+let areaStack = null;
 
+// City view lays every substation out as one row. The dots keep a fixed screen
+// size, so these gaps are what stops a lane from reading as a single smear.
 const STACK = {
-  laneOffset: 0.028,
-  laneStep: 0.011,
-  holdStep: 0.007,
-  rowStep: 0.0064,
-  laneRows: 8,
-  holdRows: 6,
-  holdDrift: 0.0018,
+  laneOffset: 0.062,
+  laneGap: 0.026,
+  laneStep: 0.0145,
+  holdStep: 0.0125,
+  rowStep: 0.013,
+  rows: 6,
+  holdDrift: 0.0022,
   holdLift: 0.0011,
+  nameGap: 0.034,
+  nameWidth: 0.07,
 };
+
+function metroRowGap(count) {
+  return Math.max(0.082, Math.min(0.118, 0.8 / Math.max(count, 1)));
+}
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -316,9 +324,12 @@ function flowState(item, preferAction = false, forcedSignal = null) {
 
 function modeOf(item, preferAction = false, forcedSignal = null) {
   if (!item) return "hold";
+  // A flagged chart stays red even while service has the base offline, or it
+  // vanishes into the gray hold column.
+  if (item.alarm) return "alarm";
   const availability = item.metrics?.base?.availability;
   if (item.offline || availability === "offline") return "offline";
-  return item.alarm ? "alarm" : flowState(item, preferAction, forcedSignal);
+  return flowState(item, preferAction, forcedSignal);
 }
 
 function viewDistance() {
@@ -338,13 +349,9 @@ function arcCurve(from, to) {
 
 const TINT = new THREE.Color();
 
-function stackYard(data) {
-  if (!focusedMetro || focusedStation) {
-    metroStackSig = "";
-    metroStack = null;
-    return null;
-  }
-  const overrideRows = (data.actions || [])
+// A manual call that is still standing, newest first, so the latest one wins.
+function signalOverrides(data) {
+  const rows = (data.actions || [])
     .filter((action) => {
       if (action.kind !== "set_signal") return false;
       if (action.status !== "active" && action.status !== "pending") return false;
@@ -352,10 +359,70 @@ function stackYard(data) {
       return signal === "push" || signal === "pull" || signal === "hold";
     })
     .sort((a, b) => (b.ts || "").localeCompare(a.ts || "") || (b.id || "").localeCompare(a.id || ""));
-  const stamp = (data.fleet || {}).ts || "";
-  const overrideStamp = overrideRows
+  const bySite = new Map();
+  for (const action of rows) {
+    if (action.site_id && !bySite.has(action.site_id)) bySite.set(action.site_id, action.payload.signal);
+  }
+  const stamp = rows
     .map((action) => `${action.site_id}:${action.status}:${action.payload?.signal || ""}:${action.ts || ""}`)
     .join("|");
+  return { bySite, stamp };
+}
+
+// Where the three groups land for a block this tall. The side lanes start
+// outside the widest hold column, which is what keeps them from running
+// together however the fleet splits.
+function laneShape(counts, rows) {
+  const holdCols = counts.hold ? Math.ceil(counts.hold / rows) : 0;
+  const holdReach = holdCols ? Math.ceil((holdCols - 1) / 2) * STACK.holdStep : 0;
+  const laneOffset = Math.max(STACK.laneOffset, holdReach + STACK.laneGap);
+  const reach = (count) => (count ? laneOffset + (Math.ceil(count / rows) - 1) * STACK.laneStep : 0);
+  const pull = reach(counts.pull);
+  const push = reach(counts.push);
+  return {
+    rows,
+    laneOffset,
+    holdReach,
+    pull,
+    push,
+    left: Math.max(pull, holdReach),
+    right: Math.max(push, holdReach),
+    height: rows * STACK.rowStep,
+  };
+}
+
+// Lays one group into a column block. `side` is -1 for pull and +1 for push;
+// the hold column takes 0 and grows out from the middle.
+function packBlock(indices, base, side, shape, targetX, targetZ) {
+  for (let spot = 0; spot < indices.length; spot += 1) {
+    const unit = indices[spot];
+    const col = Math.floor(spot / shape.rows);
+    const row = spot % shape.rows;
+    const rowsHere = Math.min(shape.rows, indices.length - col * shape.rows);
+    let x = base.x;
+    if (side) x += side * (shape.laneOffset + col * STACK.laneStep);
+    else if (col > 0) x += (col % 2 ? -1 : 1) * Math.ceil(col / 2) * STACK.holdStep;
+    targetX[unit] = x;
+    targetZ[unit] = base.z + (row - (rowsHere - 1) * 0.5) * STACK.rowStep;
+  }
+}
+
+function sortLane(indices, sites) {
+  indices.sort((a, b) => {
+    const flagged = Number(Boolean(sites[b].alarm)) - Number(Boolean(sites[a].alarm));
+    if (flagged) return flagged;
+    return sites[a].id.localeCompare(sites[b].id);
+  });
+}
+
+function stackYard(data) {
+  if (!focusedMetro || focusedStation) {
+    metroStackSig = "";
+    metroStack = null;
+    return null;
+  }
+  const { bySite: overrides, stamp: overrideStamp } = signalOverrides(data);
+  const stamp = (data.fleet || {}).ts || "";
   const signature = `${focusedMetro}|${stamp}|${data.sites.length}|${overrideStamp}`;
   if (signature === metroStackSig && metroStack) return metroStack;
   const stations = (data.stations || [])
@@ -371,7 +438,7 @@ function stackYard(data) {
     ? project(metro.lat, metro.lon, NODE_Y)
     : stations.reduce((sum, station) => sum.add(project(station.lat, station.lon, NODE_Y)), new THREE.Vector3())
       .multiplyScalar(1 / stations.length);
-  const rowGap = Math.max(0.018, Math.min(0.058, 0.9 / Math.max(stations.length, 1)));
+  const rowGap = metroRowGap(stations.length);
   const span = rowGap * Math.max(stations.length - 1, 0);
   const stationRows = new Map();
   stations.forEach((station, index) => {
@@ -384,12 +451,6 @@ function stackYard(data) {
     stationRows.set(station.id, { row, delay });
   });
   const lanes = new Map(stations.map((station) => [station.id, { pull: [], push: [], hold: [] }]));
-  const overrides = new Map();
-  for (const action of overrideRows) {
-    const signal = action.payload?.signal;
-    const siteId = action.site_id;
-    if (siteId && !overrides.has(siteId)) overrides.set(siteId, signal);
-  }
   const targetX = new Float32Array(data.sites.length);
   const targetZ = new Float32Array(data.sites.length);
   const visible = new Uint8Array(data.sites.length);
@@ -404,37 +465,105 @@ function stackYard(data) {
     else if (flow === "pull") bucket.pull.push(index);
     else bucket.hold.push(index);
   }
-  function packLane(indices, base, side, rows) {
-    for (let spot = 0; spot < indices.length; spot += 1) {
-      const unit = indices[spot];
-      const col = Math.floor(spot / rows);
-      const row = spot % rows;
-      const rowsHere = Math.min(rows, indices.length - col * rows);
-      const rowOffset = (row - (rowsHere - 1) * 0.5) * STACK.rowStep;
-      let x = base.x;
-      if (side) x += side * (STACK.laneOffset + col * STACK.laneStep);
-      else if (col > 0) {
-        const ring = Math.ceil(col / 2);
-        const dir = col % 2 ? -1 : 1;
-        x += dir * ring * STACK.holdStep;
-      }
-      targetX[unit] = x;
-      targetZ[unit] = base.z + rowOffset;
-    }
+  // Every row keeps the same lane positions, so the columns line up down the
+  // whole city even when one substation is busier than the rest.
+  const peak = { pull: 0, hold: 0, push: 0 };
+  for (const bucket of lanes.values()) {
+    peak.pull = Math.max(peak.pull, bucket.pull.length);
+    peak.hold = Math.max(peak.hold, bucket.hold.length);
+    peak.push = Math.max(peak.push, bucket.push.length);
   }
+  const shape = laneShape(peak, STACK.rows);
   for (const [stationId, bucket] of lanes.entries()) {
     const row = stationRows.get(stationId);
     if (!row) continue;
-    bucket.pull.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
-    bucket.push.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
-    bucket.hold.sort((a, b) => data.sites[a].id.localeCompare(data.sites[b].id));
-    packLane(bucket.pull, row.row, -1, STACK.laneRows);
-    packLane(bucket.push, row.row, 1, STACK.laneRows);
-    packLane(bucket.hold, row.row, 0, STACK.holdRows);
+    sortLane(bucket.pull, data.sites);
+    sortLane(bucket.push, data.sites);
+    sortLane(bucket.hold, data.sites);
+    packBlock(bucket.pull, row.row, -1, shape, targetX, targetZ);
+    packBlock(bucket.push, row.row, 1, shape, targetX, targetZ);
+    packBlock(bucket.hold, row.row, 0, shape, targetX, targetZ);
   }
-  metroStack = { stationRows, targetX, targetZ, visible, overrides };
+  const left = shape.left + STACK.nameGap + STACK.nameWidth;
+  metroStack = {
+    stationRows,
+    targetX,
+    targetZ,
+    visible,
+    overrides,
+    nameX: -(shape.left + STACK.nameGap),
+    // Where the whole block sits relative to the metro centre, so the camera
+    // can frame what is actually drawn instead of guessing.
+    center: new THREE.Vector3(center.x + (shape.right - left) * 0.5, NODE_Y, center.z),
+    spanX: left + shape.right,
+    spanZ: span + shape.height,
+  };
   metroStackSig = signature;
   return metroStack;
+}
+
+// The open substation gets the same three groups, given the whole frame
+// instead of one lane. The block is shaped to the window so it fills it.
+function areaYard(data) {
+  if (!focusedStation) {
+    areaStackSig = "";
+    areaStack = null;
+    return null;
+  }
+  const { bySite: overrides, stamp: overrideStamp } = signalOverrides(data);
+  const stamp = (data.fleet || {}).ts || "";
+  const aspect = Math.max(camera.aspect, 0.5);
+  const signature = `${focusedStation}|${stamp}|${data.sites.length}|${overrideStamp}|${aspect.toFixed(2)}`;
+  if (signature === areaStackSig && areaStack) return areaStack;
+  const station = (data.stations || []).find((item) => item.id === focusedStation);
+  if (!station) {
+    areaStackSig = signature;
+    areaStack = null;
+    return null;
+  }
+  const center = project(station.lat, station.lon, NODE_Y);
+  const targetX = new Float32Array(data.sites.length);
+  const targetZ = new Float32Array(data.sites.length);
+  const bucket = { pull: [], push: [], hold: [] };
+  for (let index = 0; index < data.sites.length; index += 1) {
+    const site = data.sites[index];
+    if (site.station !== focusedStation) continue;
+    const flow = flowState(site, true, overrides.get(site.id) || null);
+    if (flow === "push") bucket.push.push(index);
+    else if (flow === "pull") bucket.pull.push(index);
+    else bucket.hold.push(index);
+  }
+  const counts = { pull: bucket.pull.length, hold: bucket.hold.length, push: bucket.push.length };
+  // Pick the block height whose proportions sit closest to the window, so the
+  // homes use the frame instead of running off one edge of it.
+  let shape = laneShape(counts, STACK.rows);
+  let bestGap = Infinity;
+  for (let rows = 4; rows <= 24; rows += 1) {
+    const option = laneShape(counts, rows);
+    const width = option.left + option.right;
+    const gap = Math.abs(Math.log((width / option.height) / aspect));
+    if (gap < bestGap) {
+      bestGap = gap;
+      shape = option;
+    }
+  }
+  sortLane(bucket.pull, data.sites);
+  sortLane(bucket.push, data.sites);
+  sortLane(bucket.hold, data.sites);
+  packBlock(bucket.pull, center, -1, shape, targetX, targetZ);
+  packBlock(bucket.push, center, 1, shape, targetX, targetZ);
+  packBlock(bucket.hold, center, 0, shape, targetX, targetZ);
+  const pad = STACK.rowStep * 1.5;
+  areaStack = {
+    targetX,
+    targetZ,
+    overrides,
+    center: new THREE.Vector3(center.x + (shape.right - shape.left) * 0.5, NODE_Y, center.z),
+    spanX: shape.left + shape.right,
+    spanZ: shape.height + pad * 2,
+  };
+  areaStackSig = signature;
+  return areaStack;
 }
 
 function stationSpread(data) {
@@ -466,10 +595,31 @@ function stationOrigin(stationId, data, centers) {
   return origin;
 }
 
+const DRIFT = { x: 0, y: 0, z: 0 };
+
+// Push and pull dots lean the way the power is going, hold dots breathe in
+// place. The drift stays in world units, so it keeps the same proportion to
+// the gaps whether the camera is over a city or over one substation.
+function laneDrift(flow, index, now, progress, forced) {
+  const wave = now + index * 0.61;
+  DRIFT.x = 0;
+  DRIFT.y = 0;
+  DRIFT.z = 0;
+  if (flow === "pull" || flow === "push") {
+    const pulse = Math.abs(Math.sin(wave)) * (forced ? 0.0078 : 0.0034) * progress;
+    DRIFT.x = flow === "push" ? pulse : -pulse;
+    return DRIFT;
+  }
+  DRIFT.y = (0.0004 + Math.abs(Math.sin(wave * 0.5)) * STACK.holdLift) * progress;
+  DRIFT.z = Math.sin(wave * 0.65) * STACK.holdDrift * progress;
+  return DRIFT;
+}
+
 function renderUnits(data) {
   const positions = particles.geometry.attributes.position;
   const colors = particles.geometry.attributes.color;
   const yard = stackYard(data);
+  const area = areaYard(data);
   const spread = stationSpread(data);
   const centers = new Map();
   const now = performance.now() * 0.0043;
@@ -484,9 +634,10 @@ function renderUnits(data) {
     let x = point.x;
     let y = point.y;
     let z = point.z;
-    const forcedSignal = yard ? (yard.overrides?.get(site.id) || null) : null;
-    const flow = flowState(site, Boolean(yard), forcedSignal);
-    TINT.setHex(COLOR[modeOf(site, Boolean(yard), forcedSignal)]);
+    const lanes = yard || area;
+    const forcedSignal = lanes ? (lanes.overrides?.get(site.id) || null) : null;
+    const flow = flowState(site, Boolean(lanes), forcedSignal);
+    TINT.setHex(COLOR[modeOf(site, Boolean(lanes), forcedSignal)]);
     if (yard) {
       const row = yard.stationRows.get(site.station);
       const delay = row ? row.delay : 0;
@@ -496,25 +647,22 @@ function renderUnits(data) {
       x = point.x + (targetX - point.x) * unfold;
       z = point.z + (targetZ - point.z) * unfold;
       if (unfold > 0.75) {
-        const wave = now + index * 0.61;
-        if (flow === "pull" || flow === "push") {
-          const pulseScale = forcedSignal ? 0.0052 : 0.0022;
-          const pulse = Math.abs(Math.sin(wave)) * pulseScale * unfold;
-          x += flow === "push" ? pulse : -pulse;
-        } else {
-          z += Math.sin(wave * 0.65) * STACK.holdDrift * unfold;
-          y += (0.0004 + Math.abs(Math.sin(wave * 0.5)) * STACK.holdLift) * unfold;
-        }
+        const drift = laneDrift(flow, index, now, unfold, forcedSignal);
+        x += drift.x;
+        y += drift.y;
+        z += drift.z;
       }
-    } else if (focusedStation) {
-      const delay = (drawn % 20) / 20 * 0.28;
-      const local = easeOut((stageT - delay) / 0.72);
-      const fill = frameFill();
-      const sx = 1 + (fill.x - 1) * local;
-      const sz = 1 + (fill.z - 1) * local;
-      const origin = stationOrigin(site.station, data, centers) || point;
-      x = origin.x + (point.x - origin.x) * sx;
-      z = origin.z + (point.z - origin.z) * sz;
+    } else if (area) {
+      const delay = ((drawn % 24) / 24) * 0.3;
+      const local = easeOut((stageT - delay) / 0.7);
+      x = point.x + (area.targetX[index] - point.x) * local;
+      z = point.z + (area.targetZ[index] - point.z) * local;
+      if (local > 0.75) {
+        const drift = laneDrift(flow, index, now, local, forcedSignal);
+        x += drift.x;
+        y += drift.y;
+        z += drift.z;
+      }
     } else {
       const opening = spread.get(site.station);
       if (opening && site.metro === focusedMetro && opening.homes < 1) {
@@ -563,15 +711,15 @@ function ensureStation(station) {
   group.add(mark);
   const label = labelSprite(stackStationName(station.name), {
     size: 38,
-    padX: 24,
-    padY: 14,
-    lineHeight: 1.14,
+    padX: 22,
+    padY: 13,
+    lineHeight: 1.2,
     color: "#e7e1d6",
     backdrop: {
-      fill: "rgba(14,16,20,0.92)",
-      stroke: "rgba(126,136,152,0.9)",
-      radius: 12,
-      lineWidth: 2,
+      fill: "rgba(16,17,20,0.82)",
+      stroke: "rgba(103,113,132,0.42)",
+      radius: 10,
+      lineWidth: 1.2,
     },
   });
   label.center.set(0.5, 1);
@@ -613,9 +761,11 @@ function renderStations(data) {
       entry.mark.scale.set(size, size, 1);
       entry.mark.visible = false;
       entry.mark.material.color.setHex(0xe4e8ef);
+      // Names line up in one column outside the widest pull lane, so no name
+      // ever lands on a dot.
       entry.label.center.set(1, 0.5);
-      entry.label.position.set(-0.048, 0.026, 0);
-      fitLabel(entry.label, Math.min(0.11, 0.032 + dist * 0.011));
+      entry.label.position.set(yard.nameX, 0.026, 0);
+      fitLabel(entry.label, Math.min(0.08, 0.026 + dist * 0.008));
       entry.label.visible = labelsOn && unfold > 0.5;
     }
     return;
@@ -796,7 +946,7 @@ function chartSvg(chart) {
     const clamped = Math.max(-span, Math.min(span, value));
     return plotBottom / 2 - (clamped / span) * (plotBottom / 2 - 8);
   };
-  const stroke = chart.in_control ? (chart.warning ? "#d8b46a" : "#cfc6ba") : "#e15b4c";
+  const stroke = chart.in_control ? (chart.warning ? "#d8b46a" : "#cfc6ba") : "#ff4d5f";
   const runs = [];
   let run = [];
   series.forEach((value, index) => {
@@ -1820,6 +1970,41 @@ function placeHash(next) {
   history.replaceState(null, "", next || location.pathname);
 }
 
+// How much ground a pose takes in per unit of distance. The tilt is fixed, so
+// the frame is trig on the pose vector and the lens.
+function poseFrame(name) {
+  const pose = poseOffset({ pose: name });
+  const length = Math.hypot(pose[0], pose[1]) || 1;
+  const height = pose[0] / length;
+  const elevation = Math.atan2(pose[0], pose[1]);
+  const half = THREE.MathUtils.degToRad(camera.fov) / 2;
+  return {
+    depth: height / Math.tan(elevation - half) - height / Math.tan(elevation + half),
+    width: 2 * Math.tan(half) * Math.max(camera.aspect, 0.5),
+  };
+}
+
+// Pull back far enough to hold the whole block, then slide it right and up,
+// clear of the chart card and the summary card on the left. Both the city
+// stack and one open substation are framed this way.
+function frameYard(yard, point, name) {
+  const limit = name === "station" ? { near: 0.16, far: 1.1 } : { near: 1.6, far: 4.4 };
+  if (!yard) return { x: point.x, z: point.z, distance: limit.near };
+  const frame = poseFrame(name);
+  // The city stack wants air around it, so the rows stay clear of the cards.
+  // A service area can sit closer.
+  const fit = name === "station" ? 0.84 : 0.68;
+  const distance = Math.min(limit.far, Math.max(limit.near, Math.max(
+    yard.spanZ / (frame.depth * fit),
+    yard.spanX / (frame.width * fit),
+  )));
+  return {
+    x: yard.center.x - frame.width * distance * 0.09,
+    z: yard.center.z + frame.depth * distance * 0.05,
+    distance,
+  };
+}
+
 function focusMetro(metro) {
   const arriving = !focusedStation;
   focusedStation = null;
@@ -1837,9 +2022,7 @@ function focusMetro(metro) {
       cityStarted = 0;
     }
     const point = project(metro.lat, metro.lon, 0);
-    const stationCount = (payload?.stations || []).filter((item) => item.metro === metro.id).length;
-    const distance = Math.max(1.7, Math.min(3.2, 1.25 + stationCount * 0.06));
-    focusPoint = { x: point.x, z: point.z, distance, pose: "city" };
+    focusPoint = { ...frameYard(payload ? stackYard(payload) : null, point, "city"), pose: "city" };
     placeHash(`#metro/${metro.id}`);
   }
   if (payload) {
@@ -1858,50 +2041,6 @@ function stepBack() {
   focusMetro(null);
 }
 
-function patchRadius(station) {
-  const origin = project(station.lat, station.lon, 0);
-  let radius = 0.012;
-  for (const site of payload?.sites || []) {
-    if (site.station !== station.id) continue;
-    const point = project(site.lat, site.lon, 0);
-    radius = Math.max(radius, Math.hypot(point.x - origin.x, point.z - origin.z));
-  }
-  return radius;
-}
-
-function frameDistance(radius) {
-  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-  const height = (radius * 1.12) / half;
-  return Math.max(0.14, height / 0.983);
-}
-
-function frameFill() {
-  const pose = poseOffset({ pose: "station" });
-  const length = Math.hypot(pose[0], pose[1]) || 1;
-  const height = (pose[0] / length) * frameDistance(stageRadius);
-  const halfV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-  const aspect = Math.max(camera.aspect, 0.5);
-  const halfH = height * halfV;
-  const halfW = halfH * aspect;
-  return {
-    x: Math.max(1, (halfW * 0.94) / Math.max(stageSpan.x, 0.008)),
-    z: Math.max(1, (halfH * 0.92) / Math.max(stageSpan.z, 0.008)),
-  };
-}
-
-function measureSpan(station) {
-  const origin = project(station.lat, station.lon, 0);
-  let maxX = 0.008;
-  let maxZ = 0.008;
-  for (const site of payload?.sites || []) {
-    if (site.station !== station.id) continue;
-    const point = project(site.lat, site.lon, 0);
-    maxX = Math.max(maxX, Math.abs(point.x - origin.x));
-    maxZ = Math.max(maxZ, Math.abs(point.z - origin.z));
-  }
-  return { x: maxX, z: maxZ };
-}
-
 function focusStation(station) {
   focusedStation = station.id;
   focusedMetro = station.metro;
@@ -1911,14 +2050,7 @@ function focusStation(station) {
   stageStarted = 0;
   stageT = 0;
   const point = project(station.lat, station.lon, 0);
-  stageRadius = patchRadius(station);
-  stageSpan = measureSpan(station);
-  focusPoint = {
-    x: point.x,
-    z: point.z,
-    distance: frameDistance(stageRadius),
-    pose: "station",
-  };
+  focusPoint = { ...frameYard(payload ? areaYard(payload) : null, point, "station"), pose: "station" };
   if (payload) {
     renderScene(payload);
     renderPanel(payload);
@@ -2253,10 +2385,12 @@ function renderStage(data) {
   }
   stageTitle.textContent = view.title;
   stageSub.textContent = view.sub;
+  // Same left-to-right order as the lanes: pull, hold, push. Flagged is a
+  // colour on a home, not a lane, so it stays last.
   stageCounts.innerHTML = `
-    <span class="key push"><i></i>${fmt(pushing)} pushing</span>
     <span class="key pull"><i></i>${fmt(pulling)} pulling</span>
     <span class="key hold"><i></i>${fmt(holding)} holding</span>
+    <span class="key push"><i></i>${fmt(pushing)} pushing</span>
     <span class="key alarm"><i></i>${fmt(flagged)} flagged</span>
   `;
 }

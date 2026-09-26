@@ -53,13 +53,14 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
 )
-from gridsim.fleet.agent import audit
-from gridsim.fleet.charts import CHARTS
+from gridsim.fleet.agent import audit, day_shape
+from gridsim.fleet.charts import CHART_STEP_SECONDS, CHARTS, trace_values
 from gridsim.fleet.simulate import (
     DEMO_FAULTS,
     build_sites,
     load_anchors,
     metro_summary,
+    seed_history,
     station_summary,
     tick_sites,
 )
@@ -270,6 +271,7 @@ class Fleet:
         for site in self.sites:
             if site["id"] in installed:
                 site["addons"] = installed[site["id"]]
+        seed_history(self.sites, now_central())
         self.tick()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="gridsim-tick", daemon=True)
@@ -637,7 +639,11 @@ class Fleet:
                     "source": self.applied["source"],
                 },
                 "market": self.market,
-                "actions": sorted(self.actions, key=lambda row: row.get("ts") or "", reverse=True)[:24],
+                "actions": sorted(
+                    (row for row in self.actions if row.get("actor") in ("sim", "llm")),
+                    key=lambda row: row.get("ts") or "",
+                    reverse=True,
+                )[:40],
                 "addons": catalog_rows(),
                 "codes": [
                     {
@@ -651,6 +657,8 @@ class Fleet:
                 "sites": sites,
                 "ercot": self.status,
                 "day": list(self.day),
+                "shape": day_shape(self.day),
+                "tick_seconds": config.TICK_SECONDS,
             }
 
     def site_detail(self, site_id: str) -> dict | None:
@@ -659,11 +667,12 @@ class Fleet:
             site = next((item for item in self.sites if item["id"] == site_id), None)
             if site is None:
                 return None
-            history = site.get("chart_history") or {}
+            traces = site.get("chart_trace") or {}
             charts = []
             for chart in site.get("charts") or []:
                 point = dict(chart)
-                point["series"] = list(history.get(chart["chart_id"]) or [])
+                point["series"] = trace_values(traces.get(chart["chart_id"]))
+                point["series_seconds"] = CHART_STEP_SECONDS
                 charts.append(point)
             return {
                 "id": site["id"],
@@ -684,6 +693,7 @@ class Fleet:
                 "metrics": site.get("metrics") or {},
                 "charts": charts,
                 "usage": list(self.usage.get(site_id, [])[-24:]),
+                "state_log": list(reversed(site.get("state_log") or [])),
                 "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),

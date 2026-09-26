@@ -40,15 +40,15 @@ The bot's disk is ephemeral. Supabase is the record of actions, market rows, and
 - Publish directory: `web`
 - Before publishing, set `API_BASE` in `web/config.js` to the bot origin with no trailing slash, for example `https://gridsim-bot.onrender.com`.
 
-The map then polls `API_BASE/api/scene`. The side panel starts collapsed. Opened, it is a stack of collapsed headings: fleet counts, the market rate, actions, codes, the attention queue, and service areas.
+The map then polls `API_BASE/api/scene`. The side panel starts open. It shows the price and day shape, the Agent list of decisions from the sim agent and the remote model, and the homes past a limit.
 
 ## 3. Check
 
-Open the web origin. The fleet should appear, and the Market block should show a rate. Insert a service from the Supabase SQL editor:
+Open the web origin. The fleet should appear, and the Now block should show a rate. Insert a service from the Supabase SQL editor:
 
 ```sql
 insert into unit_actions (id, site_id, kind, status, actor, note)
 values ('service-aus-0004', 'aus-0004', 'scheduled_service', 'pending', 'llm', 'Cabinet inspection');
 ```
 
-Within one tick the bot marks it active, `aus-0004` goes grey on the map, and the Actions list shows the row. One to two hours later the bot writes `return_online` and the base is online again.
+Within one tick the bot marks it active, `aus-0004` goes grey on the map, and the Agent list shows the row. One to two hours later the bot writes `return_online` and the base is online again.

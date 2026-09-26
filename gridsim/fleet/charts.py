@@ -4,7 +4,18 @@ from __future__ import annotations
 
 LIMIT_SIGMA = 3.0
 WARN_SIGMA = 2.0
+# Tick residuals kept for the run rules. The drawn series is the 30-hour trace.
 HISTORY = 24
+CHART_HOURS = 30
+CHART_STEP_SECONDS = 60
+CHART_POINTS = CHART_HOURS * 3600 // CHART_STEP_SECONDS
+
+
+def trace_values(samples) -> list:
+    """The live series. A missed minute is null."""
+    if not samples:
+        return []
+    return [None if value != value else round(float(value), 4) for value in samples]
 
 CHARTS = (
     {

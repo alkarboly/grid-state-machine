@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import array
 import json
 import math
 import random
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gridsim import config
-from gridsim.fleet.charts import CHARTS, HISTORY, evaluate
+from gridsim.fleet.charts import CHART_POINTS, CHART_STEP_SECONDS, CHARTS, HISTORY, evaluate
 from gridsim.fleet.actions import addon_power
 from gridsim.fleet.policy import choose_signal, intensity, resolve_order
 from gridsim.timeutil import iso
@@ -32,6 +34,8 @@ DEMO_FAULTS = {
     "dal-0002": {"response_scale": 0.55},
 }
 FAULT_KINDS = ("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw")
+# One row per tick on every home, newest kept. 180 ticks is about 30 minutes at the default interval.
+STATE_LOG = 180
 EXTRAS_PER_KIND = 2
 
 KM_PER_DEG_LAT = 110.574
@@ -339,6 +343,8 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     "energy_in_kwh": 0.0,
                     "energy_out_kwh": 0.0,
                     "chart_history": {},
+                    "chart_trace": {},
+                    "chart_mark": {},
                 }
             )
     _scatter_faults(sites)
@@ -390,12 +396,141 @@ def _split(net_kw: float) -> tuple[float, float]:
     return 0.0, -net_kw
 
 
-def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: float | None) -> dict:
-    """The recent residuals stay on the site as chart_history; the API attaches them."""
+def _remember_trace(site: dict, chart_id: str, now, value: float) -> None:
+    """One residual per minute for the last 30 hours. The newest sample in a minute wins."""
+    traces = site.setdefault("chart_trace", {})
+    marks = site.setdefault("chart_mark", {})
+    buf = traces.get(chart_id)
+    if not isinstance(buf, array.array):
+        buf = array.array("f")
+        traces[chart_id] = buf
+    slot = int(now.timestamp()) // CHART_STEP_SECONDS
+    previous = marks.get(chart_id)
+    if previous == slot and len(buf):
+        buf[-1] = value
+        return
+    if previous is not None and slot > previous + 1:
+        gap = min(slot - previous - 1, CHART_POINTS)
+        buf.extend(array.array("f", [float("nan")] * gap))
+    buf.append(value)
+    marks[chart_id] = slot
+    extra = len(buf) - CHART_POINTS
+    if extra > 0:
+        del buf[:extra]
+
+
+def _trace_level(site: dict, chart_id: str, hour: int) -> tuple[float, float]:
+    """The simulated residual a chart would have held, and the noise width around it."""
+    fault = site.get("fault") or {}
+    spec = next(item for item in CHARTS if item["chart_id"] == chart_id)
+    if chart_id == "base_temp":
+        sigma = float(site["temp_sigma_c"])
+        center = float(fault["temp_c"]) - float(site["temp_center_c"]) if "temp_c" in fault else 0.0
+    elif chart_id == "disco_voltage":
+        sigma = float(site["voltage_sigma_v"])
+        center = float(fault["voltage_v"]) - float(site["voltage_center_v"]) if "voltage_v" in fault else 0.0
+    elif chart_id == "disco_meter_delta":
+        sigma = float(spec["sigma"])
+        center = float(fault.get("disco_bias_kw") or 0.0)
+    elif chart_id == "soc_tracking":
+        sigma = float(spec["sigma"])
+        center = float(fault.get("soc_bias_kwh") or 0.0)
+    elif chart_id == "dispatch_response":
+        sigma = float(spec["sigma"])
+        scale = fault.get("response_scale")
+        center = (float(scale) - 1.0) * 4.0 if scale is not None and 16 <= hour <= 20 else 0.0
+    else:
+        sigma = float(spec["sigma"] or 1.0)
+        center = 0.0
+    return center, sigma
+
+
+def seed_history(sites: list[dict], now: datetime) -> None:
+    """Fill the chart trace and the state log before the first live tick.
+
+    The values are simulated. A faulted chart sits at that fault for the whole
+    window. A healthy chart is noise around zero. Live ticks replace the newest
+    minute and append the log.
+    """
+    slot = int(now.timestamp()) // CHART_STEP_SECONDS
+    hours = [
+        datetime.fromtimestamp((slot - (CHART_POINTS - 1 - index)) * CHART_STEP_SECONDS, tz=now.tzinfo).hour
+        for index in range(CHART_POINTS)
+    ]
+    step = timedelta(seconds=config.TICK_SECONDS)
+    for site in sites:
+        rng = random.Random(site["id"])
+        fault = site.get("fault") or {}
+        traces: dict[str, array.array] = {}
+        marks: dict[str, int] = {}
+        for spec in CHARTS:
+            chart_id = spec["chart_id"]
+            buf = array.array("f", [0.0]) * CHART_POINTS
+            if chart_id == "dispatch_response" and fault.get("response_scale") is not None:
+                for index, hour in enumerate(hours):
+                    center, sigma = _trace_level(site, chart_id, hour)
+                    buf[index] = center + (rng.random() - 0.5) * sigma
+            else:
+                center, sigma = _trace_level(site, chart_id, 12)
+                span = sigma * 1.6
+                for index in range(CHART_POINTS):
+                    buf[index] = center + (rng.random() - 0.5) * span
+            traces[chart_id] = buf
+            marks[chart_id] = slot
+        site["chart_trace"] = traces
+        site["chart_mark"] = marks
+
+        codes = []
+        if "temp_c" in fault:
+            codes.append("base_temp")
+        if "voltage_v" in fault:
+            codes.append("disco_voltage")
+        if fault.get("disco_bias_kw"):
+            codes.append("disco_meter_delta")
+        if fault.get("soc_bias_kwh"):
+            codes.append("soc_tracking")
+        soc = round(100.0 * site["physical_soc_kwh"] / site["capacity_kwh"], 1)
+        scale = float(site.get("load_scale") or 1.0)
+        log = []
+        for back in range(STATE_LOG, 0, -1):
+            moment = now - step * back
+            hour = moment.hour
+            if 16 <= hour <= 20:
+                state = signal = "push"
+                discharge, charge = 3.5, 0.0
+            elif hour <= 5:
+                state = signal = "pull"
+                discharge, charge = 0.0, 1.5
+            else:
+                state = signal = "hold"
+                discharge, charge = 0.0, 0.0
+            alarming = list(codes)
+            if state == "push" and fault.get("response_scale") is not None:
+                alarming.append("dispatch_response")
+            log.append(
+                {
+                    "ts": iso(moment),
+                    "state": state,
+                    "signal": signal,
+                    "source": "rules",
+                    "availability": "online",
+                    "soc_pct": soc,
+                    "load_kw": round(HOUR_MEAN_KW[hour] * scale, 3),
+                    "charge_kw": charge,
+                    "discharge_kw": discharge,
+                    "alarming": alarming,
+                }
+            )
+        site["state_log"] = log
+
+
+def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
+    """Tick residuals stay short for the run rules. The trace is what the unit view draws."""
     history = site["chart_history"].setdefault(spec["chart_id"], [])
     point = evaluate(spec, measured, expected, sigma if sigma is not None else spec["sigma"], history)
     history.append(point["value"])
     del history[:-HISTORY]
+    _remember_trace(site, spec["chart_id"], now, point["value"])
     return point
 
 
@@ -451,7 +586,9 @@ def tick_sites(
 
     for raw_site in sites:
         site = dict(raw_site)
-        site["chart_history"] = raw_site["chart_history"]
+        site["chart_history"] = raw_site.setdefault("chart_history", {})
+        site["chart_trace"] = raw_site.setdefault("chart_trace", {})
+        site["chart_mark"] = raw_site.setdefault("chart_mark", {})
         fault = site["fault"]
         eta = site["eta"]
         lmp = by_location.get(site["load_zone"])
@@ -581,32 +718,32 @@ def tick_sites(
             _chart(
                 site, CHARTS[0],
                 forced_measurement(site, CHARTS[0]["chart_id"], disco_net - meter_net, 0.0, CHARTS[0]["sigma"]),
-                0.0, None,
+                0.0, None, now,
             ),
             _chart(
                 site, CHARTS[1],
                 forced_measurement(site, CHARTS[1]["chart_id"], temp_c, expected_temp, site["temp_sigma_c"]),
-                expected_temp, site["temp_sigma_c"],
+                expected_temp, site["temp_sigma_c"], now,
             ),
             _chart(
                 site, CHARTS[2],
                 forced_measurement(site, CHARTS[2]["chart_id"], disco_voltage, expected_voltage, site["voltage_sigma_v"]),
-                expected_voltage, site["voltage_sigma_v"],
+                expected_voltage, site["voltage_sigma_v"], now,
             ),
             _chart(
                 site, CHARTS[3],
                 forced_measurement(site, CHARTS[3]["chart_id"], frequency, 60.0, CHARTS[3]["sigma"]),
-                60.0, None,
+                60.0, None, now,
             ),
             _chart(
                 site, CHARTS[4],
                 forced_measurement(site, CHARTS[4]["chart_id"], reported_soc, site["physical_soc_kwh"], CHARTS[4]["sigma"]),
-                site["physical_soc_kwh"], None,
+                site["physical_soc_kwh"], None, now,
             ),
             _chart(
                 site, CHARTS[5],
                 forced_measurement(site, CHARTS[5]["chart_id"], achieved_net, commanded_net, CHARTS[5]["sigma"]),
-                commanded_net, None,
+                commanded_net, None, now,
             ),
         ]
         alarm = any(chart["alarm"] for chart in charts)
@@ -664,6 +801,8 @@ def tick_sites(
                 "warning": [chart["chart_id"] for chart in charts if chart["warning"]],
             },
         }
+        for chart in charts:
+            chart["ts"] = stamp
         site["metrics"] = metrics
         site["charts"] = charts
         site["signal"] = signal
@@ -678,6 +817,22 @@ def tick_sites(
             site["state"] = "pull"
         else:
             site["state"] = "hold"
+        history = site.setdefault("state_log", [])
+        history.append(
+            {
+                "ts": stamp,
+                "state": site["state"],
+                "signal": signal,
+                "source": source,
+                "availability": "offline" if site.get("offline") else "online",
+                "soc_pct": round(100.0 * shown_soc / site["capacity_kwh"], 1),
+                "load_kw": round(load_kw, 3),
+                "charge_kw": round(charge_kw, 3),
+                "discharge_kw": round(discharge_kw, 3),
+                "alarming": [chart["chart_id"] for chart in charts if chart["alarm"]],
+            }
+        )
+        del history[:-STATE_LOG]
         updated.append(site)
 
         for chart in charts:

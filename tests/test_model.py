@@ -1,7 +1,7 @@
 import math
 import random
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from gridsim.ercot.normalize import (
@@ -12,7 +12,14 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
 )
-from gridsim.fleet.charts import CHARTS, evaluate
+from gridsim.fleet.charts import (
+    CHART_HOURS,
+    CHART_POINTS,
+    CHART_STEP_SECONDS,
+    CHARTS,
+    HISTORY,
+    evaluate,
+)
 from gridsim.fleet.policy import choose_signal, resolve_order
 from gridsim.fleet.simulate import (
     COMPONENTS,
@@ -25,7 +32,9 @@ from gridsim.fleet.simulate import (
     build_sites,
     load_anchors,
     metro_summary,
+    seed_history,
     station_summary,
+    STATE_LOG,
     tick_sites,
 )
 from gridsim.state import persist_sample, rollup
@@ -245,6 +254,65 @@ class FleetTests(unittest.TestCase):
         self.assertAlmostEqual(net, expected_net, places=2)
         self.assertEqual(set(observations[0]), {"ts", "site_id", *OBSERVATION_FIELDS})
         self.assertEqual({point["chart_id"] for point in points}, {spec["chart_id"] for spec in CHARTS})
+
+    def test_state_log_keeps_one_row_per_tick(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+        site = build_sites(fleet_size=40)[0]
+        fields = {
+            "ts", "state", "signal", "source", "availability",
+            "soc_pct", "load_kw", "charge_kw", "discharge_kw", "alarming",
+        }
+        current = [site]
+        for _ in range(3):
+            current, *_ = tick_sites(current, _grid(0.9), now, 0.0, random.Random(1))
+        log = current[0]["state_log"]
+        self.assertEqual(len(log), 3)
+        self.assertEqual(set(log[-1]), fields)
+        self.assertEqual(log[-1]["state"], current[0]["state"])
+        self.assertEqual(log[-1]["signal"], current[0]["metrics"]["grid"]["signal"])
+        self.assertIsInstance(log[-1]["alarming"], list)
+        for _ in range(STATE_LOG):
+            current, *_ = tick_sites(current, _grid(0.5), now, 0.0, random.Random(2))
+        self.assertEqual(len(current[0]["state_log"]), STATE_LOG)
+
+    def test_chart_trace_covers_thirty_hours(self):
+        self.assertEqual(CHART_HOURS, 30)
+        self.assertEqual(CHART_STEP_SECONDS, 60)
+        self.assertEqual(CHART_POINTS, 30 * 60)
+        now = datetime(2026, 9, 25, 19, 0, tzinfo=CENTRAL)
+        current = [build_sites(fleet_size=40)[0]]
+        current, *_rest = tick_sites(current, _grid(0.5), now, 0.0, random.Random(1))
+        current, *_rest = tick_sites(current, _grid(0.5), now + timedelta(seconds=10), 10 / 3600, random.Random(1))
+        self.assertEqual(len(current[0]["chart_trace"]["frequency"]), 1)
+        self.assertEqual(len(current[0]["chart_history"]["frequency"]), 2)
+        current, *_rest = tick_sites(current, _grid(0.5), now + timedelta(minutes=2), 0.0, random.Random(1))
+        trace = current[0]["chart_trace"]["frequency"]
+        self.assertEqual(len(trace), 3)
+        self.assertNotEqual(trace[1], trace[1])
+        current, *_rest = tick_sites(
+            current, _grid(0.5), now + timedelta(minutes=CHART_POINTS + 5), 0.0, random.Random(1),
+        )
+        self.assertEqual(len(current[0]["chart_trace"]["frequency"]), CHART_POINTS)
+        self.assertLessEqual(len(current[0]["chart_history"]["frequency"]), HISTORY)
+
+    def test_seed_history_fills_the_chart_and_the_log(self):
+        now = datetime(2026, 9, 26, 0, 28, tzinfo=CENTRAL)
+        sites = build_sites(fleet_size=40)[:1]
+        sites[0]["fault"] = {"temp_c": 49.0}
+        seed_history(sites, now)
+        trace = sites[0]["chart_trace"]["base_temp"]
+        self.assertEqual(len(trace), CHART_POINTS)
+        self.assertGreater(min(trace), 3 * sites[0]["temp_sigma_c"])
+        self.assertEqual(len(sites[0]["chart_trace"]["frequency"]), CHART_POINTS)
+        self.assertLess(max(abs(value) for value in sites[0]["chart_trace"]["frequency"]), 0.025 * 2)
+        self.assertEqual(len(sites[0]["state_log"]), STATE_LOG)
+        self.assertEqual(set(sites[0]["state_log"][-1]), {
+            "ts", "state", "signal", "source", "availability",
+            "soc_pct", "load_kw", "charge_kw", "discharge_kw", "alarming",
+        })
+        self.assertIn("base_temp", sites[0]["state_log"][-1]["alarming"])
+        current, *_rest = tick_sites(sites, _grid(0.5), now, 0.0, random.Random(1))
+        self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), CHART_POINTS)
 
     def test_every_chart_names_a_real_component(self):
         components = {spec["component"] for spec in CHARTS}

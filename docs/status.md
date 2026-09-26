@@ -22,7 +22,7 @@ The sim agent runs after each tick's charts. An alarming code gets the registere
 
 ## In the working tree
 
-Nothing uncommitted.
+Every home keeps a state log of recent ticks. The unit view shows it, newest first. Each control chart draws the last 30 hours, one residual per minute, and startup fills that window and the state log with simulated rows. The header shows the sim time on the right. The side panel starts open on the Agent list: decisions from the sim agent and the remote model.
 
 ## Not standing yet
 
@@ -34,12 +34,12 @@ The bot and the web service are described in `render.yaml` and [deploy.md](deplo
 
 Facts the code is not allowed to invent are [gaps.md](gaps.md): the ERCOT subscription key, real neighborhood positions, station coordinates, the settlement-point to bus join, disco hardware, and a metered load shape.
 
-A `scheduled_service` on `aus-0004` was inserted only to check the Actions list. It lives in the running process and in local SQLite. It is not a fixture to recreate.
+A `scheduled_service` on `aus-0004` was inserted only to check the Agent list. It lives in the running process and in local SQLite. It is not a fixture to recreate.
 
 ## Next
 
 1. Create the Supabase project and run the three SQL files in [deploy.md](deploy.md), in filename order. Create `gridsim-bot` and `gridsim-web` from `render.yaml`. Set `API_BASE` in `web/config.js` to the bot origin before the static site is published. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `WEB_ORIGIN` on the bot only. Do not paste those keys, or the ERCOT password, into chat. Leave `.env` and `data/gridsim.db` out of git.
-2. Confirm the deploy check in [deploy.md](deploy.md): the fleet appears, the Market block has a rate, and a `scheduled_service` row takes `aus-0004` offline and the bot writes `return_online` when the window ends.
+2. Confirm the deploy check in [deploy.md](deploy.md): the fleet appears, the Now block has a rate, and a `scheduled_service` row takes `aus-0004` offline and the bot writes `return_online` when the window ends.
 3. Point a model at that bus. Either set `LLM_URL` or let the model insert `unit_actions`. The tick still applies rows on the next pass. It does not call the model inline.
 4. When the ERCOT subscription key is available, set the three credentials on the bot so `rate_basis` can be `ercot`.
 5. Add a station pair to `data/station_geo.json` only for codes a live constraint actually names, with a source note. That is what draws a constraint arc.

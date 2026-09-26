@@ -38,6 +38,8 @@ The component contract from [contracts.md](contracts.md). One row per battery pe
 
 That is about 830 rows a tick instead of 39,000, and the unit view still reads live values for any battery because the simulation state lives in memory. `instrumented` on `/api/site/{id}` says whether a unit is in the cohort.
 
+Every home also keeps a `state_log` in that same memory: one short row per tick, last 180, described in [simulation.md](simulation.md). The unit view shows it. It is not written to SQLite. The control-chart trace is the same kind of memory: the last 30 hours at one residual per minute, described in [control-charts.md](control-charts.md). Startup fills both with simulated rows. Neither is a table.
+
 ## `observations`
 
 The machine-learning row. One row per instrumented battery per tick, already flat. Join to `control_points` on `ts` and `site_id` for the labels.

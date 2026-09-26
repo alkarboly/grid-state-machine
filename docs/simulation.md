@@ -82,6 +82,8 @@ Commanded kilowatts are then `power_limit_kw` × intensity, clipped by the energ
 
 This is why `signal` and `state` are different fields. `signal` is what the fleet was told; `state` is what this battery did. The map colours by `state`, so the share of the fleet that could not respond is visible rather than hidden.
 
+Every home keeps a `state_log` of the last 180 ticks. Each row is `ts`, `state`, `signal`, `source`, `availability`, `soc_pct`, `load_kw`, `charge_kw`, `discharge_kw`, and `alarming` (the chart ids past their limits). `GET /api/site/{id}` returns that log newest first. It stays in the process with the rest of the fleet. It is not a table, and a restart clears it. Startup writes a simulated 180 rows before the first tick, using the hour-of-day load and push in the evening, pull overnight, hold otherwise. Live ticks replace that from the newest end. The full component rows for the instrumented cohort remain `metric_logs`.
+
 This is a prototype policy. It is not an ERCOT market award.
 
 ### Market rate

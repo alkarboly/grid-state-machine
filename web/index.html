@@ -10,8 +10,9 @@
   <header>
     <div class="brand">gridsim</div>
     <div class="stats" id="stats"></div>
+    <div class="clock" id="clock">sim <b>—</b></div>
   </header>
-  <main class="collapsed">
+  <main>
     <button type="button" id="back" hidden>back</button>
     <div id="day" aria-label="24 hour demand and price"></div>
     <div id="stage" hidden>
@@ -22,7 +23,7 @@
     </div>
     <canvas id="map"></canvas>
     <aside id="panel">
-      <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel-body">fleet</button>
+      <button type="button" id="panel-toggle" aria-expanded="true" aria-controls="panel-body">hide</button>
       <div id="panel-body">
         <p class="muted">Loading the fleet…</p>
       </div>

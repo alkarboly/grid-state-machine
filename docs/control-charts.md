@@ -73,7 +73,9 @@ So:
 
 ## Point contract
 
-One row per battery per chart per tick. `value` is the residual. `series` is the recent residuals and is only on the live API, not in the table.
+One row per battery per chart per tick. `value` is the residual. `series` is only on the live API, not in the table. It is the last 30 hours, one residual per minute, oldest first. The newest sample in that minute wins. A missed minute is null. `series_seconds` is 60. The unit view draws that whole window, with the newest point at the right. The run rules still see every tick; they do not use this minute trace.
+
+Startup fills that window before the first tick. The values are simulated. A faulted chart sits at that fault for the whole window, and a healthy chart is noise around zero. Later ticks replace the newest minute with the live residual.
 
 ```json
 {

@@ -29,7 +29,7 @@ const tip = document.getElementById("tip");
 const panel = document.getElementById("panel");
 const panelBody = document.getElementById("panel-body");
 const panelToggle = document.getElementById("panel-toggle");
-let panelOpen = false;
+let panelOpen = true;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -58,7 +58,7 @@ controls.target.set(0, 0, 0.4);
 let payload = null;
 let selected = null;
 let unitDetail = null;
-const folds = { fleet: false, market: false, actions: false, codes: false, attention: false, areas: false };
+const folds = { now: true, agent: true, attention: false };
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
@@ -509,6 +509,23 @@ function renderStats(data) {
     <span>flagged <b>${fmt(fleet.alarms)}</b></span>
     <span>feed <b>${ercot.dashboard === "live" ? "live" : ercot.dashboard || "offline"}</b></span>
   `;
+  const stamp = fleet.ts || "";
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const month = months[Number(stamp.slice(5, 7)) - 1] || "";
+  const clock = stamp.length >= 19 ? `${month} ${Number(stamp.slice(8, 10))} ${stamp.slice(11, 19)}` : "—";
+  document.getElementById("clock").innerHTML = `sim <b>${clock}</b>`;
+}
+
+function chartClock(ms) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Chicago",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+  const part = (type) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
 function chartSvg(chart) {
@@ -516,16 +533,43 @@ function chartSvg(chart) {
   const sigma = Math.abs(chart.sigma) || Math.abs(chart.ucl) / 3 || 1;
   const span = sigma * 3.4;
   const width = 360;
-  const height = 96;
+  const plotBottom = 96;
+  const height = 114;
   const plot = width - 34;
-  const xAt = (index) => (series.length === 1 ? plot / 2 : (index / (series.length - 1)) * plot);
+  const windowMs = 30 * 60 * 60 * 1000;
+  const stepMs = (chart.series_seconds || 60) * 1000;
+  const end = Date.parse(chart.ts);
+  const timed = Number.isFinite(end);
+  const start = timed ? end - windowMs : 0;
+  const xAt = (index) => {
+    if (!timed) return series.length === 1 ? plot / 2 : (index / (series.length - 1)) * plot;
+    const t = end - (series.length - 1 - index) * stepMs;
+    return Math.max(0, Math.min(plot, ((t - start) / windowMs) * plot));
+  };
   const yAt = (value) => {
     const clamped = Math.max(-span, Math.min(span, value));
-    return height / 2 - (clamped / span) * (height / 2 - 8);
+    return plotBottom / 2 - (clamped / span) * (plotBottom / 2 - 8);
   };
   const stroke = chart.in_control ? (chart.warning ? "#d8b46a" : "#cfc6ba") : "#e15b4c";
-  const poly = series.map((value, index) => `${xAt(index).toFixed(1)},${yAt(value).toFixed(1)}`).join(" ");
-  const last = series[series.length - 1];
+  const runs = [];
+  let run = [];
+  series.forEach((value, index) => {
+    if (value == null || Number.isNaN(Number(value))) {
+      if (run.length) runs.push(run.join(" "));
+      run = [];
+      return;
+    }
+    run.push(`${xAt(index).toFixed(1)},${yAt(Number(value)).toFixed(1)}`);
+  });
+  if (run.length) runs.push(run.join(" "));
+  const lines = runs
+    .map((points) => `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.6" />`)
+    .join("");
+  let lastIndex = series.length - 1;
+  while (lastIndex >= 0 && (series[lastIndex] == null || Number.isNaN(Number(series[lastIndex])))) lastIndex -= 1;
+  const dot = lastIndex >= 0
+    ? `<circle cx="${xAt(lastIndex).toFixed(1)}" cy="${yAt(Number(series[lastIndex])).toFixed(1)}" r="2.6" fill="${stroke}" />`
+    : "";
   const guide = (value, label, color, dash) => {
     const y = yAt(value).toFixed(1);
     const pattern = dash ? ` stroke-dasharray="${dash}"` : "";
@@ -534,7 +578,12 @@ function chartSvg(chart) {
       : "";
     return `<line x1="0" x2="${plot}" y1="${y}" y2="${y}" stroke="${color}"${pattern} />${name}`;
   };
-  return `<svg viewBox="0 0 ${width} ${height}" role="img">
+  const axis = (x, text, anchor) =>
+    `<text x="${x}" y="${height - 2}" text-anchor="${anchor}" fill="#8d887f" font-size="9">${text}</text>`;
+  const left = timed ? chartClock(start) : "−30h";
+  const mid = timed ? chartClock(start + windowMs / 2) : "−15h";
+  const right = timed ? chartClock(end) : "now";
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="30 hours">
     ${guide(sigma, "1σ", "#4a4e57", "")}
     ${guide(-sigma, "", "#4a4e57", "")}
     ${guide(sigma * 2, "2σ", "#5c616b", "3 3")}
@@ -542,20 +591,16 @@ function chartSvg(chart) {
     ${guide(sigma * 3, "3σ", "#7a6258", "5 4")}
     ${guide(-sigma * 3, "", "#7a6258", "5 4")}
     <line x1="0" x2="${plot}" y1="${yAt(0).toFixed(1)}" y2="${yAt(0).toFixed(1)}" stroke="#6d675c" />
-    <polyline points="${poly}" fill="none" stroke="${stroke}" stroke-width="1.6" />
-    <circle cx="${xAt(series.length - 1).toFixed(1)}" cy="${yAt(last).toFixed(1)}" r="2.6" fill="${stroke}" />
+    ${lines}
+    ${dot}
+    ${axis(0, left, "start")}
+    ${axis(plot / 2, mid, "middle")}
+    ${axis(plot, right, "end")}
   </svg>`;
 }
 
 function row(label, text) {
   return `<p><span>${label}</span><b>${text}</b></p>`;
-}
-
-function marketBlock(data) {
-  const market = data.market;
-  if (!market) return "";
-  const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
-  return fold("market", "Market", `<p class="market">${fmt(market.rate_usd_mwh, 1)} $/MWh <span>${basis}</span></p>`);
 }
 
 function actionTitle(action) {
@@ -568,27 +613,78 @@ function actionTitle(action) {
   return action.kind || "action";
 }
 
-function actionBlock(data) {
-  const actions = data.actions || [];
-  const catalog = (data.addons || []).map((item) => item.name.toLowerCase()).join(" and ");
+function decisionLabel(action) {
+  const payload = action.payload || {};
+  if (payload.chart_id) return `${actionTitle(action)} · ${payload.chart_id}`;
+  if (payload.reason === "price") return `${payload.signal || "hold"} · price`;
+  return actionTitle(action);
+}
+
+function nowBlock(data) {
+  const market = data.market || {};
+  const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+  const shape = data.shape && data.shape.shape ? data.shape.shape : "—";
+  const call = data.dispatch
+    ? `${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)} · ${data.dispatch.source}`
+    : "—";
+  return `<div class="stack ledger">
+      ${row("price", `${fmt(market.rate_usd_mwh, 1)} $/MWh · ${basis}`)}
+      ${row("day", shape)}
+      ${row("fleet call", call)}
+    </div>
+    <p class="muted note">Push at 70 $/MWh, at 1.25× a typical hour, or on a peak. Pull when this hour is at or below typical and the price is 40 or below, or the day is a trough or a ramp. An alarming code outranks that call. Frequency is left alone.</p>`;
+}
+
+function agentBlock(data) {
+  const actions = (data.actions || []).filter((action) => action.actor === "sim" || action.actor === "llm");
   const rows = actions.length
     ? actions
-        .map(
-          (action) => `<button type="button" class="unit-row" data-site="${action.site_id}">
-            <span>${action.site_id}</span><em>${actionTitle(action)} · ${action.actor || "sim"} · ${action.status}</em>
-          </button>`,
-        )
+        .map((action) => {
+          const when = (action.ts || "").slice(11, 16);
+          return `<button type="button" class="unit-row" data-site="${action.site_id}">
+            <span>${action.site_id}</span><em>${when} · ${decisionLabel(action)} · ${action.actor} · ${action.status}</em>
+          </button>`;
+        })
         .join("")
-    : `<p class="muted">No actions yet. A scheduled service takes that base offline and brings it back in one to two hours.</p>`;
-  return `<div class="roster">${rows}</div>
-    <p class="muted note">The sim agent posts the registered step for an alarming code. Frequency is left alone. A unit set to dispatch gets push or pull from the price and its expected load.</p>
-    <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>`;
+    : `<p class="muted">No agent decisions yet. An alarming code posts its step. A home set to dispatch gets push or pull from the price and its expected load.</p>`;
+  return `<div class="roster">${rows}</div>`;
 }
 
 function fold(name, title, body) {
   return `<details class="fold" data-fold="${name}"${folds[name] ? " open" : ""}>
     <summary>${title}</summary>
     <div class="fold-body">${body}</div>
+  </details>`;
+}
+
+let logOpen = true;
+
+function logLine(row) {
+  const time = (row.ts || "").slice(11, 19);
+  const moved = row.discharge_kw > 0.01
+    ? `${fmt(row.discharge_kw, 2)} kW out`
+    : row.charge_kw > 0.01
+      ? `${fmt(row.charge_kw, 2)} kW in`
+      : "idle";
+  const alarms = (row.alarming || []).join(" ");
+  const word = row.availability === "offline" ? "offline" : row.state;
+  return `<p class="log-line ${word}">
+    <span>${time}</span>
+    <b>${word}</b>
+    <em>${row.signal || "hold"} · ${row.source || "rules"}</em>
+    <em>${fmt(row.soc_pct, 0)}%</em>
+    <em>${fmt(row.load_kw, 2)} kW load</em>
+    <em>${moved}</em>
+    ${alarms ? `<em class="flag">${alarms}</em>` : ""}
+  </p>`;
+}
+
+function logBlock(site) {
+  const rows = site.state_log || [];
+  if (!rows.length) return "";
+  return `<details class="unit-log" data-log ${logOpen ? "open" : ""}>
+    <summary>state log <span>${rows.length}</span></summary>
+    <div class="log-body">${rows.map(logLine).join("")}</div>
   </details>`;
 }
 
@@ -611,14 +707,9 @@ function renderPanel(data) {
     panelBody.innerHTML = `<p class="muted">No batteries in this snapshot.</p>`;
     return;
   }
-  const fleet = data.fleet || {};
-
-  const flaggedByStation = new Map();
   const queue = [];
   for (const site of sites) {
-    if (!site.alarm) continue;
-    flaggedByStation.set(site.station, (flaggedByStation.get(site.station) || 0) + 1);
-    queue.push(site);
+    if (site.alarm) queue.push(site);
   }
 
   const queueHtml = queue.length
@@ -632,58 +723,14 @@ function renderPanel(data) {
         .join("")
     : `<p class="muted">Every chart in this view is inside its limits.</p>`;
 
-  const areaHtml = [...(data.stations || [])]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((station) => {
-      const bad = flaggedByStation.get(station.id) || 0;
-      return `<button type="button" class="metro-row" data-station="${station.id}">
-        <span>${station.name}</span>
-        <em>${fmt(station.units)}</em>
-        <b class="${bad ? "flag" : "muted"}">${bad || "—"}</b>
-      </button>`;
-    })
-    .join("");
-
   const actionCount = (data.actions || []).length;
   panelBody.innerHTML = `
-    ${fold(
-      "fleet",
-      "Fleet",
-      `<div class="sub">${
-        data.dispatch
-          ? `<span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
-          : ""
-      }</div>
-      <div class="stack ledger">
-        ${row("units", fmt(fleet.units))}
-        ${row("pushing", fmt(fleet.pushing))}
-        ${row("pulling", fmt(fleet.pulling))}
-        ${row("holding", fmt(fleet.holding))}
-        ${row("offline", fmt(fleet.offline))}
-        ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
-      </div>`,
-    )}
-    ${marketBlock(data)}
-    ${fold("actions", `Actions${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, actionBlock(data))}
-    ${fold(
-      "codes",
-      "Codes",
-      `<div class="code-key">${(data.codes || [])
-        .map((code) => `<p class="code"><b>${code.chart_id}</b><span>${code.action}</span></p>`)
-        .join("")}</div>`,
-    )}
+    ${fold("now", "Now", nowBlock(data))}
+    ${fold("agent", `Agent${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, agentBlock(data))}
     ${fold(
       "attention",
       `Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
       `<div class="roster">${queueHtml}</div>${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}`,
-    )}
-    ${fold(
-      "areas",
-      "Service areas",
-      `<div class="metros">
-        <button type="button" class="metro-row" data-station="all"><span>Whole state</span><em>${fmt(fleet.units)}</em><b class="muted">—</b></button>
-        ${areaHtml}
-      </div>`,
     )}
   `;
 }
@@ -896,6 +943,13 @@ function agentControls(site) {
   );
   const call = site.agent_call;
   const place = call && call.day && call.day !== "mid" ? ` · ${call.day}` : "";
+  const market = payload && payload.market;
+  const shape = payload && payload.shape;
+  const basis = market && market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+  const day = shape && shape.shape ? ` · ${shape.shape}` : "";
+  const context = market
+    ? `<p class="muted note">${fmt(market.rate_usd_mwh, 0)} $/MWh ${basis}${day}</p>`
+    : "";
   const callLine = call
     ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>`
     : "";
@@ -904,6 +958,7 @@ function agentControls(site) {
       <button type="button" class="arm${allOn ? " on" : ""}" data-arm="all" data-on="${allOn ? "1" : "0"}">${allOn ? "clear all codes" : "trigger all codes"}</button>
       <button type="button" class="arm${dispatchOn ? " on" : ""}" data-dispatch="${dispatchOn ? "0" : "1"}">${dispatchOn ? "dispatch on" : "push or pull"}</button>
     </div>
+    ${context}
     ${callLine}
     ${price ? `<p class="muted note">${price.note}</p>` : ""}`;
 }
@@ -997,6 +1052,7 @@ function renderUnit() {
       .map(([label, source, format, chartId]) => metricRow(label, format(metrics[source] || {}), chartId))
       .join("")}</div>
     ${charts.length ? `<div class="dt-charts">${charts.map(chartCard).join("")}</div>` : ""}
+    ${logBlock(site)}
     ${usageBlock(site)}
   `;
   detail.scrollTop = scrolled;
@@ -1029,6 +1085,10 @@ async function openUnit(id, block = null) {
   if (payload) renderScene(payload);
 }
 
+modal.addEventListener("toggle", (event) => {
+  if (event.target.dataset.log !== undefined) logOpen = event.target.open;
+}, true);
+
 modal.addEventListener("close", () => {
   history.replaceState(null, "", location.pathname);
 });
@@ -1037,7 +1097,7 @@ panelToggle.addEventListener("click", () => {
   panelOpen = !panelOpen;
   document.querySelector("main").classList.toggle("collapsed", !panelOpen);
   panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
-  panelToggle.textContent = panelOpen ? "hide" : "fleet";
+  panelToggle.textContent = panelOpen ? "hide" : "agent";
 });
 
 panel.addEventListener("toggle", (event) => {

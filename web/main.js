@@ -1,12 +1,18 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { API_BASE } from "/config.js";
 import { LON_SCALE, ORIGIN, TEXAS } from "/geo.js";
+
+function api(path) {
+  return `${API_BASE}${path}`;
+}
 
 const COLOR = {
   pull: 0x4c9be8,
   push: 0xf0a03a,
   hold: 0x9dbe92,
   alarm: 0xe15b4c,
+  offline: 0x8d8794,
   hub: 0x7b7568,
   land: 0x181a20,
   border: 0x515762,
@@ -152,14 +158,6 @@ particles.frustumCulled = false;
 particles.renderOrder = 3;
 scene.add(particles);
 
-const feeders = new THREE.LineSegments(
-  new THREE.BufferGeometry(),
-  new THREE.LineBasicMaterial({ color: 0xd5dbe3, transparent: true, opacity: 0.9 }),
-);
-feeders.frustumCulled = false;
-feeders.renderOrder = 2;
-scene.add(feeders);
-
 const stationMarks = new Map();
 
 const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
@@ -222,6 +220,8 @@ function ensureHub(metro, share) {
 
 function modeOf(item) {
   if (!item) return "hold";
+  const availability = item.metrics?.base?.availability;
+  if (item.offline || availability === "offline") return "offline";
   return item.alarm ? "alarm" : item.state || "hold";
 }
 
@@ -288,14 +288,11 @@ function ensureStation(station) {
   return entry;
 }
 
-// Flat feeders, only around the point the camera is looking at. A line for
-// every battery in the state is the same hairball the metro arcs used to be.
-function renderFeeders(data) {
+// Substation diamonds take over once the camera is inside a city. The metro
+// hub is the state-scale mark; up close it sits on empty downtown.
+function renderStations(data) {
   const dist = viewDistance();
   const show = dist < 8;
-  feeders.visible = show;
-  // The metro hub is the state-scale mark. Up close it sits on empty downtown
-  // and the city name fills the view, so the substations take over.
   for (const hub of hubs.values()) hub.group.visible = !show;
   const target = controls.target;
   const reach = 0.28 + dist * 0.08;
@@ -309,23 +306,6 @@ function renderFeeders(data) {
     entry.label.scale.set(labelWidth, labelWidth * 0.24, 1);
     entry.label.visible = show && dist < 4.5 && near < reach;
   }
-  if (!show) {
-    feeders.geometry.setDrawRange(0, 0);
-    return;
-  }
-  const byStation = new Map((data.stations || []).map((station) => [station.id, station]));
-  const positions = [];
-  for (const site of data.sites) {
-    const station = byStation.get(site.station);
-    if (!station) continue;
-    const home = project(site.lat, site.lon, 0.012);
-    if (Math.hypot(home.x - target.x, home.z - target.z) > reach) continue;
-    const hub = project(station.lat, station.lon, 0.012);
-    positions.push(home.x, home.y, home.z, hub.x, 0.018, hub.z);
-  }
-  feeders.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  feeders.geometry.computeBoundingSphere();
-  feeders.geometry.setDrawRange(0, Infinity);
 }
 
 // One arc, for the selected battery, tying it back to its metro. Thousands of
@@ -376,7 +356,7 @@ function renderScene(data) {
   const total = data.sites.length || 1;
   for (const metro of data.metros || []) ensureHub(metro, metro.units / total);
   renderUnits(data);
-  renderFeeders(data);
+  renderStations(data);
   renderArcs(data);
   renderConstraints(data.edges);
   screen = null;
@@ -429,6 +409,59 @@ function chartSvg(chart) {
 
 function row(label, text) {
   return `<p><span>${label}</span><b>${text}</b></p>`;
+}
+
+function marketBlock(data) {
+  const market = data.market;
+  if (!market) return "";
+  const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
+  return `<div class="group">
+    <h3>Market</h3>
+    <p class="market">${fmt(market.rate_usd_mwh, 1)} $/MWh <span>${basis}</span></p>
+    <p class="muted note">Mean state of charge ${fmt(market.mean_soc_pct, 0)}%. ${fmt(market.offline)} offline.</p>
+  </div>`;
+}
+
+function actionTitle(action) {
+  const payload = action.payload || {};
+  if (action.kind === "scheduled_service") return "scheduled service";
+  if (action.kind === "return_online") return "back online";
+  if (action.kind === "set_signal") return `set ${payload.signal || "signal"}`;
+  if (action.kind === "install_addon") return `install ${payload.addon_id || "add-on"}`;
+  if (action.kind === "remove_addon") return `remove ${payload.addon_id || "add-on"}`;
+  return action.kind || "action";
+}
+
+function actionBlock(data) {
+  const actions = data.actions || [];
+  const catalog = (data.addons || []).map((item) => item.name.toLowerCase()).join(" and ");
+  const rows = actions.length
+    ? actions
+        .map(
+          (action) => `<button type="button" class="unit-row" data-site="${action.site_id}">
+            <span>${action.site_id}</span><em>${actionTitle(action)} · ${action.status}</em>
+          </button>`,
+        )
+        .join("")
+    : `<p class="muted">No actions yet. A scheduled service takes that base offline and brings it back in one to two hours.</p>`;
+  return `<div class="group">
+    <h3>Actions</h3>
+    <div class="roster">${rows}</div>
+    <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>
+  </div>`;
+}
+
+function usageBlock(site) {
+  const rows = site.usage || [];
+  if (!rows.length) return "";
+  const lines = rows
+    .slice(-8)
+    .map(
+      (row) =>
+        `<p><span>hour ${row.hour}</span><b>${fmt(row.load_kwh, 2)} kWh load</b></p>`,
+    )
+    .join("");
+  return `<div class="stack"><h3>Recent usage</h3>${lines}</div>`;
 }
 
 function renderPanel(data) {
@@ -491,6 +524,8 @@ function renderPanel(data) {
         : ""
     }</div>
     <div class="chips">${chips}</div>
+    ${marketBlock(data)}
+    ${actionBlock(data)}
     <div class="group">
       <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>
       <div class="roster">${queueHtml}</div>
@@ -546,6 +581,7 @@ const METRIC_ROWS = {
     ["frequency", (m) => `${fmt(m.frequency_hz, 3)} Hz`, "frequency"],
     ["contactor", (m) => m.contactor || "—"],
     ["islanded", (m) => (m.islanded ? "yes" : "no")],
+    ["add-ons", (m) => (m.addons || []).map((item) => `${item.addon_id} ${fmt(item.kw, 2)} kW`).join(", ") || "none"],
   ],
   panel: [
     ["load", (m) => `${fmt(m.load_kw, 2)} kW`],
@@ -554,7 +590,9 @@ const METRIC_ROWS = {
   base: [
     ["state of charge", (m) => `${fmt(m.soc_pct, 1)}%`, "soc_tracking"],
     ["energy stored", (m) => `${fmt(m.soc_kwh, 2)} of ${fmt(m.capacity_kwh, 1)} kWh`, "soc_tracking"],
+    ["availability", (m) => m.availability || "online"],
     ["power limit", (m) => `${fmt(m.power_limit_kw, 1)} kW`],
+    ["solar into battery", (m) => `${fmt(m.solar_charge_kw, 2)} kW`],
     ["charge", (m) => `${fmt(m.charge_kw, 2)} kW`, "dispatch_response"],
     ["commanded charge", (m) => `${fmt(m.commanded_charge_kw, 2)} kW`, "dispatch_response"],
     ["discharge", (m) => `${fmt(m.discharge_kw, 2)} kW`, "dispatch_response"],
@@ -834,13 +872,14 @@ function renderUnit() {
           </div>`}
     </div>
     ${elsewhere(site)}
+    ${usageBlock(site)}
   `;
   detail.scrollTop = scrolled;
 }
 
 async function loadUnit(id) {
   try {
-    const response = await fetch(`/api/site/${encodeURIComponent(id)}`);
+    const response = await fetch(api(`/api/site/${encodeURIComponent(id)}`));
     if (!response.ok) return null;
     return await response.json();
   } catch (error) {
@@ -1004,7 +1043,7 @@ controls.addEventListener("change", () => {
   screen = null;
   if (payload) {
     renderUnits(payload);
-    renderFeeders(payload);
+    renderStations(payload);
   }
 });
 
@@ -1021,7 +1060,7 @@ function resize() {
 
 async function poll() {
   try {
-    const response = await fetch("/api/scene");
+    const response = await fetch(api("/api/scene"));
     payload = await response.json();
     renderScene(payload);
     renderStats(payload);
@@ -1057,7 +1096,7 @@ function frame() {
 
 // A unit id in the hash opens that battery, so a link points at one cabinet.
 // Add a block, as in #hou-0002/disco, and it opens on that block.
-// #metro/austin flies the camera to that city, close enough to see feeders.
+// #metro/austin flies the camera to that city, close enough to see the substations.
 poll().then(() => {
   const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
   if (wanted === "metro" && block) {

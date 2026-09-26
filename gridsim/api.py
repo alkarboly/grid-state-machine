@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from gridsim.config import WEB
+from gridsim import config
 from gridsim.state import fleet
 
 
@@ -15,6 +16,15 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="gridsim", lifespan=lifespan)
+
+_origins = [item.strip() for item in config.WEB_ORIGIN.split(",") if item.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
 
 
 @app.get("/api/scene")
@@ -44,6 +54,24 @@ def post_dispatch(body: dict):
     return fleet.dispatch_view()
 
 
+@app.post("/api/actions")
+def post_action(body: dict):
+    site_id = body.get("site_id")
+    kind = body.get("kind")
+    if not isinstance(site_id, str) or not site_id:
+        raise HTTPException(status_code=400, detail="site_id is required")
+    if not isinstance(kind, str):
+        raise HTTPException(status_code=400, detail="kind is required")
+    payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    note = body.get("note") if isinstance(body.get("note"), str) else ""
+    try:
+        return fleet.add_action(site_id, kind, note, payload, "api")
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown site") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @app.get("/api/site/{site_id}")
 def site(site_id: str):
     detail = fleet.site_detail(site_id)
@@ -52,4 +80,5 @@ def site(site_id: str):
     return detail
 
 
-app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+if config.SERVE_STATIC:
+    app.mount("/", StaticFiles(directory=config.WEB, html=True), name="web")

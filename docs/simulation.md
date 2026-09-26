@@ -40,7 +40,9 @@ Load, service voltage, and cabinet temperature are states. Each tick moves them 
 
 ## Interchange
 
-True net kilowatts = panel load + battery charge − battery discharge.
+True net kilowatts = panel load + car-charger kilowatts − solar used on site + battery charge − battery discharge.
+
+Solar and the car charger are optional add-ons. With neither installed, that is panel load + battery charge − battery discharge.
 
 Positive net is grid/meter in. Negative net is grid/meter out. The grid component records that true split. The meter adds a tight error (standard deviation 0.02 kW on the net). The disco adds a wider error (standard deviation 0.06 kW) because it is the Pi measurement, not the billing meter.
 
@@ -79,6 +81,30 @@ Commanded kilowatts are then `power_limit_kw` × intensity, clipped by the energ
 This is why `signal` and `state` are different fields. `signal` is what the fleet was told; `state` is what this battery did. The map colours by `state`, so the share of the fleet that could not respond is visible rather than hidden.
 
 This is a prototype policy. It is not an ERCOT market award.
+
+### Market rate
+
+`market_ticks.rate_usd_mwh` is what a controller reads. When the tick has settlement-point prices for `LZ_*` or `HB_*` locations, the rate is their mean and `rate_basis` is `ercot`. Otherwise the rate is `18 + 90 × demand_percentile` dollars per megawatt-hour and `rate_basis` is `simulated`.
+
+### Actions on one base
+
+A controller does not edit a battery's kilowatts directly. It inserts a `unit_actions` row, or posts the same object to `POST /api/actions`. The next tick applies it. Kinds:
+
+| Kind | Effect |
+| --- | --- |
+| `scheduled_service` | The base is `offline` from `starts_at` until `ends_at`. Charge and discharge stay 0. The house stays grid-tied. A missing `ends_at` is filled with a duration between one and two hours. When the window ends, the tick writes a `return_online` row and the base is `online` again. |
+| `set_signal` | This home's call becomes the payload `signal` (`push`, `pull`, or `hold`) and optional `intensity` until `ends_at`. A missing end is one hour. `source` on that home is `action`. |
+| `install_addon` | Payload `addon_id` is `solar` or `ev_charger`. The disco starts metering it. |
+| `remove_addon` | That add-on leaves the disco's list. |
+
+`return_online` is written by the simulator, not by the controller.
+
+### Add-ons
+
+Both are assumptions, tracked by the disco:
+
+- **Solar**, `source`, 5 kW nameplate. Output is that rating times a daylight fraction, zero at night and about 0.9 near noon. It serves the house and the car charger first. Surplus charges the battery up to the power limit and the 95% ceiling, and the rest exports.
+- **Car charger**, `load`, 7.2 kW. It draws about 85% of that from 17:00 through 21:00, and nothing otherwise.
 
 ## Maintenance
 

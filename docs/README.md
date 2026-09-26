@@ -9,5 +9,7 @@ Source of truth for names, shapes, and flows. If code and these pages disagree, 
 | [contracts.md](contracts.md) | Timestamped metrics for grid, meter, disco, panel, base, and maintenance |
 | [control-charts.md](control-charts.md) | The six chart families, limits, and rules |
 | [database.md](database.md) | Tables, the machine-learning row, and the Postgres mapping |
+| [llm.md](llm.md) | What the model reads and which action rows it may write |
+| [deploy.md](deploy.md) | Supabase migrations and the two Render services |
 | [simulation.md](simulation.md) | Per-battery load, dispatch, and the scripted faults |
 | [gaps.md](gaps.md) | Facts we do not have yet |

@@ -17,11 +17,14 @@ ERCOT dashboard JSON
     → normalized grid snapshot, constraints, prices
     → fleet tick (one battery at a time: load, dispatch, sensor noise, control charts)
     → metric_logs, observations, control_points, dispatch_ticks (SQLite)
-    → when configured, the same dispatch row is inserted in Supabase
+    → when configured, Supabase receives the dispatch row, the market row,
+      unit_latest, closed usage hours, and action status
     → GET /api/scene and GET /api/dispatch
-    → Three.js map and the selected battery's charts
-    → a controller reads the dispatch row and writes the next call
-      (POST /api/dispatch, or a row in Supabase dispatch_orders)
+    → Three.js map, the actions list, and the selected battery's charts
+    → a controller reads market_ticks, unit_latest, and usage_hours
+      and writes the next fleet call (dispatch_orders or POST /api/dispatch)
+      or a per-unit row (unit_actions or POST /api/actions)
+    → the next tick applies those rows. It does not wait on the model.
 ```
 
 There is no login. The map and `/api/scene` are the entry points. Official ERCOT credentials stay in the environment and are never returned by the API.
@@ -33,16 +36,17 @@ At 3000 batteries the old single payload would have been tens of megabytes, beca
 - `GET /api/scene` is the map. One small row per battery — id, metro, the distribution substation it supplies, position, state, state of charge, and the flagged families when there are any — plus the metro list, the substation list, the fleet rollup, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
 - `GET /api/site/{id}` is one battery in full: every component's metrics, every chart with its residual history, and the unit's own profile. A few kilobytes, fetched when the modal opens and refreshed while it stays open.
 - `GET /api/dispatch` is the real-time control row: the call that was just applied, the order waiting for the next tick, and the snapshot a controller reads (demand, storage, frequency, fleet totals). `POST /api/dispatch` with `{"signal": "push", "intensity": 0.8}` sets that waiting order. `{"signal": "auto"}` returns the decision to the ladder. The next tick applies it. The tick does not wait on a model.
+- `POST /api/actions` with `{"site_id", "kind", "note", "payload"}` queues one unit action. Kinds and payloads are in [llm.md](llm.md). The scene payload includes `market`, the latest `actions`, and the add-on catalog so the side panel can show them.
 
 ## Map
 
 The state is a filled outline from `web/geo.js`, with longitude compressed by `cos(31°)` so Texas is not stretched.
 
-Every battery is one particle, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, green holding, red when a control chart is out of limits. The fleet is a single particle draw, position and colour on the point, so 3000 units cost about as much as one. The particles keep a fixed size on screen. Zooming in opens the gaps between them, and each station's homes are a hex patch, so the service area stays readable instead of collapsing into one speck. The selected unit gets a pale ring.
+Every battery is one particle, coloured by what it actually did this tick: amber pushing to the grid, blue pulling from it, green holding, red when a control chart is out of limits, grey while a scheduled service has the base offline. The fleet is a single particle draw, position and colour on the point, so 3000 units cost about as much as one. The particles keep a fixed size on screen. Zooming in opens the gaps between them, and each station's homes are a hex patch, so the service area stays readable instead of collapsing into one speck. The selected unit gets a pale ring.
 
 Left-drag orbits the camera, the wheel zooms, and right-drag pans the orbit target. The target stays inside a box around the state, so a long drag cannot lose Texas.
 
-Past a city-scale distance a flat line runs from each particle in view to the distribution substation it supplies. That substation is a diamond. Clicking a metro in the side panel, or opening `/#metro/austin`, flies to that distance. The lines are distribution feeders. They are not the exception arc and they are not an ERCOT constraint.
+Past a city-scale distance each distribution substation is a diamond in the middle of the homes that supply it. Clicking a metro in the side panel, or opening `/#metro/austin`, flies to that distance.
 
 Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 

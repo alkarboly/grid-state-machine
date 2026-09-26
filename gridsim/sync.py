@@ -81,3 +81,131 @@ def push_tick(row: dict) -> str | None:
     except Exception as exc:
         return str(exc)
     return None
+
+
+def _upsert(table: str, rows: dict | list, on_conflict: str) -> None:
+    url = f"{config.SUPABASE_URL}/rest/v1/{table}?on_conflict={on_conflict}"
+    _request("POST", url, rows, {"Prefer": "resolution=merge-duplicates"})
+
+
+def pull_addons() -> tuple[dict[str, list[str]] | None, str | None]:
+    """Installed add-ons, or (None, None) when Supabase is not configured."""
+    if not config.supabase_configured():
+        return None, None
+    url = f"{config.SUPABASE_URL}/rest/v1/site_addons?select=site_id,addon_id"
+    try:
+        rows = _request("GET", url) or []
+    except Exception as exc:
+        return None, str(exc)
+    found: dict[str, list[str]] = {}
+    for row in rows:
+        found.setdefault(row["site_id"], []).append(row["addon_id"])
+    return found, None
+
+
+def pull_actions() -> tuple[list[dict], str | None]:
+    """Open actions written by a controller. Empty when Supabase is not configured."""
+    if not config.supabase_configured():
+        return [], None
+    url = (
+        f"{config.SUPABASE_URL}/rest/v1/unit_actions"
+        "?select=id,ts,site_id,kind,status,starts_at,ends_at,note,payload,actor"
+        "&status=in.(pending,active)&order=ts.asc&limit=200"
+    )
+    try:
+        rows = _request("GET", url) or []
+    except Exception as exc:
+        return [], str(exc)
+    for row in rows:
+        if not isinstance(row.get("payload"), dict):
+            row["payload"] = {}
+    return rows, None
+
+
+def push_market(row: dict) -> str | None:
+    if not config.supabase_configured():
+        return None
+    try:
+        _upsert("market_ticks", row, "ts")
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def push_latest(rows: list[dict]) -> str | None:
+    if not config.supabase_configured() or not rows:
+        return None
+    body = [
+        {
+            "site_id": row["site_id"],
+            "ts": row["ts"],
+            "soc_kwh": row["soc_kwh"],
+            "soc_pct": row["soc_pct"],
+            "availability": row["availability"],
+            "signal": row["signal"],
+            "charge_kw": row["charge_kw"],
+            "discharge_kw": row["discharge_kw"],
+            "load_kw": row["load_kw"],
+            "temp_c": row["temp_c"],
+            "addons_json": row["addons"],
+        }
+        for row in rows
+    ]
+    try:
+        _upsert("unit_latest", body, "site_id")
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def push_usage(rows: list[dict]) -> str | None:
+    if not config.supabase_configured() or not rows:
+        return None
+    try:
+        _upsert("usage_hours", rows, "ts,site_id")
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def push_actions(rows: list[dict]) -> str | None:
+    if not config.supabase_configured() or not rows:
+        return None
+    body = [
+        {
+            "id": row["id"],
+            "ts": row["ts"],
+            "site_id": row["site_id"],
+            "kind": row["kind"],
+            "status": row["status"],
+            "starts_at": row.get("starts_at"),
+            "ends_at": row.get("ends_at"),
+            "note": row.get("note") or "",
+            "payload": row.get("payload") or {},
+            "actor": row.get("actor") or "llm",
+        }
+        for row in rows
+    ]
+    try:
+        _upsert("unit_actions", body, "id")
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def push_addons(site_id: str, addon_ids: list[str], installed_at: str) -> str | None:
+    """Replace the disco's add-on list for one site."""
+    if not config.supabase_configured():
+        return None
+    try:
+        _request("DELETE", f"{config.SUPABASE_URL}/rest/v1/site_addons?site_id=eq.{site_id}")
+        if addon_ids:
+            _request(
+                "POST",
+                f"{config.SUPABASE_URL}/rest/v1/site_addons",
+                [{"site_id": site_id, "addon_id": addon_id, "installed_at": installed_at} for addon_id in addon_ids],
+                {"Prefer": "return=minimal"},
+            )
+    except Exception as exc:
+        return str(exc)
+    return None

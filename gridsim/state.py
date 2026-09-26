@@ -10,12 +10,38 @@ from gridsim.db import (
     connect,
     insert_dispatch,
     insert_grid,
+    insert_market,
     insert_raw,
     insert_rollup,
     insert_tick,
+    insert_usage,
+    load_actions,
+    load_addon_map,
+    replace_addons,
+    upsert_actions,
+    upsert_latest,
     upsert_sites,
 )
-from gridsim.sync import pull_order, push_tick
+from gridsim.fleet.actions import (
+    OPEN,
+    apply_actions,
+    catalog_rows,
+    market_rate,
+    merge_actions,
+    new_action,
+)
+from gridsim.llm import propose
+from gridsim.sync import (
+    pull_actions,
+    pull_addons,
+    pull_order,
+    push_actions,
+    push_addons,
+    push_latest,
+    push_market,
+    push_tick,
+    push_usage,
+)
 from gridsim.ercot.client import fetch_dashboards, fetch_official
 from gridsim.ercot.normalize import (
     constraints_from_rows,
@@ -108,6 +134,45 @@ def _newer(remote: dict, pending: dict | None) -> bool:
     return (remote.get("ts") or "") >= (pending.get("ts") or "")
 
 
+def _market(grid: dict, fleet: dict, applied: dict, frequency_hz: float, sites: list[dict]) -> dict:
+    rate, basis = market_rate(grid)
+    return {
+        "ts": fleet["ts"],
+        "demand_mw": grid.get("demand_mw"),
+        "demand_percentile": grid.get("demand_percentile"),
+        "storage_gen_mw": grid.get("storage_gen_mw"),
+        "rate_usd_mwh": rate,
+        "rate_basis": basis,
+        "frequency_hz": frequency_hz,
+        "signal": applied["signal"],
+        "intensity": applied["intensity"],
+        "source": applied["source"],
+        "mean_soc_pct": fleet["mean_soc_pct"],
+        "offline": sum(1 for site in sites if site.get("offline")),
+        "units": fleet["units"],
+    }
+
+
+def _latest(site: dict, ts: str) -> dict:
+    metrics = site.get("metrics") or {}
+    base = metrics.get("base") or {}
+    panel = metrics.get("panel") or {}
+    disco = metrics.get("disco") or {}
+    return {
+        "site_id": site["id"],
+        "ts": ts,
+        "soc_kwh": base.get("soc_kwh") or 0.0,
+        "soc_pct": base.get("soc_pct") or 0.0,
+        "availability": base.get("availability") or "online",
+        "signal": site.get("signal") or "hold",
+        "charge_kw": base.get("charge_kw") or 0.0,
+        "discharge_kw": base.get("discharge_kw") or 0.0,
+        "load_kw": panel.get("load_kw") or 0.0,
+        "temp_c": base.get("temp_c") or 0.0,
+        "addons": disco.get("addons") or [],
+    }
+
+
 def _snapshot(grid: dict, fleet: dict, applied: dict, frequency_hz: float) -> dict:
     """One row per tick. This is the object a controller reads."""
     return {
@@ -148,6 +213,11 @@ class Fleet:
         self._pending: dict | None = None
         self.applied = {"signal": "hold", "intensity": 0.0, "source": "rules", "zones": {}}
         self.snapshot: dict | None = None
+        self.market: dict | None = None
+        self.actions: list[dict] = []
+        self.usage: dict[str, list[dict]] = {}
+        self._llm_at = None
+        self.llm = "disabled"
         self.supabase = "disabled"
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
@@ -166,6 +236,11 @@ class Fleet:
             return
         self._conn = connect()
         upsert_sites(self._conn, self.sites)
+        self.actions = load_actions(self._conn)
+        installed = load_addon_map(self._conn)
+        for site in self.sites:
+            if site["id"] in installed:
+                site["addons"] = installed[site["id"]]
         self.tick()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="gridsim-tick", daemon=True)
@@ -272,15 +347,62 @@ class Fleet:
                 "supabase": self.supabase,
             }
 
+    def add_action(self, site_id: str, kind: str, note: str, payload: dict | None, actor: str) -> dict:
+        now = now_central()
+        with self._lock:
+            if not any(site["id"] == site_id for site in self.sites):
+                raise KeyError(site_id)
+            action = new_action(site_id, kind, now, note=note, payload=payload, actor=actor)
+            self.actions.append(action)
+        return action
+
     def tick(self) -> None:
         remote, remote_error = pull_order()
+        remote_actions, action_error = pull_actions()
+        remote_addons, addon_error = pull_addons()
+        with self._lock:
+            due = self._llm_due()
+            context = self._llm_context() if due else None
+        llm_rows, llm_error = propose(context) if context else ([], None)
         now = now_central()
         note: dict = {}
         row = None
+        market = None
+        latest: list[dict] = []
+        usage_rows: list[dict] = []
+        dirty_actions: list[dict] = []
+        addon_sites: list[dict] = []
         with self._lock:
+            if due:
+                self._llm_at = now
             if remote is not None and _newer(remote, self._pending):
                 self._pending = None if remote["signal"] == "auto" else remote
             order = None if self._pending is None else dict(self._pending)
+            self.actions = merge_actions(self.actions, remote_actions)
+            for item in llm_rows:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    self.actions.append(
+                        new_action(
+                            str(item.get("site_id") or ""),
+                            str(item.get("kind") or ""),
+                            now,
+                            note=str(item.get("note") or ""),
+                            payload=item.get("payload") if isinstance(item.get("payload"), dict) else {},
+                            actor="llm",
+                        )
+                    )
+                except (ValueError, TypeError):
+                    continue
+            if remote_addons is not None:
+                for site in self.sites:
+                    site["addons"] = list(remote_addons.get(site["id"], []))
+            before_addons = {site["id"]: tuple(site.get("addons") or []) for site in self.sites}
+            before_status = {action["id"]: action.get("status") for action in self.actions}
+            created = apply_actions(self.sites, self.actions, now)
+            self.actions.extend(created)
+            self._trim_actions()
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
@@ -304,21 +426,91 @@ class Fleet:
             row = _snapshot(self.grid, self.fleet, self.applied, note["frequency_hz"])
             self.snapshot = row
             self._last_tick = now
+            self._keep_usage(note.get("usage") or [])
+            market = _market(self.grid, self.fleet, self.applied, note["frequency_hz"], sites)
+            self.market = market
+            publish = self._publish_sites()
+            latest = [_latest(site, iso(now)) for site in publish]
+            publish_ids = {site["id"] for site in publish}
+            usage_rows = [item for item in note.get("usage") or [] if item["site_id"] in publish_ids]
+            dirty_actions = [
+                action for action in self.actions if before_status.get(action["id"]) != action.get("status")
+            ]
+            addon_sites = [
+                site for site in sites if tuple(site.get("addons") or []) != before_addons.get(site["id"], ())
+            ]
         publish_error = None
-        if self._conn and row:
+        if self._conn and row and market:
             if logs:
                 insert_tick(self._conn, logs, observations, points)
             insert_rollup(self._conn, self.fleet)
             insert_dispatch(self._conn, row)
-        if row:
-            publish_error = push_tick(row)
+            insert_market(self._conn, market)
+            upsert_latest(self._conn, latest)
+            insert_usage(self._conn, usage_rows)
+            upsert_actions(self._conn, dirty_actions)
+            for site in addon_sites:
+                replace_addons(self._conn, site["id"], list(site.get("addons") or []), iso(now))
+        if row and market:
+            errors = [
+                push_tick(row),
+                push_market(market),
+                push_latest(latest),
+                push_usage(usage_rows),
+                push_actions(dirty_actions),
+            ]
+            for site in addon_sites:
+                errors.append(push_addons(site["id"], list(site.get("addons") or []), iso(now)))
+            publish_error = next((item for item in errors if item), None)
         with self._lock:
             if not config.supabase_configured():
                 self.supabase = "disabled"
-            elif remote_error or publish_error:
+            elif remote_error or action_error or addon_error or publish_error:
                 self.supabase = "error"
             else:
                 self.supabase = "live"
+            if not config.LLM_URL:
+                self.llm = "disabled"
+            elif llm_error:
+                self.llm = "error"
+            elif due:
+                self.llm = "live"
+
+    def _llm_due(self) -> bool:
+        if not config.LLM_URL or self.market is None:
+            return False
+        if self._llm_at is None:
+            return True
+        return (now_central() - self._llm_at).total_seconds() >= config.LLM_EVERY_S
+
+    def _llm_context(self) -> dict:
+        units = [_latest(site, self.fleet.get("ts") or "") for site in self._publish_sites()[:24]]
+        wanted = {row["site_id"] for row in units}
+        usage = []
+        for site_id in wanted:
+            usage.extend(self.usage.get(site_id, [])[-6:])
+        return {"market": self.market, "units": units, "usage": usage}
+
+    def _publish_sites(self) -> list[dict]:
+        """Instrumented homes, plus any home an action or add-on has touched."""
+        touched = {action["site_id"] for action in self.actions}
+        ranked = []
+        for site in self.sites:
+            if site["id"] in self.persist or site.get("offline") or site.get("addons") or site["id"] in touched:
+                ranked.append((0 if site.get("offline") else 1, site["id"], site))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        return [site for _, _, site in ranked[:80]]
+
+    def _keep_usage(self, rows: list[dict]) -> None:
+        for row in rows:
+            bucket = self.usage.setdefault(row["site_id"], [])
+            bucket.append(row)
+            del bucket[:-48]
+
+    def _trim_actions(self) -> None:
+        open_rows = [action for action in self.actions if action.get("status") in OPEN]
+        closed = [action for action in self.actions if action.get("status") not in OPEN]
+        self.actions = closed[-160:] + open_rows
 
     def scene(self) -> dict:
         """Map payload. One row per battery, small enough to poll at fleet scale."""
@@ -338,6 +530,7 @@ class Fleet:
                     "state": site.get("state", "hold"),
                     "soc_pct": base.get("soc_pct"),
                     "alarm": bool(flagged),
+                    "offline": bool(site.get("offline")),
                 }
                 if flagged:
                     charts = {chart["chart_id"]: chart for chart in site.get("charts") or []}
@@ -359,6 +552,9 @@ class Fleet:
                     "intensity": self.applied["intensity"],
                     "source": self.applied["source"],
                 },
+                "market": self.market,
+                "actions": sorted(self.actions, key=lambda row: row.get("ts") or "", reverse=True)[:24],
+                "addons": catalog_rows(),
                 "sites": sites,
                 "ercot": self.status,
             }
@@ -393,6 +589,8 @@ class Fleet:
                 "instrumented": site["id"] in self.persist,
                 "metrics": site.get("metrics") or {},
                 "charts": charts,
+                "usage": list(self.usage.get(site_id, [])[-24:]),
+                "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
             }
 
 

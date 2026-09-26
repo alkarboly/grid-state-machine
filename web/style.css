@@ -8,6 +8,7 @@
   --push: #f0a03a;
   --hold: #9dbe92;
   --alarm: #e15b4c;
+  --offline: #8d8794;
   --watch: #d8b46a;
 }
 
@@ -114,6 +115,9 @@ h2 {
 .push i { background: var(--push); }
 .hold i { background: var(--hold); }
 .alarm i { background: var(--alarm); }
+.offline i { background: var(--offline); }
+.market { margin: 0; font-size: 18px; font-variant-numeric: tabular-nums; }
+.market span { color: var(--muted); font-size: 12px; margin-left: 6px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 14px 0 18px; }
 .chips button {

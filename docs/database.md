@@ -70,6 +70,8 @@ One row per tick. This is the object a controller reads in order to decide the n
 
 `signal` and `intensity` are the call that was applied on this tick. `source` is `rules` or `external`. `zones_json` is a JSON object of load zone to the signal that zone actually ran. Under an external order every zone has the same signal. Under the ladder, a zone with a price can differ.
 
+The Postgres tables the bot and a controller share are created by the SQL files in `supabase/migrations`, in filename order. Local SQLite mirrors the column names. Row level security is enabled and there is no anon policy, so the browser cannot read them. Only the bot's service role can.
+
 `dispatch_orders` is not a local table. It lives in Supabase, and the tick reads the newest row:
 
 ```sql
@@ -104,6 +106,32 @@ alter publication supabase_realtime add table dispatch_ticks;
 ```
 
 Add `dispatch_ticks` to the realtime publication so a subscriber sees each tick as it is inserted. The service-role key used by this process must not be placed in the browser.
+
+## What the controller reads
+
+These three tables are the read model in [llm.md](llm.md). The bot upserts them. It does not publish all 3000 homes: `unit_latest` and `usage_hours` cover the instrumented cohort plus any home with an action or an add-on, capped at 80 homes a tick.
+
+### `market_ticks`
+
+One row per tick. `rate_usd_mwh` and `rate_basis` (`ercot` or `simulated`) are the market rate. The row also carries demand, storage, frequency, the fleet call, `mean_soc_pct`, how many bases are `offline`, and `units`.
+
+### `unit_latest`
+
+One row per published home, replaced in place. `site_id`, `ts`, `soc_kwh`, `soc_pct`, `availability` (`online` or `offline`), `signal`, `charge_kw`, `discharge_kw`, `load_kw`, `temp_c`, `addons_json`.
+
+### `usage_hours`
+
+One row per home per clock hour, written when that hour closes. `ts` is the first tick of the hour. `hour`, `load_kwh`, `import_kwh`, `export_kwh`, `solar_kwh`, `ev_kwh`.
+
+## What the controller writes
+
+### `unit_actions`
+
+One row per action. `id` is a hex string the writer chooses, or one the bot generates. `kind` is `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`, or `return_online`. `status` is `pending`, `active`, `done`, or `cancelled`. `actor` is `llm`, `api`, or `sim`. `payload` holds `signal` and `intensity` for a set-signal, or `addon_id` for an add-on change. `starts_at` and `ends_at` bound a service or a signal override.
+
+### `addon_catalog` and `site_addons`
+
+The catalog has two rows, `solar` and `ev_charger`. `site_addons` is the set currently installed: `site_id`, `addon_id`, `installed_at`. Removing an add-on deletes that row. The action log is the history.
 
 ## Caps
 

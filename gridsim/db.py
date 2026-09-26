@@ -135,6 +135,63 @@ CREATE TABLE IF NOT EXISTS dispatch_ticks (
   stored_kwh REAL NOT NULL,
   alarms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS market_ticks (
+  ts TEXT PRIMARY KEY,
+  demand_mw REAL,
+  demand_percentile REAL,
+  storage_gen_mw REAL,
+  rate_usd_mwh REAL NOT NULL,
+  rate_basis TEXT NOT NULL,
+  frequency_hz REAL NOT NULL,
+  signal TEXT NOT NULL,
+  intensity REAL NOT NULL,
+  source TEXT NOT NULL,
+  mean_soc_pct REAL NOT NULL,
+  offline INTEGER NOT NULL,
+  units INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS unit_latest (
+  site_id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  soc_kwh REAL NOT NULL,
+  soc_pct REAL NOT NULL,
+  availability TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  charge_kw REAL NOT NULL,
+  discharge_kw REAL NOT NULL,
+  load_kw REAL NOT NULL,
+  temp_c REAL NOT NULL,
+  addons_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_hours (
+  ts TEXT NOT NULL,
+  site_id TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  load_kwh REAL NOT NULL,
+  import_kwh REAL NOT NULL,
+  export_kwh REAL NOT NULL,
+  solar_kwh REAL NOT NULL,
+  ev_kwh REAL NOT NULL,
+  PRIMARY KEY (ts, site_id)
+);
+CREATE TABLE IF NOT EXISTS unit_actions (
+  id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  site_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  starts_at TEXT,
+  ends_at TEXT,
+  note TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  actor TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS site_addons (
+  site_id TEXT NOT NULL,
+  addon_id TEXT NOT NULL,
+  installed_at TEXT NOT NULL,
+  PRIMARY KEY (site_id, addon_id)
+);
 """
 
 _ROLLUP_COLUMNS = (
@@ -287,6 +344,148 @@ _DISPATCH_COLUMNS = (
     "stored_kwh",
     "alarms",
 )
+
+
+def insert_market(conn: sqlite3.Connection, row: dict) -> None:
+    columns = (
+        "ts", "demand_mw", "demand_percentile", "storage_gen_mw", "rate_usd_mwh", "rate_basis",
+        "frequency_hz", "signal", "intensity", "source", "mean_soc_pct", "offline", "units",
+    )
+    conn.execute(
+        f"INSERT OR REPLACE INTO market_ticks ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        tuple(row[column] for column in columns),
+    )
+    conn.commit()
+
+
+def upsert_latest(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT INTO unit_latest (
+          site_id, ts, soc_kwh, soc_pct, availability, signal, charge_kw, discharge_kw,
+          load_kw, temp_c, addons_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(site_id) DO UPDATE SET
+          ts = excluded.ts,
+          soc_kwh = excluded.soc_kwh,
+          soc_pct = excluded.soc_pct,
+          availability = excluded.availability,
+          signal = excluded.signal,
+          charge_kw = excluded.charge_kw,
+          discharge_kw = excluded.discharge_kw,
+          load_kw = excluded.load_kw,
+          temp_c = excluded.temp_c,
+          addons_json = excluded.addons_json
+        """,
+        [
+            (
+                row["site_id"], row["ts"], row["soc_kwh"], row["soc_pct"], row["availability"],
+                row["signal"], row["charge_kw"], row["discharge_kw"], row["load_kw"],
+                row["temp_c"], json.dumps(row["addons"]),
+            )
+            for row in rows
+        ],
+    )
+    conn.commit()
+
+
+def insert_usage(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO usage_hours (
+          ts, site_id, hour, load_kwh, import_kwh, export_kwh, solar_kwh, ev_kwh
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                row["ts"], row["site_id"], row["hour"], row["load_kwh"], row["import_kwh"],
+                row["export_kwh"], row["solar_kwh"], row["ev_kwh"],
+            )
+            for row in rows
+        ],
+    )
+    conn.commit()
+
+
+def upsert_actions(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT INTO unit_actions (
+          id, ts, site_id, kind, status, starts_at, ends_at, note, payload_json, actor
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          status = excluded.status,
+          starts_at = excluded.starts_at,
+          ends_at = excluded.ends_at,
+          note = excluded.note
+        """,
+        [
+            (
+                row["id"], row["ts"], row["site_id"], row["kind"], row["status"],
+                row.get("starts_at"), row.get("ends_at"), row.get("note") or "",
+                json.dumps(row.get("payload") or {}), row.get("actor") or "llm",
+            )
+            for row in rows
+        ],
+    )
+    conn.execute(
+        """
+        DELETE FROM unit_actions WHERE id NOT IN (
+          SELECT id FROM unit_actions ORDER BY ts DESC LIMIT 500
+        )
+        """
+    )
+    conn.commit()
+
+
+def load_actions(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, ts, site_id, kind, status, starts_at, ends_at, note, payload_json, actor
+        FROM unit_actions
+        WHERE status IN ('pending', 'active')
+        ORDER BY ts
+        """
+    ).fetchall()
+    loaded = []
+    for row in rows:
+        loaded.append(
+            {
+                "id": row[0],
+                "ts": row[1],
+                "site_id": row[2],
+                "kind": row[3],
+                "status": row[4],
+                "starts_at": row[5],
+                "ends_at": row[6],
+                "note": row[7] or "",
+                "payload": json.loads(row[8] or "{}"),
+                "actor": row[9],
+            }
+        )
+    return loaded
+
+
+def load_addon_map(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for site_id, addon_id in conn.execute("SELECT site_id, addon_id FROM site_addons"):
+        found.setdefault(site_id, []).append(addon_id)
+    return found
+
+
+def replace_addons(conn: sqlite3.Connection, site_id: str, addon_ids: list[str], installed_at: str) -> None:
+    conn.execute("DELETE FROM site_addons WHERE site_id = ?", (site_id,))
+    conn.executemany(
+        "INSERT INTO site_addons (site_id, addon_id, installed_at) VALUES (?, ?, ?)",
+        [(site_id, addon_id, installed_at) for addon_id in addon_ids],
+    )
+    conn.commit()
 
 
 def insert_dispatch(conn: sqlite3.Connection, row: dict) -> None:

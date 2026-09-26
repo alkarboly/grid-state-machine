@@ -10,6 +10,7 @@ from pathlib import Path
 
 from gridsim import config
 from gridsim.fleet.charts import CHARTS, HISTORY, evaluate
+from gridsim.fleet.actions import addon_power
 from gridsim.fleet.policy import choose_signal, intensity, resolve_order
 from gridsim.timeutil import iso
 
@@ -443,6 +444,7 @@ def tick_sites(
     # One frequency for the interconnection. Homes only add a local measurement error.
     frequency_hz = 60.0 + rng.gauss(0, 0.006)
     zone_signals: dict[str, str] = {}
+    closed_usage: list[dict] = []
 
     for raw_site in sites:
         site = dict(raw_site)
@@ -457,6 +459,12 @@ def tick_sites(
             level = intensity(signal, percentile)
             source = "rules"
         zone_signals[site["load_zone"]] = signal
+        # A unit action outranks the fleet call. Service takes the base offline.
+        if site.get("offline"):
+            level = 0.0
+        elif site.get("signal_override"):
+            signal, level = site["signal_override"]
+            source = "action"
         target_kw = max(0.3, HOUR_MEAN_KW[hour] * site["load_scale"] * scale)
         load_kw = max(
             0.3,
@@ -493,14 +501,35 @@ def tick_sites(
         charge_kw = commanded_charge * response
         discharge_kw = commanded_discharge * response
 
+        # Solar feeds the house first. What is left can charge the battery.
+        # The car charger is extra load. Neither is a dispatch command, so the
+        # response chart still compares charge_kw and discharge_kw with the call.
+        metered = addon_power(list(site.get("addons") or []), hour)
+        solar_kw = next((item["kw"] for item in metered if item["addon_id"] == "solar"), 0.0)
+        ev_kw = next((item["kw"] for item in metered if item["addon_id"] == "ev_charger"), 0.0)
+        solar_to_house = min(solar_kw, load_kw + ev_kw)
+        solar_left = solar_kw - solar_to_house
+        solar_to_battery = 0.0
+        if not site.get("offline") and solar_left > 0 and dt:
+            room_kwh = ceiling - site["physical_soc_kwh"]
+            room_kw = max(0.0, room_kwh / (eta * dt))
+            spare = max(0.0, site["power_limit_kw"] - charge_kw)
+            solar_to_battery = min(solar_left, room_kw, spare)
+        solar_export = solar_left - solar_to_battery
+
         if dt:
             site["physical_soc_kwh"] = min(
                 ceiling,
-                max(0.0, site["physical_soc_kwh"] + charge_kw * dt * eta - discharge_kw * dt / eta),
+                max(
+                    0.0,
+                    site["physical_soc_kwh"]
+                    + (charge_kw + solar_to_battery) * dt * eta
+                    - discharge_kw * dt / eta,
+                ),
             )
         reported_soc = site["physical_soc_kwh"] + float(fault.get("soc_bias_kwh", 0.0)) + rng.gauss(0, 0.04)
 
-        true_net = load_kw + charge_kw - discharge_kw
+        true_net = load_kw + ev_kw - solar_to_house - solar_export + charge_kw - discharge_kw
         grid_in, grid_out = _split(true_net)
         meter_in, meter_out = _split(true_net + rng.gauss(0, 0.02))
         disco_bias = float(fault.get("disco_bias_kw", 0.0))
@@ -511,7 +540,8 @@ def tick_sites(
         # Cabinet temperature lags the power it is actually moving, on a
         # quarter-hour time constant. The chart expected value is that lag,
         # so a healthy cabinet is not punished for being slow.
-        power_frac = (charge_kw + discharge_kw) / site["power_limit_kw"] if site["power_limit_kw"] else 0.0
+        moving = charge_kw + discharge_kw + solar_to_battery
+        power_frac = moving / site["power_limit_kw"] if site["power_limit_kw"] else 0.0
         target_temp = site["temp_center_c"] + 4.0 * min(1.0, power_frac)
         expected_temp = _approach(
             site.get("temp_c_state", site["temp_center_c"]),
@@ -581,6 +611,7 @@ def tick_sites(
                 "frequency_hz": round(frequency, 3),
                 "contactor": "closed",
                 "islanded": False,
+                "addons": metered,
             },
             "panel": {
                 "load_kw": round(load_kw, 3),
@@ -595,6 +626,8 @@ def tick_sites(
                 "commanded_discharge_kw": round(commanded_discharge, 3),
                 "charge_kw": round(charge_kw, 3),
                 "discharge_kw": round(discharge_kw, 3),
+                "solar_charge_kw": round(solar_to_battery, 3),
+                "availability": "offline" if site.get("offline") else "online",
                 "temp_c": round(temp_c, 2),
             },
             "maintenance": {
@@ -608,6 +641,9 @@ def tick_sites(
         site["charts"] = charts
         site["signal"] = signal
         site["alarm"] = alarm
+        _roll_usage(
+            site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, closed_usage
+        )
         # What the battery actually did, which is not always what it was told.
         if discharge_kw > 0.01:
             site["state"] = "push"
@@ -682,4 +718,39 @@ def tick_sites(
         note["intensity"] = round(applied_level, 3)
         note["source"] = applied_source
         note["zones"] = zone_signals
+        note["usage"] = closed_usage
     return updated, logs, observations, points
+
+
+def _roll_usage(site, hour, stamp, dt, load_kw, grid_in, grid_out, solar_kw, ev_kw, closed) -> None:
+    """Add this tick to the open hour. A closed hour is one usage_hours row."""
+    bucket = site.get("usage")
+    if bucket is None or bucket.get("hour") != hour:
+        if bucket and bucket.get("hour") is not None:
+            closed.append(
+                {
+                    "ts": bucket["ts"],
+                    "site_id": site["id"],
+                    "hour": bucket["hour"],
+                    "load_kwh": round(bucket["load_kwh"], 4),
+                    "import_kwh": round(bucket["import_kwh"], 4),
+                    "export_kwh": round(bucket["export_kwh"], 4),
+                    "solar_kwh": round(bucket["solar_kwh"], 4),
+                    "ev_kwh": round(bucket["ev_kwh"], 4),
+                }
+            )
+        bucket = {
+            "ts": stamp,
+            "hour": hour,
+            "load_kwh": 0.0,
+            "import_kwh": 0.0,
+            "export_kwh": 0.0,
+            "solar_kwh": 0.0,
+            "ev_kwh": 0.0,
+        }
+        site["usage"] = bucket
+    bucket["load_kwh"] += load_kw * dt
+    bucket["import_kwh"] += grid_in * dt
+    bucket["export_kwh"] += grid_out * dt
+    bucket["solar_kwh"] += solar_kw * dt
+    bucket["ev_kwh"] += ev_kw * dt

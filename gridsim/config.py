@@ -41,6 +41,15 @@ TICK_SECONDS = 10
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
+# Optional model call. Empty means actions only arrive from Supabase or POST /api/actions.
+LLM_URL = os.environ.get("LLM_URL", "").strip()
+LLM_EVERY_S = float(os.environ.get("LLM_EVERY_S", "600"))
+
+# Comma-separated browser origins allowed to call the bot. Empty keeps same-origin only.
+WEB_ORIGIN = os.environ.get("WEB_ORIGIN", "").strip()
+# The bot on Render sets this to 0. Locally the API also serves the map.
+SERVE_STATIC = os.environ.get("SERVE_STATIC", "1").strip() != "0"
+
 
 def official_api_configured() -> bool:
     return bool(ERCOT_USERNAME and ERCOT_PASSWORD and ERCOT_SUBSCRIPTION_KEY)

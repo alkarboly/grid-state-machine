@@ -276,7 +276,8 @@ h2 {
 }
 .stack p b { color: var(--ink); font-weight: 450; }
 
-.fold { margin-top: 20px; }
+.fold { margin-top: 2px; }
+.fold-body { max-height: 220px; overflow: auto; }
 .fold summary {
   cursor: pointer;
   font-size: 11px;

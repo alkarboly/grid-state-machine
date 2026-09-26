@@ -40,7 +40,7 @@ The bot's disk is ephemeral. Supabase is the record of actions, market rows, and
 - Publish directory: `web`
 - Before publishing, set `API_BASE` in `web/config.js` to the bot origin with no trailing slash, for example `https://gridsim-bot.onrender.com`.
 
-The map then polls `API_BASE/api/scene`. The side panel is the fleet ledger from that payload: state counts, power totals, the market rate, and the action list.
+The map then polls `API_BASE/api/scene`. The side panel starts collapsed. Opened, it is a stack of collapsed headings: fleet counts, the market rate, actions, codes, the attention queue, and service areas.
 
 ## 3. Check
 

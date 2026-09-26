@@ -2,7 +2,7 @@
 
 Handoff for the next session. Names and shapes stay in the other pages. This page says what already runs, what is only on this machine, and the slice to build next.
 
-`main` is at `5b270bf`, “List service areas and collapse actions.” Do not commit `.env` or `data/gridsim.db`.
+Do not commit `.env` or `data/gridsim.db`.
 
 ## Built and on `main`
 
@@ -10,7 +10,7 @@ Live ERCOT demand, the short forecast, and fuel mix, including storage megawatts
 
 A simulated fleet of 3000 Base-style homes. Default energy is the published 39.2 kWh. Continuous power defaults to 11.5 kW, which is an assumption. Each home is grid → meter → disco → panel → base. Physics, the dispatch ladder, and the scripted faults are [simulation.md](simulation.md). Six chart families and the machine-learning row are [control-charts.md](control-charts.md) and [database.md](database.md).
 
-The map is one particle draw. Homes sit on a hex around a modeled distribution substation, not around the downtown dot and not on an ERCOT station code. Hover a metro hub, then click, and the camera flies in. Hover a substation diamond, then click, and the camera flies closer and dims every home that supplies a different substation. `/#metro/austin` and `/#station/aus-s03` open those views. City labels are sized to the measured name. Only metros holding at least 3% of the fleet are labelled. San Antonio’s label grows west so the name stays on the map.
+The map is one particle draw. Homes sit on a hex around a modeled distribution substation, not around the downtown dot and not on an ERCOT station code. Clicking a city unfolds each neighborhood from its substation. Clicking a neighborhood opens only that substation, and the homes ease out to fill the frame. Clicks land on the drawn dots. `/#metro/austin` and `/#station/aus-s03` open those views. City labels are sized to the measured name. Only metros holding at least 3% of the fleet are labelled. San Antonio’s label grows west so the name stays on the map.
 
 One fleet call per tick. `POST /api/dispatch` or the newest Supabase `dispatch_orders` row is applied on the next tick. The tick does not wait on a model.
 
@@ -20,9 +20,7 @@ Feeder lines from homes to substations are gone. The pale ring marks the selecte
 
 ## In the working tree
 
-Opening a substation is its own presentation. The camera comes down over the hex, the homes rise into the patch, a ring marks the service area, and a card shows that substation's pushing, pulling, holding, and flagged counts. The rest of the fleet drops back into the land.
-
-The fleet panel no longer lists the power split or the market footnote. State counts, stored energy, and the market rate stay. Grid interchange stays in the header.
+Nothing uncommitted. The side panel starts collapsed, and its sections start collapsed.
 
 ## Not standing yet
 

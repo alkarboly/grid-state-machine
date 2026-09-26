@@ -29,7 +29,7 @@ const tip = document.getElementById("tip");
 const panel = document.getElementById("panel");
 const panelBody = document.getElementById("panel-body");
 const panelToggle = document.getElementById("panel-toggle");
-let panelOpen = true;
+let panelOpen = false;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -58,13 +58,19 @@ controls.target.set(0, 0, 0.4);
 let payload = null;
 let selected = null;
 let unitDetail = null;
-let actionsOpen = false;
+const folds = { fleet: false, market: false, actions: false, codes: false, attention: false, areas: false };
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
+let focusedMetro = null;
 let stageStarted = 0;
 let stageRadius = 0.05;
+let stageSpan = { x: 0.05, z: 0.05 };
 let stageT = 1;
+let fillHold = false;
+let cityStarted = 0;
+let cityT = 1;
+let cityHold = false;
 
 function project(lat, lon, y = 0) {
   return new THREE.Vector3((lon - ORIGIN.lon) * LON_SCALE, y, ORIGIN.lat - lat);
@@ -136,6 +142,8 @@ buildMap();
 // the gaps in the station grid instead of enlarging every dot into its neighbour.
 const particlePositions = new Float32Array(UNIT_CAP * 3);
 const particleColors = new Float32Array(UNIT_CAP * 3);
+const placed = new Float32Array(UNIT_CAP * 3);
+const shown = new Uint8Array(UNIT_CAP);
 const particleGeo = new THREE.BufferGeometry();
 particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
 particleGeo.setAttribute("color", new THREE.BufferAttribute(particleColors, 3));
@@ -173,20 +181,6 @@ particles.renderOrder = 3;
 scene.add(particles);
 
 const stationMarks = new Map();
-
-const stagePad = new THREE.Mesh(
-  new THREE.CircleGeometry(1, 64),
-  new THREE.MeshBasicMaterial({ color: 0x22262e, transparent: true, opacity: 0.9, depthWrite: false }),
-);
-stagePad.rotation.x = -Math.PI / 2;
-stagePad.visible = false;
-stagePad.renderOrder = 1;
-scene.add(stagePad);
-
-const stageRing = flatRing(0.9, 1, 0xf4f0e8, 0.75);
-stageRing.visible = false;
-stageRing.renderOrder = 2;
-scene.add(stageRing);
 
 const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
 pick.renderOrder = 5;
@@ -279,34 +273,85 @@ function arcCurve(from, to) {
 
 const TINT = new THREE.Color();
 
+function stationSpread(stations) {
+  const spread = new Map();
+  if (!focusedMetro || focusedStation) return spread;
+  const group = (stations || []).filter((station) => station.metro === focusedMetro);
+  group.forEach((station, index) => {
+    const delay = (index / Math.max(group.length, 1)) * 0.55;
+    spread.set(station.id, {
+      homes: cityT >= 1 ? 1 : easeOut((cityT - delay) / 0.45),
+      mark: cityT >= 1 ? 1 : easeOut((cityT - delay) / 0.22),
+    });
+  });
+  return spread;
+}
+
+function stationOrigin(stationId, data, centers) {
+  let origin = centers.get(stationId);
+  if (origin) return origin;
+  const station = (data.stations || []).find((item) => item.id === stationId);
+  origin = station ? project(station.lat, station.lon, NODE_Y) : null;
+  if (origin) centers.set(stationId, origin);
+  return origin;
+}
+
 function renderUnits(data) {
   const positions = particles.geometry.attributes.position;
   const colors = particles.geometry.attributes.color;
+  const spread = stationSpread(data.stations);
+  const centers = new Map();
+  shown.fill(0);
   let drawn = 0;
-  for (const site of data.sites) {
+  let marked = false;
+  for (let index = 0; index < data.sites.length; index += 1) {
+    const site = data.sites[index];
+    if (focusedStation && site.station !== focusedStation) continue;
     const point = project(site.lat, site.lon, NODE_Y);
+    let x = point.x;
     let y = point.y;
+    let z = point.z;
     TINT.setHex(COLOR[modeOf(site)]);
-    if (focusedStation && site.station !== focusedStation) {
-      TINT.setHex(0x101114);
+    const opening = spread.get(site.station);
+    if (opening && site.metro === focusedMetro && opening.homes < 1) {
+      const origin = stationOrigin(site.station, data, centers) || point;
+      x = origin.x + (point.x - origin.x) * opening.homes;
+      z = origin.z + (point.z - origin.z) * opening.homes;
     } else if (focusedStation) {
-      const delay = (drawn % 20) / 20 * 0.5;
-      const local = easeOut((stageT - delay) / 0.5);
-      y += (1 - local) * 0.11;
-      TINT.lerp(LAND, 1 - local);
+      const delay = (drawn % 20) / 20 * 0.28;
+      const local = easeOut((stageT - delay) / 0.72);
+      const fill = frameFill();
+      const sx = 1 + (fill.x - 1) * local;
+      const sz = 1 + (fill.z - 1) * local;
+      const origin = stationOrigin(site.station, data, centers) || point;
+      x = origin.x + (point.x - origin.x) * sx;
+      z = origin.z + (point.z - origin.z) * sz;
     }
-    positions.setXYZ(drawn, point.x, y, point.z);
+    placed[index * 3] = x;
+    placed[index * 3 + 1] = y;
+    placed[index * 3 + 2] = z;
+    shown[index] = 1;
+    positions.setXYZ(drawn, x, y, z);
     colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
     drawn += 1;
     if (site.id === selected) {
-      pick.position.copy(point);
-      pick.visible = true;
+      marked = true;
+      if (focusedStation) {
+        pick.visible = false;
+      } else {
+        const halfWorld = Math.max(viewDistance(), 0.2) * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+        const halfPx = Math.max(canvas.clientHeight, 1) * 0.5;
+        pick.scale.setScalar(Math.max(0.02, (halfWorld * (6 / halfPx)) / 0.056));
+        pick.position.set(x, y, z);
+        pick.visible = true;
+      }
     }
   }
   particles.geometry.setDrawRange(0, drawn);
   positions.needsUpdate = true;
   colors.needsUpdate = true;
-  if (!data.sites.some((site) => site.id === selected)) pick.visible = false;
+  if (!marked) pick.visible = false;
+  screen = null;
 }
 
 function ensureStation(station) {
@@ -338,28 +383,25 @@ function ensureStation(station) {
 function renderStations(data) {
   const dist = viewDistance();
   const show = dist < 8 || Boolean(focusedStation);
+  const spread = stationSpread(data.stations);
   for (const hub of hubs.values()) hub.group.visible = !show;
   const target = controls.target;
   const reach = 0.28 + dist * 0.08;
   for (const station of data.stations || []) {
     const entry = ensureStation(station);
-    const chosen = station.id === focusedStation;
     if (focusedStation) {
-      entry.group.visible = chosen;
-      entry.label.visible = false;
-      if (chosen) {
-        entry.mark.scale.set(0.018, 0.018, 1);
-        entry.mark.material.color.setHex(0xf4f0e8);
-      }
+      entry.group.visible = false;
       continue;
     }
     const near = Math.hypot(entry.group.position.x - target.x, entry.group.position.z - target.z);
-    entry.group.visible = show && near < reach + 0.15;
-    const size = Math.max(0.006, Math.min(0.014, 0.004 * dist));
+    const opening = spread.get(station.id);
+    const mark = opening ? opening.mark : 1;
+    entry.group.visible = show && near < reach + 0.15 && mark > 0.04;
+    const size = Math.max(0.006, Math.min(0.014, 0.004 * dist)) * mark;
     entry.mark.scale.set(size, size, 1);
     entry.mark.material.color.setHex(0xd5dbe2);
     fitLabel(entry.label, Math.min(0.11, 0.028 * dist));
-    entry.label.visible = show && dist < 4.5 && near < reach;
+    entry.label.visible = show && dist < 4.5 && near < reach && mark > 0.82;
   }
 }
 
@@ -442,10 +484,7 @@ function marketBlock(data) {
   const market = data.market;
   if (!market) return "";
   const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
-  return `<div class="group">
-    <h3>Market</h3>
-    <p class="market">${fmt(market.rate_usd_mwh, 1)} $/MWh <span>${basis}</span></p>
-  </div>`;
+  return fold("market", "Market", `<p class="market">${fmt(market.rate_usd_mwh, 1)} $/MWh <span>${basis}</span></p>`);
 }
 
 function actionTitle(action) {
@@ -470,11 +509,14 @@ function actionBlock(data) {
         )
         .join("")
     : `<p class="muted">No actions yet. A scheduled service takes that base offline and brings it back in one to two hours.</p>`;
-  const count = actions.length ? `<span class="flag">${fmt(actions.length)}</span>` : "";
-  return `<details class="fold" data-fold="actions"${actionsOpen ? " open" : ""}>
-    <summary>Actions${count}</summary>
-    <div class="roster">${rows}</div>
-    <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>
+  return `<div class="roster">${rows}</div>
+    <p class="muted note">The disco tracks ${catalog || "add-ons"} on the home.</p>`;
+}
+
+function fold(name, title, body) {
+  return `<details class="fold" data-fold="${name}"${folds[name] ? " open" : ""}>
+    <summary>${title}</summary>
+    <div class="fold-body">${body}</div>
   </details>`;
 }
 
@@ -530,46 +572,47 @@ function renderPanel(data) {
     })
     .join("");
 
+  const actionCount = (data.actions || []).length;
   panelBody.innerHTML = `
-    <h2>Fleet</h2>
-    <div class="sub">${
-      data.dispatch
-        ? `<span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
-        : ""
-    }</div>
-    <div class="stack ledger">
-      ${row("units", fmt(fleet.units))}
-      ${row("pushing", fmt(fleet.pushing))}
-      ${row("pulling", fmt(fleet.pulling))}
-      ${row("holding", fmt(fleet.holding))}
-      ${row("offline", fmt(fleet.offline))}
-      ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
-    </div>
-    <p class="muted note">${fmt(fleet.pushing)} + ${fmt(fleet.pulling)} + ${fmt(fleet.holding)} = ${fmt(fleet.units)}. Offline units are holding.</p>
+    ${fold(
+      "fleet",
+      "Fleet",
+      `<div class="sub">${
+        data.dispatch
+          ? `<span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
+          : ""
+      }</div>
+      <div class="stack ledger">
+        ${row("units", fmt(fleet.units))}
+        ${row("pushing", fmt(fleet.pushing))}
+        ${row("pulling", fmt(fleet.pulling))}
+        ${row("holding", fmt(fleet.holding))}
+        ${row("offline", fmt(fleet.offline))}
+        ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
+      </div>`,
+    )}
     ${marketBlock(data)}
-    ${actionBlock(data)}
-    <div class="group">
-      <h3>Codes</h3>
-      <div class="code-key">
-        ${(data.codes || [])
-          .map(
-            (code) => `<p class="code"><b>${code.chart_id}</b><span>${code.action}</span></p>`,
-          )
-          .join("")}
-      </div>
-    </div>
-    <div class="group">
-      <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>
-      <div class="roster">${queueHtml}</div>
-      ${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}
-    </div>
-    <div class="group">
-      <h3>Service areas<span>units · flagged</span></h3>
-      <div class="metros">
+    ${fold("actions", `Actions${actionCount ? `<span class="flag">${fmt(actionCount)}</span>` : ""}`, actionBlock(data))}
+    ${fold(
+      "codes",
+      "Codes",
+      `<div class="code-key">${(data.codes || [])
+        .map((code) => `<p class="code"><b>${code.chart_id}</b><span>${code.action}</span></p>`)
+        .join("")}</div>`,
+    )}
+    ${fold(
+      "attention",
+      `Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
+      `<div class="roster">${queueHtml}</div>${queue.length > 40 ? `<p class="muted note">Showing the first 40.</p>` : ""}`,
+    )}
+    ${fold(
+      "areas",
+      "Service areas",
+      `<div class="metros">
         <button type="button" class="metro-row" data-station="all"><span>Whole state</span><em>${fmt(fleet.units)}</em><b class="muted">—</b></button>
         ${areaHtml}
-      </div>
-    </div>
+      </div>`,
+    )}
   `;
 }
 
@@ -945,7 +988,8 @@ panelToggle.addEventListener("click", () => {
 });
 
 panel.addEventListener("toggle", (event) => {
-  if (event.target.dataset.fold === "actions") actionsOpen = event.target.open;
+  const name = event.target.dataset.fold;
+  if (name in folds) folds[name] = event.target.open;
 }, true);
 
 panel.addEventListener("click", (event) => {
@@ -1014,10 +1058,12 @@ function ensureScreen() {
   const vector = new THREE.Vector3();
   camera.updateMatrixWorld();
   for (let index = 0; index < payload.sites.length; index += 1) {
-    const site = payload.sites[index];
-    vector
-      .set((site.lon - ORIGIN.lon) * LON_SCALE, NODE_Y, ORIGIN.lat - site.lat)
-      .project(camera);
+    if (!shown[index]) {
+      out[index * 2] = -9999;
+      out[index * 2 + 1] = -9999;
+      continue;
+    }
+    vector.set(placed[index * 3], placed[index * 3 + 1], placed[index * 3 + 2]).project(camera);
     out[index * 2] = (vector.x * 0.5 + 0.5) * rect.width;
     out[index * 2 + 1] = (-vector.y * 0.5 + 0.5) * rect.height;
   }
@@ -1049,6 +1095,22 @@ function nearestOf(items, x, y, rect, limit) {
   return best;
 }
 
+function nearestStation(x, y, rect) {
+  let best = null;
+  let bestDist = 42;
+  for (const station of payload.stations || []) {
+    const entry = stationMarks.get(station.id);
+    if (entry && !entry.group.visible) continue;
+    const point = screenPoint(station.lat, station.lon, rect);
+    const dist = Math.hypot(point.x - x, point.y - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = station;
+    }
+  }
+  return best;
+}
+
 function placeHash(next) {
   if (modal.open) return;
   if ((location.hash || "") === next) return;
@@ -1056,13 +1118,23 @@ function placeHash(next) {
 }
 
 function focusMetro(metro) {
+  const arriving = !focusedStation;
   focusedStation = null;
   if (!metro) {
-    focusPoint = { x: 0, z: 0.4, distance: 20 };
+    focusedMetro = null;
+    cityT = 1;
+    cityHold = false;
+    focusPoint = { x: 0, z: 0.4, distance: 20, pose: "state" };
     if (location.hash.startsWith("#metro/") || location.hash.startsWith("#station/")) placeHash("");
   } else {
+    focusedMetro = metro.id;
+    if (arriving) {
+      cityT = 0;
+      cityHold = true;
+      cityStarted = 0;
+    }
     const point = project(metro.lat, metro.lon, 0);
-    focusPoint = { x: point.x, z: point.z, distance: 1.7 };
+    focusPoint = { x: point.x, z: point.z, distance: 1.7, pose: "city" };
     placeHash(`#metro/${metro.id}`);
   }
   if (payload) renderScene(payload);
@@ -1089,17 +1161,55 @@ function patchRadius(station) {
   return radius;
 }
 
+function frameDistance(radius) {
+  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const height = (radius * 1.12) / half;
+  return Math.max(0.14, height / 0.983);
+}
+
+function frameFill() {
+  const pose = poseOffset({ pose: "station" });
+  const length = Math.hypot(pose[0], pose[1]) || 1;
+  const height = (pose[0] / length) * frameDistance(stageRadius);
+  const halfV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const aspect = Math.max(camera.aspect, 0.5);
+  const halfH = height * halfV;
+  const halfW = halfH * aspect;
+  return {
+    x: Math.max(1, (halfW * 0.94) / Math.max(stageSpan.x, 0.008)),
+    z: Math.max(1, (halfH * 0.92) / Math.max(stageSpan.z, 0.008)),
+  };
+}
+
+function measureSpan(station) {
+  const origin = project(station.lat, station.lon, 0);
+  let maxX = 0.008;
+  let maxZ = 0.008;
+  for (const site of payload?.sites || []) {
+    if (site.station !== station.id) continue;
+    const point = project(site.lat, site.lon, 0);
+    maxX = Math.max(maxX, Math.abs(point.x - origin.x));
+    maxZ = Math.max(maxZ, Math.abs(point.z - origin.z));
+  }
+  return { x: maxX, z: maxZ };
+}
+
 function focusStation(station) {
   focusedStation = station.id;
-  stageStarted = performance.now();
+  focusedMetro = station.metro;
+  cityT = 1;
+  cityHold = false;
+  fillHold = true;
+  stageStarted = 0;
   stageT = 0;
   const point = project(station.lat, station.lon, 0);
   stageRadius = patchRadius(station);
+  stageSpan = measureSpan(station);
   focusPoint = {
     x: point.x,
     z: point.z,
-    distance: Math.min(0.95, Math.max(0.42, stageRadius * 6)),
-    overhead: true,
+    distance: frameDistance(stageRadius),
+    pose: "station",
   };
   if (payload) renderScene(payload);
   placeHash(`#station/${station.id}`);
@@ -1111,26 +1221,31 @@ function pointerTarget(event) {
   const x = event.clientX - rect.left;
   const y = event.clientY - rect.top;
   camera.updateMatrixWorld();
-  if (viewDistance() < 8) {
-    const station = nearestOf(payload.stations, x, y, rect, 22);
-    if (station) return { kind: "station", station };
-  } else {
-    const metro = nearestOf(payload.metros, x, y, rect, 26);
-    if (metro) return { kind: "metro", metro };
+  if (focusedStation) {
+    const site = nearestSite(x, y);
+    return site ? { kind: "site", site } : null;
   }
-  const site = nearestSite(event.clientX, event.clientY);
+  if (viewDistance() < 8) {
+    const site = nearestSite(x, y);
+    const owner = site && (payload.stations || []).find((item) => item.id === site.station);
+    if (owner) return { kind: "station", station: owner };
+    const station = nearestStation(x, y, rect);
+    if (station) return { kind: "station", station };
+    return null;
+  }
+  const metro = nearestOf(payload.metros, x, y, rect, 26);
+  if (metro) return { kind: "metro", metro };
+  const site = nearestSite(x, y);
   return site ? { kind: "site", site } : null;
 }
 
-function nearestSite(clientX, clientY) {
+function nearestSite(x, y) {
   const points = ensureScreen();
   if (!points) return null;
-  const rect = canvas.getBoundingClientRect();
-  const x = clientX - rect.left;
-  const y = clientY - rect.top;
   let best = null;
   let bestDist = 16;
   for (let index = 0; index < payload.sites.length; index += 1) {
+    if (!shown[index]) continue;
     const dist = Math.hypot(points[index * 2] - x, points[index * 2 + 1] - y);
     if (dist < bestDist) {
       bestDist = dist;
@@ -1226,20 +1341,29 @@ const stageTitle = document.getElementById("stage-title");
 const stageSub = document.getElementById("stage-sub");
 const stageCounts = document.getElementById("stage-counts");
 
+function poseOffset(point) {
+  if (point.pose === "station") return [0.983, 0.182];
+  if (point.pose === "city") return [0.94, 0.342];
+  if (point.pose === "state") return [0.822, 0.57];
+  return null;
+}
+
 function glide() {
   if (!focusPoint) return;
   GOAL.set(focusPoint.x, 0, focusPoint.z);
-  const pace = focusPoint.overhead ? 0.065 : 0.1;
+  const pace = focusPoint.pose === "station" ? 0.065 : focusPoint.pose === "city" ? 0.08 : 0.1;
   controls.target.lerp(GOAL, pace);
-  if (focusPoint.overhead) {
-    DESIRED.set(0, focusPoint.distance * 0.97, focusPoint.distance * 0.18);
+  const pose = poseOffset(focusPoint);
+  if (pose) {
+    const length = Math.hypot(pose[0], pose[1]) || 1;
+    DESIRED.set(0, (pose[0] / length) * focusPoint.distance, (pose[1] / length) * focusPoint.distance);
   } else {
     DESIRED.copy(camera.position).sub(controls.target).setLength(focusPoint.distance);
   }
   camera.position.lerp(controls.target.clone().add(DESIRED), pace);
   screen = null;
   const offset = camera.position.clone().sub(controls.target);
-  const posed = !focusPoint.overhead || offset.y > offset.length() * 0.85;
+  const posed = !pose || offset.angleTo(DESIRED) < 0.06;
   if (
     controls.target.distanceTo(GOAL) < 0.015
     && Math.abs(offset.length() - focusPoint.distance) < 0.03
@@ -1287,31 +1411,47 @@ function present() {
   const station = focusedStation && payload
     ? (payload.stations || []).find((item) => item.id === focusedStation)
     : null;
-  controls.minDistance = station ? 0.26 : 1.2;
+  controls.minDistance = station ? 0.12 : 1.2;
+  if (!station && focusedMetro) {
+    if (cityHold && !focusPoint) {
+      cityHold = false;
+      cityStarted = performance.now();
+      cityT = 0;
+    }
+    if (!cityHold) {
+      const next = Math.min(1, (performance.now() - cityStarted) / 2400);
+      if (next !== cityT) {
+        cityT = next;
+        if (payload) {
+          renderUnits(payload);
+          renderStations(payload);
+        }
+      }
+    }
+    stageT = 1;
+    if (!stageCard.hidden || particles.material.size !== 6) {
+      stageCard.hidden = true;
+      particles.material.size = 6;
+    }
+    return;
+  }
   if (!station) {
     stageT = 1;
-    if (stagePad.visible) {
-      stagePad.visible = false;
-      stageRing.visible = false;
+    cityT = 1;
+    if (!stageCard.hidden || particles.material.size !== 6) {
       stageCard.hidden = true;
       particles.material.size = 6;
       if (payload) renderUnits(payload);
     }
     return;
   }
-  stageT = Math.min(1, (performance.now() - stageStarted) / 1200);
-  const eased = easeOut(stageT);
-  particles.material.size = 6 + 12 * eased;
-  const origin = project(station.lat, station.lon, 0.01);
-  const radius = Math.max(stageRadius, 0.02);
-  const pulse = 1 + Math.sin(performance.now() / 680) * 0.012;
-  stagePad.position.copy(origin);
-  stagePad.scale.setScalar(radius * 1.2 * (0.2 + 0.8 * eased));
-  stagePad.visible = true;
-  stageRing.position.set(origin.x, 0.02, origin.z);
-  stageRing.scale.setScalar(radius * 1.28 * (0.15 + 0.85 * eased) * pulse);
-  stageRing.material.opacity = 0.2 + 0.55 * eased;
-  stageRing.visible = true;
+  if (fillHold && !focusPoint) {
+    fillHold = false;
+    stageStarted = performance.now();
+    stageT = 0;
+  }
+  if (!fillHold) stageT = Math.min(1, (performance.now() - stageStarted) / 1100);
+  particles.material.size = 6 + 4 * easeOut(stageT);
   renderUnits(payload);
   renderStations(payload);
   renderStage(station);

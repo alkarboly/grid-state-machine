@@ -49,7 +49,7 @@ LLM_EVERY_S = float(os.environ.get("LLM_EVERY_S", "600"))
 
 # Comma-separated browser origins allowed to call the bot. Empty keeps same-origin only.
 WEB_ORIGIN = os.environ.get("WEB_ORIGIN", "").strip()
-# The bot on Render sets this to 0. Locally the API also serves the map.
+# Default serves web/ from this process. Set to 0 only when another origin hosts the map.
 SERVE_STATIC = os.environ.get("SERVE_STATIC", "1").strip() != "0"
 
 

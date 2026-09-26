@@ -736,7 +736,7 @@ class Fleet:
                 "metrics": site.get("metrics") or {},
                 "charts": charts,
                 "usage": list(self.usage.get(site_id, [])[-24:]),
-                "state_log": list(reversed(site.get("state_log") or [])),
+                "state_log": [dict(row) for row in reversed(site.get("state_log") or [])],
                 "snapshot": machine_snapshot(site),
                 "actions": [row for row in self.actions if row.get("site_id") == site_id][-12:],
                 "armed": list(site.get("armed") or []),

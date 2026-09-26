@@ -7,6 +7,7 @@ import json
 import math
 import random
 import re
+import struct
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from gridsim import config
 from gridsim.fleet.charts import CHART_POINTS, CHART_STEP_SECONDS, CHARTS, HISTORY, evaluate
 from gridsim.fleet.actions import addon_power
 from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order
-from gridsim.timeutil import iso
+from gridsim.timeutil import CENTRAL, iso
 
 # Late-summer central-air hour means, kW. Daily sum is about 54 kWh before load_scale.
 # That sum is the energy budget. Each home spends it on its own hour_kw.
@@ -501,6 +502,168 @@ def _trace_level(site: dict, chart_id: str, hour: int) -> tuple[float, float]:
     return center, sigma
 
 
+# One log row is a fixed record so 3000 homes × 180 ticks fit in the 512 MB instance.
+# ts, five short words, two chart masks, then the numeric log fields.
+_LOG_REC = struct.Struct("<I7B15d")
+_LOG_WORDS = {
+    "state": ["hold", "push", "pull"],
+    "signal": ["hold", "push", "pull"],
+    "source": ["rules", "action", "external"],
+    "availability": ["online", "offline"],
+    "grid": ["on", "off"],
+}
+_CHART_BIT = {spec["chart_id"]: 1 << index for index, spec in enumerate(CHARTS)}
+
+
+def _word(kind: str, value: str) -> int:
+    table = _LOG_WORDS[kind]
+    try:
+        return table.index(value)
+    except ValueError:
+        table.append(value)
+        return len(table) - 1
+
+
+def _mask(codes) -> int:
+    bits = 0
+    for code in codes or ():
+        bits |= _CHART_BIT[code]
+    return bits
+
+
+def _unmask(bits: int) -> list[str]:
+    return [spec["chart_id"] for index, spec in enumerate(CHARTS) if bits & (1 << index)]
+
+
+def _num(value) -> float:
+    if value is None:
+        return float("nan")
+    return float(value)
+
+
+def _shown(value: float):
+    if value != value:
+        return None
+    return value
+
+
+class StateLog:
+    """Last 180 log-state rows, stored as fixed records. Indexing returns the contract object."""
+
+    def __len__(self) -> int:
+        return len(self._buf) // _LOG_REC.size
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+
+    def append(self, row) -> None:
+        ts = row["ts"]
+        if isinstance(ts, datetime):
+            ts_i = int(ts.timestamp())
+        elif isinstance(ts, str):
+            ts_i = int(datetime.fromisoformat(ts).timestamp())
+        else:
+            ts_i = 0
+        self._buf.extend(
+            _LOG_REC.pack(
+                ts_i,
+                _word("state", row["state"]),
+                _word("signal", row["signal"]),
+                _word("source", row["source"]),
+                _word("availability", row["availability"]),
+                _word("grid", row["grid"]),
+                _mask(row["alarming"]),
+                _mask(row["out_of_control"]),
+                _num(row["soc_pct"]),
+                _num(row["physical_soc_kwh"]),
+                _num(row["load_kw"]),
+                _num(row["load_kw_state"]),
+                _num(row["charge_kw"]),
+                _num(row["discharge_kw"]),
+                _num(row["in_kw"]),
+                _num(row["out_kw"]),
+                _num(row["voltage_v"]),
+                _num(row["voltage_state"]),
+                _num(row["frequency_hz"]),
+                _num(row["temp_c"]),
+                _num(row["temp_c_state"]),
+                _num(row["energy_in_kwh"]),
+                _num(row["energy_out_kwh"]),
+            )
+        )
+        extra = len(self) - STATE_LOG
+        if extra > 0:
+            del self._buf[: extra * _LOG_REC.size]
+
+    def __getitem__(self, index):
+        count = len(self)
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(count))]
+        if index < 0:
+            index += count
+        if index < 0 or index >= count:
+            raise IndexError(index)
+        start = index * _LOG_REC.size
+        (
+            ts_i,
+            state,
+            signal,
+            source,
+            availability,
+            grid,
+            alarming,
+            out_of_control,
+            soc_pct,
+            physical_soc_kwh,
+            load_kw,
+            load_kw_state,
+            charge_kw,
+            discharge_kw,
+            in_kw,
+            out_kw,
+            voltage_v,
+            voltage_state,
+            frequency_hz,
+            temp_c,
+            temp_c_state,
+            energy_in_kwh,
+            energy_out_kwh,
+        ) = _LOG_REC.unpack(self._buf[start : start + _LOG_REC.size])
+        return {
+            "ts": iso(datetime.fromtimestamp(ts_i, CENTRAL)),
+            "state": _LOG_WORDS["state"][state],
+            "signal": _LOG_WORDS["signal"][signal],
+            "source": _LOG_WORDS["source"][source],
+            "availability": _LOG_WORDS["availability"][availability],
+            "grid": _LOG_WORDS["grid"][grid],
+            "soc_pct": _shown(soc_pct),
+            "physical_soc_kwh": _shown(physical_soc_kwh),
+            "load_kw": _shown(load_kw),
+            "load_kw_state": _shown(load_kw_state),
+            "charge_kw": _shown(charge_kw),
+            "discharge_kw": _shown(discharge_kw),
+            "in_kw": _shown(in_kw),
+            "out_kw": _shown(out_kw),
+            "voltage_v": _shown(voltage_v),
+            "voltage_state": _shown(voltage_state),
+            "frequency_hz": _shown(frequency_hz),
+            "temp_c": _shown(temp_c),
+            "temp_c_state": _shown(temp_c_state),
+            "energy_in_kwh": _shown(energy_in_kwh),
+            "energy_out_kwh": _shown(energy_out_kwh),
+            "alarming": _unmask(alarming),
+            "out_of_control": _unmask(out_of_control),
+        }
+
+    def __delitem__(self, key) -> None:
+        if not isinstance(key, slice):
+            raise TypeError("state log only drops a prefix")
+        start, stop, step = key.indices(len(self))
+        if step != 1:
+            raise TypeError("state log only drops a prefix")
+        del self._buf[start * _LOG_REC.size : stop * _LOG_REC.size]
+
+
 def log_state(
     ts,
     state,
@@ -569,7 +732,7 @@ def machine_snapshot(site: dict) -> dict:
         chart_id: [round(float(value), 4) for value in values]
         for chart_id, values in (site.get("chart_history") or {}).items()
     }
-    snap = log_state(
+    snap = dict(log_state(
         ts=log[-1]["ts"] if log else None,
         state=site.get("state", "hold"),
         signal=site.get("signal", grid_m.get("signal", "hold")),
@@ -593,7 +756,7 @@ def machine_snapshot(site: dict) -> dict:
         energy_out_kwh=round(float(site.get("energy_out_kwh") or 0.0), 4),
         alarming=list(maint.get("alarming") or []),
         out_of_control=list(maint.get("out_of_control") or []),
-    )
+    ))
     snap["offline"] = bool(site.get("offline"))
     snap["signal_override"] = (
         None if not override else {"signal": override[0], "intensity": override[1]}
@@ -649,7 +812,7 @@ def seed_history(sites: list[dict], now: datetime) -> None:
         if fault.get("soc_bias_kwh"):
             codes.append("soc_tracking")
         soc = round(100.0 * site["physical_soc_kwh"] / site["capacity_kwh"], 1)
-        log = []
+        log = StateLog()
         for back in range(STATE_LOG, 0, -1):
             moment = now - step * back
             hour = moment.hour
@@ -671,7 +834,7 @@ def seed_history(sites: list[dict], now: datetime) -> None:
             temp = float(fault["temp_c"]) if "temp_c" in fault else site["temp_center_c"]
             log.append(
                 log_state(
-                    ts=iso(moment),
+                    ts=moment,
                     state=state,
                     signal=signal,
                     source="rules",
@@ -1018,10 +1181,13 @@ def tick_sites(
             site["state"] = "pull"
         else:
             site["state"] = "hold"
-        history = site.setdefault("state_log", [])
+        history = site.get("state_log")
+        if not isinstance(history, StateLog):
+            history = StateLog()
+            site["state_log"] = history
         history.append(
             log_state(
-                ts=stamp,
+                ts=now,
                 state=site["state"],
                 signal=signal,
                 source=source,

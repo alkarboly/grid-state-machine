@@ -37,6 +37,10 @@ Leave `SERVE_STATIC` unset. The default serves `web/` from this same process, an
 
 The service disk is ephemeral. Supabase is the record of actions, market rows, and usage hours. A restart rebuilds the fleet in memory and then catches up from `unit_actions`.
 
+The free instance has 512 MB. Startup builds all 3000 homes, including the 30-hour chart trace and the 180-tick log, before the port opens. The log is packed into fixed records so that fits in about 220 MB before the web server is counted. A log line `Out of memory (used over 512Mi)` during "Waiting for application startup" means that packing no longer fits, or `FLEET_SIZE` was raised past 3000. The paid starter instance is the same 512 MB. A larger instance is the next step only after the fleet itself no longer fits.
+
+That same startup line stays up while the history is filled. On a laptop that takes about two minutes. The free CPU is slower, so leave the deploy on that line until the port opens.
+
 The map polls `/api/scene` on that same origin. The side panel starts open. It shows the price and day shape, Fleet manager and Maintenance manager with the latest step and a timer, and Maintenance alerts for homes past a limit.
 
 ## 3. Check

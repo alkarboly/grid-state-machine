@@ -112,8 +112,8 @@ The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample
 
 | Field | What the Pi is reporting | How the sim builds it |
 | --- | --- | --- |
-| `in_kw`, `out_kw` | Power through the disconnect | True net, plus a bias if this cabinet's fault says so, plus gaussian noise of 0.06 kW. The billing meter uses 0.02 kW on the same net. Both are 0 while the contactor is open. |
-| `voltage_v` | Volts at the disconnect | This service's own center, plus 0.12 V of noise, unless a voltage fault replaces the reading. |
+| `in_kw`, `out_kw` | Power through the disconnect | True net, plus gaussian noise of 0.06 kW. The billing meter uses 0.02 kW on the same net. Both are 0 while the contactor is open. |
+| `voltage_v` | Volts at the disconnect | This service's own center, plus 0.12 V of noise. |
 | `frequency_hz` | Hertz at the disconnect | One draw for the whole interconnection, plus 0.002 Hz at this Pi. |
 | `contactor`, `islanded` | Whether the home is grid-tied | Open and islanded only when the grid is turned off. Scheduled service does not open the contactor. |
 | `addons[].kw` | Add-on power the Pi is metering | `solar` is 5 kW times a daylight fraction, zero at night. `ev_charger` is 7.2 kW times 0.85 from 17:00 through 21:00, and zero otherwise. |

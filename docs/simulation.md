@@ -28,7 +28,7 @@ These are modelled addresses. They are not customer locations.
 
 ### Faults
 
-Four named batteries carry scripted faults, one per maintenance kind, listed in [control-charts.md](control-charts.md). Two further cabinets of each of the five kinds (`temp_c`, `voltage_v`, `soc_bias_kwh`, `response_scale`, `disco_bias_kw`) are spaced through the rest of the fleet. That is 14 cabinets in total. Everyone else is healthy, so the map can show each failure mode without turning into a field of alarms.
+Every home starts healthy. A home is faulted only while you arm a chart on it. The next tick reports that residual at +4 sigma, past the limits. The maintenance manager then coordinates the response: it posts the steps for that code, hold and a service visit, or a service visit alone, and the fleet manager stays off that home while the response is open. Clearing the arm ends the fault. Frequency is charted and left alone. The steps are in [control-charts.md](control-charts.md).
 
 ## Home load
 
@@ -52,7 +52,7 @@ The fleet ledger adds those same quantities across every unit. Pushing, pulling,
 
 Each battery has its own one-way efficiency `eta`, drawn between 0.94 and 0.975. State of charge moves with wall-clock time unless `SIM_TIME_SCALE` is set above 1. Scale multiplies elapsed time inside the battery integral only. Log timestamps stay on the wall clock.
 
-The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count plus a bias. A healthy battery has bias 0. `sat-0001` reports 2.5 kWh high, which is the energy-chart fault.
+The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count plus a bias. A healthy battery has bias 0. Arming `soc_tracking` forces the chart residual to +4 sigma without changing that bias.
 
 ## Dispatch
 
@@ -111,7 +111,7 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 
 `return_online` is written by the simulator, not by the controller. Its `actor` is the actor of the service it closes.
 
-`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
+`POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. That arm is the only fault. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
 
 ### Maintenance manager
 
@@ -138,4 +138,4 @@ Both are assumptions, tracked by the disco:
 
 ## Maintenance
 
-Limits are per battery and per chart. The rules, the six chart families, and the scripted faults are in [control-charts.md](control-charts.md).
+Limits are per battery and per chart. The rules and the six chart families are in [control-charts.md](control-charts.md). A fault is an armed chart, and the maintenance manager coordinates the steps for it.

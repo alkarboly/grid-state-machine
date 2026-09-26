@@ -41,7 +41,7 @@ Each chart plots the residual `measured − expected`. The center line is 0. The
 | `soc_tracking` | Reported charge minus the coulomb count. | Newest tick in the clock minute. | 60 | The last 24 tick residuals. |
 | `dispatch_response` | Achieved kilowatts minus the command. The residual is 0 while the command is 0. | Newest tick in the clock minute. | 60 | The last 24 tick residuals. |
 
-`sigma` for `base_temp` stays the unit's `temp_sigma_c`. It is not divided by the square root of the sample count. A cabinet held hot still crosses ±3σ. A single hot tick is diluted by the rest of the hour, and the alarm follows the hour mean.
+`sigma` for `base_temp` stays the unit's `temp_sigma_c`. It is not divided by the square root of the sample count. A cabinet held hot still crosses ±3σ. A single hot tick is diluted by the rest of the hour, and the alarm follows the hour mean. Arming the chart is a trigger: that tick's residual is the open hour's point, and the maintenance manager acts on it.
 
 The drawn series is the last 30 hours. Five charts are about 1800 minute points. `base_temp` is about 30 hour points, one per clock hour, oldest first. A missed bucket is null. Startup fills that window with simulated samples and then applies the same rule: temperature samples that share a clock hour are averaged, including a partial hour at either end of the window. The first live tick replaces the open hour. It does not mix with the simulated samples already counted in that hour.
 

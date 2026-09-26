@@ -8,7 +8,7 @@ The browser does not connect to the database. The FastAPI process writes it and 
 
 ## `sites`
 
-One row per battery. This is the healthy identity used as the control-chart baseline. Scripted faults are not stored here.
+One row per battery. This is the healthy identity used as the control-chart baseline. A fault is an armed chart in process memory, not a column here.
 
 `site_id`, `city`, `load_zone`, `lat`, `lon`, `capacity_kwh`, `power_limit_kw`, `load_scale`, `temp_center_c`, `temp_sigma_c`, `voltage_center_v`, `voltage_sigma_v`, `eta`.
 
@@ -32,7 +32,7 @@ The component contract from [contracts.md](contracts.md). One row per battery pe
 
 3000 batteries × 6 components × a tick every 10 seconds is about 39,000 rows a tick. Nothing useful comes from storing that, so the pipeline behaves like a real telemetry pipeline instead:
 
-- `PERSIST_SAMPLE` batteries, **60** by default, are the instrumented cohort. They write the full component contract, the flat observation, and every control point on every tick. The cohort always includes the four scripted-fault units and is otherwise an even spread across the fleet, chosen once at startup.
+- `PERSIST_SAMPLE` batteries, **60** by default, are the instrumented cohort. They write the full component contract, the flat observation, and every control point on every tick. The cohort is an even spread across the fleet, chosen once at startup.
 - Every other battery writes a control point **only when that chart is out of limits**. Exceptions are never sampled away.
 - The whole fleet is summarised once per tick in `fleet_rollups`.
 

@@ -57,7 +57,6 @@ from gridsim.ercot.normalize import (
 from gridsim.fleet.agent import audit, day_shape
 from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
 from gridsim.fleet.simulate import (
-    DEMO_FAULTS,
     build_sites,
     load_anchors,
     metro_summary,
@@ -92,15 +91,13 @@ def load_station_geo() -> dict:
 
 
 def persist_sample(sites: list[dict], size: int) -> set[str]:
-    """The instrumented cohort: the demo faults plus an even spread of the rest."""
-    chosen = {site["id"] for site in sites if site["id"] in DEMO_FAULTS}
-    room = size - len(chosen)
-    if room > 0 and len(sites) > room:
-        step = len(sites) / room
-        chosen.update(sites[int(index * step)]["id"] for index in range(room))
-    elif room > 0:
-        chosen.update(site["id"] for site in sites)
-    return chosen
+    """An even spread of homes that write a full row every tick."""
+    if size <= 0 or not sites:
+        return set()
+    if len(sites) <= size:
+        return {site["id"] for site in sites}
+    step = len(sites) / size
+    return {sites[int(index * step)]["id"] for index in range(size)}
 
 
 def _addon_kw(metrics: dict, addon_id: str) -> float:

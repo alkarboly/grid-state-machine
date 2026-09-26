@@ -62,16 +62,14 @@ def panel_kw(site: dict, hour: int) -> float:
         return float(owned[hour])
     return HOUR_MEAN_KW[hour % 24] * float(site.get("load_scale") or 1.0)
 
-# Named demo faults, one cabinet per maintenance kind. The site row keeps the
-# healthy baseline; the tick applies these. A few more of each kind are placed
-# across the fleet so every failure mode is visible without flooding the map.
+# Magnitudes a test can apply. The live fleet starts healthy. A home is faulted
+# only while a chart is armed from the unit view.
 DEMO_FAULTS = {
     "aus-0003": {"temp_c": 49.0},
     "hou-0002": {"voltage_v": 226.0, "disco_bias_kw": 1.4},
     "sat-0001": {"soc_bias_kwh": 2.5},
     "dal-0002": {"response_scale": 0.55},
 }
-FAULT_KINDS = ("temp_c", "voltage_v", "soc_bias_kwh", "response_scale", "disco_bias_kw")
 # One row per tick on every home, newest kept. 180 ticks is about 30 minutes at the default interval.
 STATE_LOG = 180
 # Log state. The current snapshot on the site detail adds the live control flags.
@@ -100,8 +98,6 @@ LOG_STATE_KEYS = (
     "alarming",
     "out_of_control",
 )
-EXTRAS_PER_KIND = 2
-
 KM_PER_DEG_LAT = 110.574
 TAU = 2.0 * math.pi
 
@@ -298,39 +294,6 @@ def _on_land(lat: float, lon: float, north_km: float, east_km: float) -> tuple[f
     return round(lat, 5), round(lon, 5)
 
 
-def _magnitude(kind: str, rng: random.Random, voltage_center: float) -> dict:
-    if kind == "temp_c":
-        return {"temp_c": round(44.0 + rng.random() * 9.0, 1)}
-    if kind == "voltage_v":
-        return {"voltage_v": round(voltage_center - (8.0 + rng.random() * 8.0), 1)}
-    if kind == "soc_bias_kwh":
-        return {"soc_bias_kwh": round(1.6 + rng.random() * 2.4, 2)}
-    if kind == "response_scale":
-        return {"response_scale": round(0.35 + rng.random() * 0.35, 2)}
-    return {"disco_bias_kw": round(0.8 + rng.random() * 1.2, 2)}
-
-
-def _scatter_faults(sites: list[dict]) -> None:
-    """Two further cabinets of each kind, spaced through the fleet."""
-    pool = [site for site in sites if not site["fault"]]
-    if not pool:
-        return
-    slots = EXTRAS_PER_KIND * len(FAULT_KINDS)
-    stride = max(1, len(pool) // (slots + 1))
-    index = stride // 2
-    used: set[str] = set()
-    for kind in FAULT_KINDS:
-        for _ in range(EXTRAS_PER_KIND):
-            for _attempt in range(len(pool)):
-                site = pool[index % len(pool)]
-                index += stride
-                if site["id"] in used:
-                    continue
-                used.add(site["id"])
-                site["fault"] = _magnitude(kind, random.Random(site["id"]), site["voltage_center_v"])
-                break
-
-
 def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None) -> list[dict]:
     anchors = anchors or load_anchors()
     total = config.FLEET_SIZE if fleet_size is None else fleet_size
@@ -400,7 +363,7 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     # the dispatch queue. Together they decide who answers a call.
                     "reserve_frac": round(config.SOC_RESERVE + profile.random() * 0.25, 3),
                     "duty": round(profile.random(), 3),
-                    "fault": dict(DEMO_FAULTS[site_id]) if site_id in DEMO_FAULTS else {},
+                    "fault": {},
                     "physical_soc_kwh": round(
                         config.BASE_CAPACITY_KWH * (0.22 + profile.random() * 0.70), 3
                     ),
@@ -412,7 +375,6 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                 }
             )
                 sites[-1]["hour_kw"] = owner_hour_kw(profile, sites[-1]["load_scale"])
-    _scatter_faults(sites)
     return sites
 
 
@@ -920,8 +882,21 @@ def _chart(site: dict, spec: dict, measured: float, expected: float, sigma: floa
 
 
 def _chart_temp(site: dict, spec: dict, measured: float, expected: float, sigma: float | None, now) -> dict:
-    """Cabinet temperature is the mean of every sample in the open clock hour."""
+    """Cabinet temperature is the mean of every sample in the open clock hour.
+
+    An armed chart is a trigger. That tick's residual is the point, so the
+    maintenance manager sees the fault without waiting out the healthy samples
+    already in the hour.
+    """
     sigma = float(sigma if sigma is not None else spec["sigma"])
+    if spec["chart_id"] in (site.get("armed") or ()):
+        history = site["chart_history"].setdefault("base_temp", [])
+        point = evaluate(spec, measured, expected, sigma, history)
+        _remember_trace(
+            site, "base_temp", now, point["value"],
+            step_seconds=series_seconds("base_temp"), cap=CHART_HOURS,
+        )
+        return point
     slot = int(now.timestamp()) // series_seconds("base_temp")
     history = site["chart_history"].setdefault("base_temp", [])
     bucket = site.get("temp_hour")

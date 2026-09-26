@@ -45,7 +45,7 @@ Each code also has `steps`, the rows the maintenance manager posts when that cha
 | `soc_tracking` | `scheduled_service` |
 | `dispatch_response` | `set_signal` hold, then `scheduled_service` |
 
-`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the agent posts `steps`. `armed: false` clears it. The scripted faults on this page stay in place either way. An armed chart replaces the measured value for that tick. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
+`POST /api/agent` with `{"site_id", "chart_id", "armed": true}` arms that chart on one home. `chart_id` of `all` arms every code. The next tick reports that residual at +4 sigma, so the point is past the limits and the maintenance manager posts `steps`. `armed: false` clears it, and the home is healthy again. An armed chart replaces the measured value for that tick. For temperature, that triggered residual is the open hour's point, so the healthy samples already in the hour do not hide it. The unit view arms one code from the box it belongs to. It does not show trigger-all, and it does not arm `dispatch_response`. Meter agreement is armed from Grid, voltage and frequency from Disco, state of charge and temperature from Base.
 
 ## Rules
 
@@ -75,7 +75,7 @@ So:
 
 One row per battery per chart per tick. `value` is the residual. `series` is only on the live API, not in the table. It is the last 30 hours, oldest first. Five charts keep one residual per minute: the newest sample in that minute wins, a missed minute is null, and `series_seconds` is 60. `base_temp` keeps one residual per clock hour: the mean of every sample in that hour, including the simulated samples written at startup, a missed hour is null, and `series_seconds` is 3600. The unit view draws that whole window, with the newest point at the right. The run rules for the minute charts still see every tick. `base_temp` run rules see completed hour means, and the open hour is the point being judged. Which metric uses which bucket is [metrics.md](metrics.md).
 
-Startup fills that window before the first tick. The values are simulated, then bucketed the same way as live samples. A faulted chart sits at that fault for the whole window, and a healthy chart is noise around zero. Later ticks replace the newest minute, or the open temperature hour, with the live residual.
+Startup fills that window before the first tick. The values are simulated, then bucketed the same way as live samples. Every chart starts as noise around zero. Later ticks replace the newest minute, or the open temperature hour, with the live residual. An armed chart replaces that newest point with a residual at +4 sigma.
 
 ```json
 {
@@ -99,15 +99,6 @@ Startup fills that window before the first tick. The values are simulated, then 
 }
 ```
 
-## Scripted faults
+## Triggered faults
 
-These four batteries are the demo of four different maintenance kinds, always present at any fleet size. Their `sites` row stays the healthy baseline.
-
-| Site | Chart | Fault |
-| --- | --- | --- |
-| `aus-0003` | `base_temp` | Measured temperature held at 49°C |
-| `hou-0002` | `disco_voltage`, `disco_meter_delta` | Voltage held at 226 V and a +1.4 kW disco bias |
-| `sat-0001` | `soc_tracking` | Reported state of charge is 2.5 kWh above the coulomb count |
-| `dal-0002` | `dispatch_response` | The battery delivers 55% of the commanded kilowatts |
-
-Two further cabinets of each kind are spaced through the rest of the fleet, 14 faulted cabinets in all. Everyone else is healthy. See [simulation.md](simulation.md).
+Every home starts healthy. The only fault is a chart you arm. The maintenance manager coordinates that home: it posts the `steps` for the code, the case shows in Maintenance manager, and the decisions log records the step. The fleet manager does not post a price call on that home while the response is open. Clearing the arm ends the fault. See [simulation.md](simulation.md).

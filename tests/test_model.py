@@ -24,8 +24,6 @@ from gridsim.fleet.policy import choose_signal, explain_signal, resolve_order
 from gridsim.fleet.simulate import (
     COMPONENTS,
     DEMO_FAULTS,
-    EXTRAS_PER_KIND,
-    FAULT_KINDS,
     LOG_STATE_KEYS,
     inside_texas,
     OBSERVATION_FIELDS,
@@ -244,10 +242,8 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(len(sites), FLEET_SIZE)
         self.assertEqual({row["component"] for row in logs}, set(COMPONENTS))
         by_id = {site["id"]: site for site in sites}
-        self.assertTrue(by_id["aus-0003"]["alarm"])
-        self.assertGreater(by_id["aus-0003"]["metrics"]["base"]["temp_c"], 45)
-        self.assertTrue(by_id["hou-0002"]["alarm"])
-        self.assertEqual(by_id["hou-0002"]["metrics"]["disco"]["voltage_v"], 226.0)
+        self.assertFalse(any(site["fault"] for site in sites))
+        self.assertFalse(by_id["aus-0003"]["alarm"])
         pushed = next(site for site in sites if site["state"] == "push")
         self.assertEqual(pushed["metrics"]["grid"]["signal"], "push")
         self.assertGreater(pushed["metrics"]["base"]["discharge_kw"], 0)
@@ -376,6 +372,21 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(len(current[0]["chart_trace"]["base_temp"]), 2)
         self.assertEqual(current[0]["temp_hour"]["n"], 1)
 
+    def test_arming_temperature_alarms_without_waiting_out_the_hour(self):
+        now = datetime(2026, 9, 26, 1, 10, tzinfo=CENTRAL)
+        current = build_sites(fleet_size=8)[:1]
+        for index in range(6):
+            current, *_rest = tick_sites(
+                current, _grid(0.5), now + timedelta(seconds=10 * index), 10 / 3600, random.Random(1),
+            )
+        current[0]["armed"] = ["base_temp"]
+        current, *_rest = tick_sites(
+            current, _grid(0.5), now + timedelta(seconds=70), 10 / 3600, random.Random(1),
+        )
+        chart = next(item for item in current[0]["charts"] if item["chart_id"] == "base_temp")
+        self.assertIn("beyond_3sigma", chart["rules"])
+        self.assertTrue(chart["alarm"])
+
     def test_every_chart_names_a_real_component(self):
         components = {spec["component"] for spec in CHARTS}
         self.assertTrue(components <= set(COMPONENTS), components - set(COMPONENTS))
@@ -392,7 +403,11 @@ class FleetTests(unittest.TestCase):
 
     def test_faults_hit_different_chart_families(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
-        sites, _logs, _obs, _points = tick_sites(FLEET(), _grid(0.9), now, 0.0, random.Random(3))
+        sites = FLEET()
+        for site in sites:
+            if site["id"] in DEMO_FAULTS:
+                site["fault"] = dict(DEMO_FAULTS[site["id"]])
+        sites, _logs, _obs, _points = tick_sites(sites, _grid(0.9), now, 0.0, random.Random(3))
         by_id = {site["id"]: site for site in sites}
 
         def rules(site_id, chart_id):
@@ -466,16 +481,9 @@ class ScaleTests(unittest.TestCase):
                 stray += 1
         self.assertLess(stray / len(sites), 0.02)
 
-    def test_only_a_few_faults_of_each_kind(self):
+    def test_a_built_fleet_starts_healthy(self):
         sites = build_sites(fleet_size=3000)
-        faulted = [site for site in sites if site["fault"]]
-        self.assertEqual(len(faulted), len(DEMO_FAULTS) + EXTRAS_PER_KIND * len(FAULT_KINDS))
-        counts = {kind: 0 for kind in FAULT_KINDS}
-        for site in faulted:
-            for kind in site["fault"]:
-                counts[kind] += 1
-        for kind in FAULT_KINDS:
-            self.assertEqual(counts[kind], EXTRAS_PER_KIND + 1)
+        self.assertTrue(all(not site["fault"] for site in sites))
 
     def test_placement_is_stable_across_rebuilds(self):
         first = {site["id"]: (site["lat"], site["lon"]) for site in build_sites(fleet_size=800)}
@@ -485,8 +493,7 @@ class ScaleTests(unittest.TestCase):
     def test_persist_sample_holds_the_demo_faults_and_caps_the_write_rate(self):
         sites = build_sites(fleet_size=3000)
         sample = persist_sample(sites, 60)
-        self.assertTrue(set(DEMO_FAULTS) <= sample)
-        self.assertLessEqual(len(sample), 64)
+        self.assertLessEqual(len(sample), 60)
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
         _sites, logs, observations, points = tick_sites(
             sites, _grid(0.9), now, 0.0, random.Random(5), persist=sample
@@ -495,7 +502,6 @@ class ScaleTests(unittest.TestCase):
         self.assertEqual(len(logs), len(sample) * len(COMPONENTS))
         # Sampled units write every chart; everyone else writes only exceptions.
         extra = [point for point in points if point["site_id"] not in sample]
-        self.assertTrue(extra)
         self.assertTrue(all(not point["in_control"] for point in extra))
 
     def test_dispatch_reaches_more_of_the_fleet_as_the_grid_tightens(self):
@@ -580,10 +586,8 @@ class ScaleTests(unittest.TestCase):
         for seed in (11, 12, 13):
             sites, _l, _o, _p = tick_sites(sites, _grid(0.9), now, 0.0028, random.Random(seed))
         totals = rollup(sites, "2026-09-25T19:45:00-05:00")
-        faulted = sum(1 for site in sites if site["fault"])
-        self.assertLessEqual(totals["alarms"], faulted)
-        self.assertLess(totals["alarms"] / len(sites), 0.02)
-        self.assertLessEqual(faulted, len(DEMO_FAULTS) + EXTRAS_PER_KIND * len(FAULT_KINDS))
+        self.assertFalse(any(site["fault"] for site in sites))
+        self.assertEqual(totals["alarms"], 0)
 
 
 if __name__ == "__main__":

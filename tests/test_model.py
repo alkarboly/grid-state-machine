@@ -379,6 +379,16 @@ class ScaleTests(unittest.TestCase):
         )
         self.assertAlmostEqual(totals["grid_in_kw"] - totals["grid_out_kw"], parts, places=0)
 
+    def test_every_code_has_an_action(self):
+        seen = set()
+        for spec in CHARTS:
+            self.assertTrue(spec["action"])
+            self.assertNotIn(spec["chart_id"], seen)
+            seen.add(spec["chart_id"])
+            point = evaluate(spec, spec["sigma"] or 1.0, 0.0, spec["sigma"] or 1.0, [])
+            self.assertEqual(point["action"], spec["action"])
+            self.assertEqual(point["chart_id"], spec["chart_id"])
+
     def test_control_rules(self):
         spec = CHARTS[0]
         shift = evaluate(spec, 1.0, 0.0, 1.0, [1, 1, 1, 1, 1, 1])

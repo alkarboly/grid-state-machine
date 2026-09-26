@@ -2,7 +2,7 @@
 
 Handoff for the next session. Names and shapes stay in the other pages. This page says what already runs, what is only on this machine, and the slice to build next.
 
-`main` is at `683cc61`, “Fix city labels and drill into stations.” The working tree after that commit is not pushed. Do not commit `.env` or `data/gridsim.db`.
+`main` is at `8d85012`, “Add fleet ledger and map back button.” Do not commit `.env` or `data/gridsim.db`.
 
 ## Built and on `main`
 
@@ -16,20 +16,11 @@ One fleet call per tick. `POST /api/dispatch` or the newest Supabase `dispatch_o
 
 Per-unit control is a `unit_actions` row: `scheduled_service`, `set_signal`, `install_addon`, `remove_addon`. The bot writes `return_online` when a service window ends. The disco tracks `solar` (5 kW source) and `ev_charger` (7.2 kW load). The read model is `market_ticks`, `unit_latest`, and `usage_hours`. The contract is [llm.md](llm.md). The SQL files and the two Render services are [deploy.md](deploy.md).
 
-Feeder lines from homes to substations are gone. The pale ring marks the selected unit.
+Feeder lines from homes to substations are gone. The pale ring marks the selected unit. The right panel collapses, and its ledger sums every unit. Inside a city or a substation, **back** sits on the map. Opening a battery draws no line back to its city.
 
 ## In the working tree
 
-These edits are local. Refresh the page to see the JavaScript. The Python process on port 8000 was restarted after the rollup change, so `/api/scene` already returns the new fleet fields.
-
-- The right panel collapses. **hide** closes it to a rail labeled **fleet**. The map uses the freed width. The ledger stays the whole fleet while the map is drilled into one station.
-- The ledger is the sum of every unit. `pushing + pulling + holding = units`. `offline` is a subset of `holding`. Power closes as `grid_in_kw − grid_out_kw = load_kw + ev_kw − solar_kw + solar_charge_kw + charge_kw − discharge_kw`. The header **grid** figure is that same interchange, in MW. Columns are on `fleet_rollups`, including older SQLite files via added columns.
-- Opening a battery draws no line back to its city. The only arc left is a constraint arc, and only when both station codes are in `data/station_geo.json`. That file is still empty, so the map currently draws none.
-- Inside a city or a substation, **back** sits on the map. From a substation it returns to that city. From a city it returns to Texas.
-
-Files: `web/index.html`, `web/main.js`, `web/style.css`, `gridsim/state.py`, `gridsim/db.py`, `tests/test_model.py`, and the docs those behaviors changed.
-
-`python -m unittest discover -s tests -q` — 27 tests, last run after the ledger change.
+The panel carries a code key. `chart_id` is the code. Each code has an action in [control-charts.md](control-charts.md). The attention queue prints the code on the flagged unit, and an alarming chart in the unit view repeats the action.
 
 ## Not standing yet
 

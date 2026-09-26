@@ -14,6 +14,7 @@ CHARTS = (
         "title": "Meter agreement",
         "unit": "kW",
         "sigma": 0.20,
+        "action": "Compare the disco to the billing meter. If they still disagree, post scheduled_service.",
     },
     {
         "chart_id": "base_temp",
@@ -22,6 +23,7 @@ CHARTS = (
         "title": "Cabinet temperature",
         "unit": "°C",
         "sigma": None,
+        "action": "Post set_signal hold so the pack stops working, then scheduled_service for cooling or a stuck sensor.",
     },
     {
         "chart_id": "disco_voltage",
@@ -30,6 +32,7 @@ CHARTS = (
         "title": "Service voltage",
         "unit": "V",
         "sigma": None,
+        "action": "Post scheduled_service and check the connection at the disconnect.",
     },
     {
         "chart_id": "frequency",
@@ -38,6 +41,7 @@ CHARTS = (
         "title": "Frequency",
         "unit": "Hz",
         "sigma": 0.025,
+        "action": "Leave the cabinet. Frequency is the grid, not this battery.",
     },
     {
         "chart_id": "soc_tracking",
@@ -46,6 +50,7 @@ CHARTS = (
         "title": "State-of-charge tracking",
         "unit": "kWh",
         "sigma": 0.45,
+        "action": "Post scheduled_service. The reported charge has left the coulomb count.",
     },
     {
         "chart_id": "dispatch_response",
@@ -54,6 +59,7 @@ CHARTS = (
         "title": "Dispatch response",
         "unit": "kW",
         "sigma": 0.40,
+        "action": "Post set_signal hold, then scheduled_service. The battery is not doing what it was told.",
     },
 )
 
@@ -89,6 +95,7 @@ def evaluate(spec: dict, measured: float, expected: float, sigma: float, history
         "family": spec["family"],
         "title": spec["title"],
         "unit": spec["unit"],
+        "action": spec["action"],
         "measured": round(measured, 4),
         "expected": round(expected, 4),
         "value": round(value, 4),

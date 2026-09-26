@@ -40,7 +40,7 @@ The chain is grid → meter → disco → panel → base.
 
 `lmp_usd_mwh` is JSON `null` until a settlement-point price exists for that home's load zone.
 
-`alarming`, `out_of_control`, and `warning` are arrays of `chart_id`. `alarm` is true when `alarming` is not empty, which means at least one chart is outside its limits. `out_of_control` is wider: it also holds charts where only a run rule fired.
+`alarming`, `out_of_control`, and `warning` are arrays of `chart_id`. `chart_id` is the error code. `alarm` is true when `alarming` is not empty, which means at least one chart is outside its limits. `out_of_control` is wider: it also holds charts where only a run rule fired. The action for each code is in [control-charts.md](control-charts.md). Take it when the code alarms.
 
 Every control chart names the component it belongs to. The mapping is in [control-charts.md](control-charts.md) and it is what lets the unit view hang each chart off its box in the chain.
 

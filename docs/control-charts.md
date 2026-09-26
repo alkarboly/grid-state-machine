@@ -19,6 +19,21 @@ Every chart also names the `component` it belongs to, so a chart is always attac
 
 `grid` and `panel` carry no charts. The grid metrics are ERCOT context rather than a measurement of this home, and the panel reports a single load number that the meter and disco already chart between them.
 
+## Codes
+
+`chart_id` is the error code. The map key and the attention queue use that same string. An alarm on the code means take the action. A warning is watch only. It does not call for the action.
+
+| Code | Action |
+| --- | --- |
+| `disco_meter_delta` | Compare the disco to the billing meter. If they still disagree, post `scheduled_service`. |
+| `base_temp` | Post `set_signal` hold so the pack stops working, then `scheduled_service` for cooling or a stuck sensor. |
+| `disco_voltage` | Post `scheduled_service` and check the connection at the disconnect. |
+| `frequency` | Leave the cabinet. Frequency is the grid, not this battery. |
+| `soc_tracking` | Post `scheduled_service`. The reported charge has left the coulomb count. |
+| `dispatch_response` | Post `set_signal` hold, then `scheduled_service`. The battery is not doing what it was told. |
+
+`action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`.
+
 ## Rules
 
 Evaluated in this order. More than one may fire on the same point.
@@ -64,7 +79,8 @@ One row per battery per chart per tick. `value` is the residual. `series` is the
   "rules": ["beyond_3sigma"],
   "in_control": false,
   "alarm": true,
-  "warning": true
+  "warning": true,
+  "action": "Post set_signal hold so the pack stops working, then scheduled_service for cooling or a stuck sensor."
 }
 ```
 

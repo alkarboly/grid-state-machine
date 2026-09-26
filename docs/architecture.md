@@ -33,7 +33,7 @@ There is no login. The map and `/api/scene` are the entry points. Official ERCOT
 
 At 3000 batteries the old single payload would have been tens of megabytes, because it carried every component's metrics and every chart's history for every unit. So the API is split by what each view needs:
 
-- `GET /api/scene` is the map. One small row per battery — id, metro, the distribution substation it supplies, position, state, state of charge, and the flagged families when there are any — plus the metro list, the substation list, the fleet rollup, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
+- `GET /api/scene` is the map. One small row per battery — id, metro, the distribution substation it supplies, position, state, state of charge, and the flagged chart codes when there are any — plus the metro list, the substation list, the fleet rollup, the error-code key, ERCOT grid context, prices, constraints, and edges. About 330 KB for 3000 units, cheap to poll every 5 seconds.
 - `GET /api/site/{id}` is one battery in full: every component's metrics, every chart with its residual history, and the unit's own profile. A few kilobytes, fetched when the modal opens and refreshed while it stays open.
 - `GET /api/dispatch` is the real-time control row: the call that was just applied, the order waiting for the next tick, and the snapshot a controller reads (demand, storage, frequency, fleet totals). `POST /api/dispatch` with `{"signal": "push", "intensity": 0.8}` sets that waiting order. `{"signal": "auto"}` returns the decision to the ladder. The next tick applies it. The tick does not wait on a model.
 - `POST /api/actions` with `{"site_id", "kind", "note", "payload"}` queues one unit action. Kinds and payloads are in [llm.md](llm.md). The scene payload includes `market`, the latest `actions`, and the add-on catalog so the side panel can show them.
@@ -52,7 +52,7 @@ Metro hubs are separate dots, sized by how many batteries they hold. Only metros
 
 A constraint arc connects two stations named by a live ERCOT binding constraint. It is drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. The pale ring marks the selected unit.
 
-The side panel is the fleet ledger. Its counts and kilowatts are the sum of every unit, and the state counts add up to the fleet. A control on the panel's edge hides it so the map can use the full width. Choosing a maintenance family dims every battery that is not out of limits in that family. The rest of the panel is an exception queue and a metro list; clicking a metro flies the camera to it.
+The side panel is the fleet ledger. Its counts and kilowatts are the sum of every unit, and the state counts add up to the fleet. A control on the panel's edge hides it so the map can use the full width. Choosing a maintenance family dims every battery that is not out of limits in that family. The code key lists each `chart_id` and the action to take when that code alarms. The attention queue names the code on each flagged unit. The rest of the panel is that queue and a metro list; clicking a metro flies the camera to it.
 
 Hit testing projects all 3000 positions to screen space once per camera move and caches them, so hovering stays smooth.
 

@@ -49,6 +49,7 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     prices_from_rows,
 )
+from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import (
     DEMO_FAULTS,
     build_sites,
@@ -577,6 +578,15 @@ class Fleet:
                 "market": self.market,
                 "actions": sorted(self.actions, key=lambda row: row.get("ts") or "", reverse=True)[:24],
                 "addons": catalog_rows(),
+                "codes": [
+                    {
+                        "chart_id": spec["chart_id"],
+                        "family": spec["family"],
+                        "title": spec["title"],
+                        "action": spec["action"],
+                    }
+                    for spec in CHARTS
+                ],
                 "sites": sites,
                 "ercot": self.status,
             }

@@ -252,6 +252,17 @@ h2 {
 .group h3 .flag { color: var(--alarm); }
 .note { margin: 7px 0 0; font-size: 11px; }
 
+.code-key { display: grid; gap: 10px; }
+.code { margin: 0; }
+.code b {
+  display: block;
+  color: var(--ink);
+  font-weight: 550;
+  font-size: 12px;
+}
+.code span { color: var(--muted); font-size: 12px; }
+.action { margin: 6px 0 0; color: var(--ink); font-size: 12px; }
+
 .roster { display: grid; gap: 3px; }
 .unit-row {
   display: flex;

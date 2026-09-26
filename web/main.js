@@ -489,7 +489,7 @@ function renderPanel(data) {
         .slice(0, 40)
         .map(
           (site) => `<button type="button" class="unit-row alarm" data-site="${site.id}">
-            <i></i><span>${site.id}</span><em>${(site.families || []).join(" ")}</em>
+            <i></i><span>${site.id}</span><em>${(site.flagged || []).join(" ")}</em>
           </button>`,
         )
         .join("")
@@ -548,6 +548,16 @@ function renderPanel(data) {
     <div class="chips">${chips}</div>
     ${marketBlock(data)}
     ${actionBlock(data)}
+    <div class="group">
+      <h3>Codes</h3>
+      <div class="code-key">
+        ${(data.codes || [])
+          .map(
+            (code) => `<p class="code"><b>${code.chart_id}</b><span>${code.action}</span></p>`,
+          )
+          .join("")}
+      </div>
+    </div>
     <div class="group">
       <h3>Needs attention${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}</h3>
       <div class="roster">${queueHtml}</div>
@@ -807,15 +817,18 @@ function chartCard(chart) {
         ${row("residual", `${fmt(chart.value, 3)} ${chart.unit}`)}
         ${row("sigma", fmt(chart.sigma, 3))}
         ${row("limits", `${fmt(chart.lcl, 3)} to ${fmt(chart.ucl, 3)}`)}
+        ${row("code", chart.chart_id)}
         ${row("family", chart.family)}
       </div>`
     : "";
+  const resolution = chart.alarm && chart.action ? `<p class="action">${chart.action}</p>` : "";
   return `<div class="chart${open ? " open" : ""}" id="chart-${chart.chart_id}">
     <button type="button" class="chart-head" data-chart="${chart.chart_id}">
       <h3>${chart.title}<span>${fmt(chart.value, 2)} ${chart.unit}</span></h3>
     </button>
     ${chartSvg(chart)}
-    <p class="${tone}">${status} · z ${fmt(chart.z, 1)}</p>
+    <p class="${tone}">${chart.chart_id} · ${status} · z ${fmt(chart.z, 1)}</p>
+    ${resolution}
     ${detail}
   </div>`;
 }

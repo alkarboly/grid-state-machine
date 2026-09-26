@@ -41,8 +41,9 @@ TICK_SECONDS = 10
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
-# Optional remote model. Empty means that call is skipped. The sim agent still
-# resolves chart alarms and, on a unit set to dispatch, writes set_signal.
+# Optional remote model. Empty means that call is skipped. The maintenance
+# manager still resolves chart alarms, and the fleet manager still writes
+# set_signal on a unit set to dispatch.
 LLM_URL = os.environ.get("LLM_URL", "").strip()
 LLM_EVERY_S = float(os.environ.get("LLM_EVERY_S", "600"))
 

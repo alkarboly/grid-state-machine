@@ -1,7 +1,8 @@
-"""Sim agent. Each tick it reads the chart contract and writes unit_actions.
+"""Two in-tick managers. Each writes unit_actions; the next tick applies them.
 
-The remote model in docs/llm.md stays outside the tick. This agent is the
-in-process stand-in: actor `sim`, the same kinds, applied on the next tick.
+The maintenance manager answers an alarming chart. The fleet manager posts
+the price call on a home set to dispatch. An open code response outranks
+that call. The remote model in docs/llm.md stays outside the tick.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from datetime import datetime
 
 from gridsim.fleet.actions import OPEN, market_rate, new_action
 from gridsim.fleet.charts import CHARTS
-from gridsim.fleet.simulate import HOUR_MEAN_KW
+from gridsim.fleet.simulate import HOUR_MEAN_KW, panel_kw
 
 # A manual trigger places the residual this many sigma past the center,
 # which is outside the ±3 sigma limits.
@@ -37,13 +38,15 @@ def forced_measurement(site: dict, chart_id: str, measured: float, expected: flo
     return expected + ARM_Z * width
 
 
-def typical_kw(load_scale: float) -> float:
+def typical_kw(load_scale: float, hour_kw: list[float] | None = None) -> float:
+    """This owner's average hour. `hour_kw` already includes load_scale."""
+    if hour_kw:
+        return sum(float(value) for value in hour_kw) / len(hour_kw)
     return (sum(HOUR_MEAN_KW) / len(HOUR_MEAN_KW)) * load_scale
 
 
 def expected_kw(site: dict, hour: int, usage_rows: list[dict]) -> tuple[float, str]:
-    """This hour's expected kilowatts, and whether it came from closed usage or the profile."""
-    scale = float(site.get("load_scale") or 1.0)
+    """This hour's expected kilowatts, and whether it came from closed usage or the owner's day."""
     samples = [
         float(row["load_kwh"])
         for row in usage_rows
@@ -51,7 +54,7 @@ def expected_kw(site: dict, hour: int, usage_rows: list[dict]) -> tuple[float, s
     ]
     if samples:
         return sum(samples) / len(samples), "usage"
-    return HOUR_MEAN_KW[hour] * scale, "profile"
+    return panel_kw(site, hour), "profile"
 
 
 def day_shape(points: list[dict] | None) -> dict | None:
@@ -104,7 +107,7 @@ def price_call(rate: float, expected: float, typical: float, shape: dict | None 
             ))
         if heavy:
             fired.append(_clause(
-                f"expected {expected:.2f} kW ≥ {HEAVY:.2f}× typical {typical:.2f} kW",
+                f"expected {expected:.2f} kW ≥ {HEAVY:.2f}× owner average {typical:.2f} kW",
                 f"{HEAVY:.2f}×",
             ))
         if peak:
@@ -119,8 +122,8 @@ def price_call(rate: float, expected: float, typical: float, shape: dict | None 
                 f"{LOW_RATE:.0f} $/MWh",
             ))
         fired.append(_clause(
-            f"expected {expected:.2f} kW ≤ typical {typical:.2f} kW",
-            f"typical {typical:.2f} kW",
+            f"expected {expected:.2f} kW ≤ owner average {typical:.2f} kW",
+            f"owner average {typical:.2f} kW",
         ))
         if trough:
             place = f"rank {rank:.2f} " if rank is not None else ""
@@ -134,14 +137,14 @@ def price_call(rate: float, expected: float, typical: float, shape: dict | None 
     ))
     if not heavy:
         fired.append(_clause(
-            f"expected {expected:.2f} kW is below {HEAVY:.2f}× typical {typical:.2f} kW",
+            f"expected {expected:.2f} kW is below {HEAVY:.2f}× owner average {typical:.2f} kW",
             f"{HEAVY:.2f}×",
         ))
     day = shape.get("shape") if shape else None
     if day in ("trough", "ramp") and not quiet:
         fired.append(_clause(
-            f"expected {expected:.2f} kW is above typical {typical:.2f} kW, so a {day} does not pull",
-            f"typical {typical:.2f} kW",
+            f"expected {expected:.2f} kW is above owner average {typical:.2f} kW, so a {day} does not pull",
+            f"owner average {typical:.2f} kW",
         ))
     elif day in (None, "mid"):
         fired.append(_clause("day is mid, not a peak, trough, or ramp", "peak, trough, or ramp"))
@@ -196,15 +199,8 @@ def _price_note(because: list[dict], expected: float, source: str, shape: dict |
     return note
 
 
-def audit(
-    sites: list[dict],
-    actions: list[dict],
-    grid: dict,
-    usage_by_site: dict[str, list[dict]],
-    now: datetime,
-) -> list[dict]:
-    """Pending rows for alarming codes, then a price signal on units set to dispatch."""
-    rate, _basis = market_rate(grid)
+def maintenance_manager(sites: list[dict], actions: list[dict], now: datetime) -> list[dict]:
+    """Pending rows for alarming codes. A warning posts nothing. Frequency posts nothing."""
     created: list[dict] = []
     pending = list(actions)
     for site in sites:
@@ -236,16 +232,31 @@ def audit(
                     now,
                     note=f"{lead} {spec['action']}",
                     payload=payload,
-                    actor="sim",
+                    actor="maintenance",
                 )
                 created.append(row)
                 pending.append(row)
+    return created
+
+
+def fleet_manager(
+    sites: list[dict],
+    actions: list[dict],
+    grid: dict,
+    usage_by_site: dict[str, list[dict]],
+    now: datetime,
+) -> list[dict]:
+    """A price signal on homes set to dispatch, unless a code response is already open."""
+    rate, _basis = market_rate(grid)
+    created: list[dict] = []
+    pending = list(actions)
+    for site in sites:
         if _code_busy(pending, site["id"]) or not site.get("agent_dispatch"):
             site.pop("agent_call", None)
             continue
         expected, source = expected_kw(site, now.hour, usage_by_site.get(site["id"]) or [])
         shape = day_shape(grid.get("day"))
-        typical = typical_kw(float(site.get("load_scale") or 1.0))
+        typical = typical_kw(float(site.get("load_scale") or 1.0), site.get("hour_kw"))
         signal, because = price_call(rate, expected, typical, shape)
         site["agent_call"] = {
             "signal": signal,
@@ -267,8 +278,21 @@ def audit(
             now,
             note=_price_note(because, expected, source, shape),
             payload={"signal": signal, "intensity": level, "reason": "price", "because": because},
-            actor="sim",
+            actor="fleet",
         )
         created.append(row)
         pending.append(row)
+    return created
+
+
+def audit(
+    sites: list[dict],
+    actions: list[dict],
+    grid: dict,
+    usage_by_site: dict[str, list[dict]],
+    now: datetime,
+) -> list[dict]:
+    """Maintenance manager first, then the fleet manager on homes it left clear."""
+    created = maintenance_manager(sites, actions, now)
+    created.extend(fleet_manager(sites, list(actions) + created, grid, usage_by_site, now))
     return created

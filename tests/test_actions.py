@@ -39,6 +39,7 @@ class ActionTests(unittest.TestCase):
         created = apply_actions(updated, [action], later)
         self.assertEqual(action["status"], "done")
         self.assertEqual(created[0]["kind"], "return_online")
+        self.assertEqual(created[0]["actor"], "api")
         self.assertNotIn("offline", updated[0])
 
     def test_solar_feeds_the_house_and_the_battery(self):

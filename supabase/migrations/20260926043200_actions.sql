@@ -34,7 +34,7 @@ create table if not exists unit_actions (
   ends_at timestamptz,
   note text not null default '',
   payload jsonb not null default '{}'::jsonb,
-  actor text not null check (actor in ('llm', 'api', 'sim'))
+  actor text not null check (actor in ('fleet', 'maintenance', 'llm', 'api', 'sim'))
 );
 
 create index if not exists unit_actions_open on unit_actions (status, ts);

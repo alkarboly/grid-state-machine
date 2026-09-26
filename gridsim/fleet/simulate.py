@@ -17,12 +17,41 @@ from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resol
 from gridsim.timeutil import iso
 
 # Late-summer central-air hour means, kW. Daily sum is about 54 kWh before load_scale.
+# That sum is the energy budget. Each home spends it on its own hour_kw.
 HOUR_MEAN_KW = [
     1.15, 1.05, 0.98, 0.95, 0.95, 1.10,
     1.55, 1.90, 1.70, 1.65, 1.80, 2.20,
     2.70, 3.15, 3.50, 3.75, 3.90, 4.05,
     4.20, 3.70, 2.90, 2.20, 1.70, 1.35,
 ]
+DAILY_KWH = sum(HOUR_MEAN_KW)
+
+
+def owner_hour_kw(profile: random.Random, load_scale: float) -> list[float]:
+    """24 panel kilowatts for one owner. The day sums to DAILY_KWH × load_scale.
+
+    The peak hour, the width, and the overnight floor are drawn for this home,
+    so the same clock hour is not the heavy hour for every owner.
+    """
+    peak = profile.randrange(24)
+    width = 2.8 + profile.random() * 4.2
+    floor = 0.25 + profile.random() * 0.35
+    raw = []
+    for hour in range(24):
+        dist = min((hour - peak) % 24, (peak - hour) % 24)
+        bump = math.exp(-0.5 * (dist / width) ** 2)
+        raw.append(floor + (1.0 - floor) * bump)
+    total = sum(raw)
+    daily = DAILY_KWH * load_scale
+    return [round(daily * value / total, 3) for value in raw]
+
+
+def panel_kw(site: dict, hour: int) -> float:
+    """This owner's expected panel kilowatts for the clock hour, before the demand bump."""
+    owned = site.get("hour_kw")
+    if owned and 0 <= hour < len(owned):
+        return float(owned[hour])
+    return HOUR_MEAN_KW[hour % 24] * float(site.get("load_scale") or 1.0)
 
 # Named demo faults, one cabinet per maintenance kind. The site row keeps the
 # healthy baseline; the tick applies these. A few more of each kind are placed
@@ -373,6 +402,7 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     "chart_mark": {},
                 }
             )
+                sites[-1]["hour_kw"] = owner_hour_kw(profile, sites[-1]["load_scale"])
     _scatter_faults(sites)
     return sites
 
@@ -619,7 +649,6 @@ def seed_history(sites: list[dict], now: datetime) -> None:
         if fault.get("soc_bias_kwh"):
             codes.append("soc_tracking")
         soc = round(100.0 * site["physical_soc_kwh"] / site["capacity_kwh"], 1)
-        scale = float(site.get("load_scale") or 1.0)
         log = []
         for back in range(STATE_LOG, 0, -1):
             moment = now - step * back
@@ -636,7 +665,7 @@ def seed_history(sites: list[dict], now: datetime) -> None:
             alarming = list(codes)
             if state == "push" and fault.get("response_scale") is not None:
                 alarming.append("dispatch_response")
-            load_kw = round(HOUR_MEAN_KW[hour] * scale, 3)
+            load_kw = round(panel_kw(site, hour), 3)
             net = load_kw + charge - discharge
             voltage = float(fault["voltage_v"]) if "voltage_v" in fault else site["voltage_center_v"]
             temp = float(fault["temp_c"]) if "temp_c" in fault else site["temp_center_c"]
@@ -751,7 +780,7 @@ def tick_sites(
         elif site.get("signal_override"):
             signal, level = site["signal_override"]
             source = "action"
-        target_kw = max(0.3, HOUR_MEAN_KW[hour] * site["load_scale"] * scale)
+        target_kw = max(0.3, panel_kw(site, hour) * scale)
         load_kw = max(
             0.3,
             _approach(

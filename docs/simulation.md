@@ -32,9 +32,11 @@ Four named batteries carry scripted faults, one per maintenance kind, listed in 
 
 ## Home load
 
-Hour-of-day mean kilowatts are a late-summer central-air profile. The daily total is about 54 kWh. That is a modeling assumption until real meter samples replace it.
+The panel is the house load. Its daily energy is a late-summer assumption of about 54 kWh times that battery's `load_scale` (a draw from 0.72 to 1.28). Each home then draws its own hour weights: a peak hour anywhere in the day, a width, and an overnight floor, normalized so the 24 hours sum to that daily energy. The result is `hour_kw`, seeded on the site id with the rest of the personality. Two homes with the same daily total do not peak in the same hour. This is still not a metered load shape.
 
-The mean is multiplied by that battery's `load_scale`, then by `0.85 + 0.30 * demand_percentile`, so a larger home sits higher and every home sits a bit higher when ERCOT demand is in the top of today's range.
+The live target is `hour_kw` for the clock hour, times `0.85 + 0.30 * demand_percentile`, so the owner's shape stays put and every home sits a bit higher when ERCOT demand is in the top of today's range.
+
+Each tick adds panel kilowatts times elapsed hours to an open bucket. When the clock hour changes, that bucket closes as one `usage_hours` row. `load_kwh` on that row is the panel, not grid import.
 
 Load, service voltage, and cabinet temperature are states. Each tick moves them part of the way toward the new target instead of drawing a fresh number. Load remembers about twelve minutes, voltage about three, and the cabinet about fifteen. A small gaussian is the sensor noise on top of that move. Frequency is drawn once for the whole interconnection, and each disco adds a much smaller local error. The meter and the disco power readings stay independent measurement noise, because those sensors do not have memory of their own.
 
@@ -107,23 +109,25 @@ A controller does not edit a battery's kilowatts directly. It inserts a `unit_ac
 | `install_addon` | Payload `addon_id` is `solar` or `ev_charger`. The disco starts metering it. |
 | `remove_addon` | That add-on leaves the disco's list. |
 
-`return_online` is written by the simulator, not by the controller.
-
-### Sim agent
-
-After the charts for a tick are written, the process audits them and appends `unit_actions` with `actor` `sim`. The following tick applies those rows. This is separate from `LLM_URL`, which stays outside the tick.
-
-An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. The note starts with the alarm past ±3σ, then the procedure for that code. `payload.because` is `{line, threshold}` with threshold `±3σ`. A code response outranks the price call below: while one is open, that home is not given a price signal.
+`return_online` is written by the simulator, not by the controller. Its `actor` is the actor of the service it closes.
 
 `POST /api/agent` arms a chart (`chart_id`, or `all`) so the next tick forces its residual to +4 sigma. The same route sets `dispatch` on one home, and `grid` to open or close the contactor. `GET /api/agent` lists homes that are armed, set to dispatch, or grid-off. `GET /api/site/{id}` includes `armed`, `dispatch`, `snapshot`, and `agent_call` (`signal`, `rate`, `expected_kw`, `source` of `usage` or `profile`, `day`, and `because`). The unit view triggers one code from the box it belongs to. It does not offer trigger-all, and it does not trigger `dispatch_response`. Push, pull, and hold are forced from the grid box with `set_signal`. A maintenance ticket is `scheduled_service` from the base box. Those flags live in the process. A restart clears them.
 
-On a home with `dispatch` set, and with no open code response, the agent reads the [day trace](ercot-sources.md) and posts `set_signal`:
+### Maintenance manager
 
-- `push` when the rate is at least 70 $/MWh, or this hour's expected load is at least 1.25× a typical hour, or demand is at the peak of the trace (the newest actual is at or above the 75th percentile of the 24h actuals)
-- `pull` when this hour's expected load is at or below a typical hour and any of these hold: the rate is at most 40 $/MWh, demand is in the trough (at or below the 35th percentile), or the forecast is a ramp (its mean is at least 8% above the newest actual, and the hour is not already a peak or a trough)
+After the charts for a tick are written, the maintenance manager appends `unit_actions` with `actor` `maintenance`. The following tick applies those rows. This is separate from `LLM_URL`, which stays outside the tick.
+
+An alarming chart posts the `steps` in [control-charts.md](control-charts.md). A warning does not. `frequency` posts nothing. A step that is already pending or active for that home and that `chart_id` is not posted again. `payload.chart_id` records which code the row answers. The note starts with the alarm past ±3σ, then the procedure for that code. `payload.because` is `{line, threshold}` with threshold `±3σ`. A code response outranks the fleet manager: while one is open, that home is not given a price signal.
+
+### Fleet manager
+
+The fleet manager runs after the maintenance manager, on a home with `dispatch` set and no open code response. It appends `set_signal` with `actor` `fleet`. It reads the [day trace](ercot-sources.md) and posts:
+
+- `push` when the rate is at least 70 $/MWh, or this hour's expected load is at least 1.25× this owner's average hour, or demand is at the peak of the trace (the newest actual is at or above the 75th percentile of the 24h actuals)
+- `pull` when this hour's expected load is at or below this owner's average hour and any of these hold: the rate is at most 40 $/MWh, demand is in the trough (at or below the 35th percentile), or the forecast is a ramp (its mean is at least 8% above the newest actual, and the hour is not already a peak or a trough)
 - `hold` only to replace an open price call that no longer matches. The choice is still stored on the home as `agent_call` and shown in the unit view. `agent_call.day` is `peak`, `trough`, `ramp`, `mid`, or null when the trace is empty.
 
-Expected load is the mean of that home's closed `usage_hours` for this hour of the day. With no closed hour yet, it is `HOUR_MEAN_KW[hour] × load_scale`. A typical hour is the mean of that profile times `load_scale`. The rate is [the market rate](#market-rate). Intensity is 1 on push and pull, so the call reaches the home, and 0 on hold. `payload.reason` is `price`. `payload.because` lists each clause that fired, `{line, threshold}`, so a push names 70 $/MWh, 1.25× a typical hour, or peak rank 0.75, and a pull names 40 $/MWh, a quiet hour at or below typical, trough rank 0.35, or a ramp of 1.08×. The note repeats those lines, then the expected kilowatts, `usage` or `profile`, and the day shape when it is a peak, a trough, or a ramp.
+Expected load is the mean of that home's closed `usage_hours` for this hour of the day. With no closed hour yet, it is that home's `hour_kw` for the clock hour. The owner's average is the mean of `hour_kw`. The rate is [the market rate](#market-rate). Intensity is 1 on push and pull, so the call reaches the home, and 0 on hold. `payload.reason` is `price`. `payload.because` lists each clause that fired, `{line, threshold}`, so a push names 70 $/MWh, 1.25× the owner average, or peak rank 0.75, and a pull names 40 $/MWh, a quiet hour at or below the owner average, trough rank 0.35, or a ramp of 1.08×. The note repeats those lines, then the expected kilowatts, `usage` or `profile`, and the day shape when it is a peak, a trough, or a ramp. A closed usage hour replaces `hour_kw` for that clock hour, so the call follows what the panel metered.
 
 ### Add-ons
 

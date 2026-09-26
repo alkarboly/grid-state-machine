@@ -2,7 +2,7 @@
 
 The tick does not wait on this unless LLM_URL is set, and even then it runs
 at most once per LLM_EVERY_S. The request and response shapes are docs/llm.md.
-A missing URL means the remote model is skipped. The sim agent still writes rows.
+A missing URL means the remote model is skipped. The fleet and maintenance managers still write rows.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
-The sim agent does sit in the tick. After the charts are written it audits them and appends the same kinds with `actor` `sim`. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). `LLM_URL` is still optional and is not that agent.
+Two managers do sit in the tick. After the charts are written, the maintenance manager appends alarm steps with `actor` `maintenance`, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). `LLM_URL` is still optional. A remote model is a third writer, `actor` `llm`, and it is not either manager.
 
 The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
 

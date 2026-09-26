@@ -59,7 +59,7 @@ class AgentTests(unittest.TestCase):
         by_code = {}
         for row in rows:
             by_code.setdefault(row["payload"]["chart_id"], []).append(row["kind"])
-            self.assertEqual(row["actor"], "sim")
+            self.assertEqual(row["actor"], "maintenance")
             self.assertEqual(row["status"], "pending")
         self.assertEqual(by_code["base_temp"], ["set_signal", "scheduled_service"])
         self.assertEqual(by_code["disco_voltage"], ["scheduled_service"])
@@ -118,6 +118,7 @@ class AgentTests(unittest.TestCase):
         site = _bare(set())
         site["agent_dispatch"] = True
         pulled = audit([site], [], _grid(0.1), {}, now)
+        self.assertEqual(pulled[0]["actor"], "fleet")
         self.assertEqual(pulled[0]["payload"]["signal"], "pull")
         self.assertEqual(pulled[0]["payload"]["reason"], "price")
         self.assertIn("from profile", pulled[0]["note"])
@@ -137,6 +138,28 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(audit([quiet], [], _grid(0.5), {}, noon), [])
         self.assertEqual(quiet["agent_call"]["signal"], "hold")
         self.assertEqual(quiet["agent_call"]["source"], "profile")
+
+    def test_each_owner_spends_the_day_on_a_different_hour(self):
+        from gridsim.fleet.simulate import DAILY_KWH, build_sites
+
+        sites = build_sites(fleet_size=12)
+        peaks = set()
+        for site in sites:
+            self.assertEqual(len(site["hour_kw"]), 24)
+            self.assertAlmostEqual(sum(site["hour_kw"]), DAILY_KWH * site["load_scale"], delta=0.05)
+            peaks.add(max(range(24), key=lambda hour: site["hour_kw"][hour]))
+        self.assertGreater(len(peaks), 1)
+
+        owner = _bare(set())
+        owner["agent_dispatch"] = True
+        owner["hour_kw"] = [1.0] * 24
+        owner["hour_kw"][3] = 4.0
+        morning = datetime(2026, 9, 25, 3, 0, tzinfo=CENTRAL)
+        pushed = audit([owner], [], _grid(0.5), {}, morning)
+        self.assertEqual(pushed[0]["payload"]["signal"], "push")
+        self.assertEqual(pushed[0]["payload"].get("reason"), "price")
+        self.assertIn("owner average", pushed[0]["note"])
+        self.assertEqual(owner["agent_call"]["source"], "profile")
 
     def test_a_code_response_outranks_dispatch(self):
         now = datetime(2026, 9, 25, 3, 0, tzinfo=CENTRAL)

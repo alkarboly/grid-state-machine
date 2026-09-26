@@ -401,6 +401,7 @@ h2 {
 .case-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .case-action { font-weight: 550; font-size: 13px; }
 .case-meta { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+.timer { color: var(--ink); font-variant-numeric: tabular-nums; }
 .case-site {
   padding: 0;
   border: 0;

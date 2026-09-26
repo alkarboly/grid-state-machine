@@ -29,7 +29,7 @@ Normalized grid snapshot fields:
 
 ## Day trace
 
-`day` on `GET /api/scene`, and on the model request in [llm.md](llm.md), is the series behind the top-left overlay. The sim agent reads the same points. `shape` on the scene is that reading: `peak`, `trough`, `ramp`, or `mid`, with `demand_mw` and `rank`. It is null when the trace has no actuals.
+`day` on `GET /api/scene`, and on the model request in [llm.md](llm.md), is the series behind the top-left overlay. The fleet manager reads the same points. `shape` on the scene is that reading: `peak`, `trough`, `ramp`, or `mid`, with `demand_mw` and `rank`. It is null when the trace has no actuals.
 
 Each point is `{ts, demand_mw, rate_usd_mwh, rate_basis, kind}`. `kind` is `actual` or `forecast`.
 

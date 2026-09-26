@@ -58,7 +58,7 @@ controls.target.set(0, 0, 0.4);
 let payload = null;
 let selected = null;
 let unitDetail = null;
-const folds = { now: true, agent: false, attention: false };
+const folds = { now: true, fleet: false, maintenance: false, attention: false };
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
@@ -631,41 +631,6 @@ function markLine(clause) {
   return `<p class="because">${line}</p>`;
 }
 
-function clausesFor(action) {
-  const payload = action.payload || {};
-  const stored = payload.because || action.because || [];
-  if (stored.length) return stored;
-  if (payload.chart_id) return [{ line: "alarm beyond ±3σ. Follow the procedure.", threshold: "±3σ" }];
-  if (payload.reason !== "price") return [];
-  const note = action.note || "";
-  const clauses = [];
-  const price = note.match(/Price (\d+)/);
-  if (price) {
-    const rate = Number(price[1]);
-    if (rate >= 70) clauses.push({ line: `price ${rate} $/MWh ≥ 70 $/MWh`, threshold: "70 $/MWh" });
-    else if (rate <= 40) clauses.push({ line: `price ${rate} $/MWh ≤ 40 $/MWh`, threshold: "40 $/MWh" });
-  }
-  if (note.includes("day peak")) clauses.push({ line: "day peak, rank ≥ 0.75", threshold: "0.75" });
-  if (note.includes("day trough")) clauses.push({ line: "day trough, rank ≤ 0.35", threshold: "0.35" });
-  if (note.includes("day ramp")) clauses.push({ line: "forecast mean ≥ 1.08× now", threshold: "1.08×" });
-  return clauses;
-}
-
-function reasonHtml(action) {
-  const because = clausesFor(action);
-  const marked = because.map(markLine).join("");
-  const note = action.note || "";
-  const joined = because.map((clause) => clause.line).filter(Boolean).join("; ");
-  let extra = "";
-  if (note && joined && note.startsWith(joined)) {
-    const rest = note.slice(joined.length).replace(/^[.\s]+/, "");
-    if (rest) extra = `<p class="because">${escapeHtml(rest)}</p>`;
-  } else if (note && !because.some((clause) => clause.line && note.includes(clause.line))) {
-    extra = `<p class="because procedure">${escapeHtml(note)}</p>`;
-  }
-  return marked + extra;
-}
-
 function nowBlock(data) {
   const market = data.market || {};
   const basis = market.rate_basis === "ercot" ? "ERCOT" : "simulated";
@@ -682,11 +647,15 @@ function nowBlock(data) {
     ${because.map(markLine).join("")}`;
 }
 
-const WHO = { sim: "agent", api: "user", llm: "model", rules: "fleet" };
+const WHO = { fleet: "fleet", maintenance: "maintenance", sim: "agent", api: "user", llm: "model" };
+const CASE_ACTORS = new Set(["fleet", "maintenance", "llm", "api", "sim"]);
 
 function actionEntry(action) {
   return {
+    id: action.id || "",
     ts: action.ts || "",
+    starts_at: action.starts_at || "",
+    ends_at: action.ends_at || "",
     site: action.site_id,
     actor: action.actor,
     title: decisionLabel(action),
@@ -697,40 +666,104 @@ function actionEntry(action) {
   };
 }
 
-function agentCases(data) {
-  const open = (status) => status === "pending" || status === "active";
-  return (data.actions || [])
-    .filter((action) => action.actor === "sim" || action.actor === "llm" || action.actor === "api")
-    .map(actionEntry)
-    .sort((a, b) => {
-      const rank = Number(open(b.status)) - Number(open(a.status));
-      if (rank) return rank;
-      return b.ts.localeCompare(a.ts);
-    });
+function caseKey(entry) {
+  const payload = entry.payload || {};
+  if (payload.chart_id) return `${entry.site}:${payload.chart_id}`;
+  if (payload.reason === "price") return `${entry.site}:price`;
+  return entry.id || `${entry.site}:${entry.ts}`;
 }
+
+function latestSteps(entries) {
+  const grouped = new Map();
+  for (const entry of entries) {
+    const key = caseKey(entry);
+    const prev = grouped.get(key);
+    if (!prev || entry.ts > prev.ts) grouped.set(key, entry);
+  }
+  return [...grouped.values()];
+}
+
+function caseDesk(action) {
+  if (action.actor === "fleet" || action.actor === "maintenance") return action.actor;
+  const payload = action.payload || {};
+  if (payload.chart_id || action.kind === "scheduled_service" || action.kind === "return_online") {
+    return "maintenance";
+  }
+  return "fleet";
+}
+
+function agentCases(data, desk) {
+  const open = (status) => status === "pending" || status === "active";
+  return latestSteps(
+    (data.actions || [])
+      .filter((action) => CASE_ACTORS.has(action.actor) && caseDesk(action) === desk)
+      .map(actionEntry),
+  ).sort((a, b) => {
+    const rank = Number(open(b.status)) - Number(open(a.status));
+    if (rank) return rank;
+    return b.ts.localeCompare(a.ts);
+  });
+}
+
+function spanLabel(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+function timerLabel(start, end, now = Date.now()) {
+  const endMs = Date.parse(end);
+  const startMs = Date.parse(start);
+  if (!Number.isFinite(endMs)) return "";
+  if (Number.isFinite(startMs) && startMs - now > 30000) return `in ${spanLabel(startMs - now)}`;
+  const left = endMs - now;
+  return left <= 0 ? "0m" : spanLabel(left);
+}
+
+function paintTimers() {
+  const now = Date.now();
+  for (const node of document.querySelectorAll("time.timer")) {
+    node.textContent = timerLabel(node.dataset.start, node.dataset.ends, now);
+  }
+}
+
+setInterval(paintTimers, 1000);
 
 function caseCard(entry, opts = {}) {
   const status = entry.status || "";
-  const who = WHO[entry.actor] || entry.actor || "";
-  const when = (entry.ts || "").slice(11, 16);
-  const meta = [who, when].filter(Boolean).join(" · ");
+  const named = WHO[entry.actor] || entry.actor || "";
+  const who = opts.desk && (entry.actor === opts.desk || entry.actor === "sim") ? "" : named;
+  const open = status === "pending" || status === "active";
+  const clock = open && entry.ends_at
+    ? timerLabel(entry.starts_at, entry.ends_at)
+    : "";
+  const timer = clock
+    ? `<time class="timer" data-start="${escapeHtml(entry.starts_at)}" data-ends="${escapeHtml(entry.ends_at)}">${clock}</time>`
+    : "";
   const site = opts.site === false
     ? ""
     : `<button type="button" class="case-site" data-site="${escapeHtml(entry.site)}">${escapeHtml(entry.site)}</button>`;
+  const whoHtml = who ? `<span>${escapeHtml(who)}</span>` : "";
+  const bits = [site, whoHtml, timer].filter(Boolean);
+  const meta = bits.join(`<span> · </span>`);
   const pill = status ? `<span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>` : "";
   const hit = opts.site === false ? "" : ` data-site="${escapeHtml(entry.site)}"`;
   return `<article class="case status-${escapeHtml(status)}"${hit}>
       <div class="case-head"><b class="case-action">${escapeHtml(entry.title)}</b>${pill}</div>
-      <p class="case-meta">${site}${site && meta ? "<span> · </span>" : ""}${meta ? `<span>${escapeHtml(meta)}</span>` : ""}</p>
-      ${reasonHtml(entry)}
+      ${meta ? `<p class="case-meta">${meta}</p>` : ""}
     </article>`;
 }
 
-function agentBlock(data) {
-  const entries = agentCases(data);
+function agentBlock(data, desk) {
+  const entries = agentCases(data, desk);
+  const empty = desk === "fleet"
+    ? "No fleet calls. A home set to dispatch, or a posted push, pull, or hold, opens one."
+    : "No maintenance cases. An alarming code or a service ticket opens one.";
   const rows = entries.length
-    ? entries.map((entry) => caseCard(entry)).join("")
-    : `<p class="muted">No agent cases. An alarming code, a price call, or a posted action opens one.</p>`;
+    ? entries.map((entry) => caseCard(entry, { desk })).join("")
+    : `<p class="muted">${empty}</p>`;
   return `<div class="cases">${rows}</div>`;
 }
 
@@ -810,10 +843,13 @@ function renderPanel(data) {
         .join("")
     : `<p class="muted">No maintenance alerts.</p>`;
 
-  const openCases = agentCases(data).filter((entry) => entry.status === "pending" || entry.status === "active").length;
+  const openCount = (desk) => agentCases(data, desk).filter((entry) => entry.status === "pending" || entry.status === "active").length;
+  const fleetOpen = openCount("fleet");
+  const careOpen = openCount("maintenance");
   panelBody.innerHTML = `
     ${fold("now", "Now", nowBlock(data))}
-    ${fold("agent", `Agent cases${openCases ? `<span class="count">${fmt(openCases)}</span>` : ""}`, agentBlock(data))}
+    ${fold("fleet", `Fleet manager${fleetOpen ? `<span class="count">${fmt(fleetOpen)}</span>` : ""}`, agentBlock(data, "fleet"))}
+    ${fold("maintenance", `Maintenance manager${careOpen ? `<span class="count">${fmt(careOpen)}</span>` : ""}`, agentBlock(data, "maintenance"))}
     ${fold(
       "attention",
       `Maintenance alerts${queue.length ? `<span class="flag">${fmt(queue.length)}</span>` : ""}`,
@@ -1032,17 +1068,10 @@ function resolveNote(site, chartId) {
 }
 
 function decisionFooter(site) {
-  const call = site.agent_call;
-  const place = call && call.day && call.day !== "mid" ? ` · ${call.day}` : "";
   const openActions = (site.actions || []).filter((row) => row.status === "pending" || row.status === "active");
-  const covered = openActions.some((row) => ((row.payload || {}).because || []).length);
-  const callMarks = call && !covered ? (call.because || []).map(markLine).join("") : "";
-  const callLine = call
-    ? `<p class="muted note">Agent ${call.signal}${place} · ${fmt(call.rate, 0)} $/MWh · ${fmt(call.expected_kw, 2)} kW from ${call.source}</p>
-       ${callMarks}`
-    : "";
-  const openReasons = openActions.map((row) => caseCard(actionEntry(row), { site: false })).join("");
-  return `${callLine}${openReasons ? `<div class="cases">${openReasons}</div>` : ""}`;
+  const steps = latestSteps(openActions.map(actionEntry));
+  if (!steps.length) return "";
+  return `<div class="cases">${steps.map((entry) => caseCard(entry, { site: false })).join("")}</div>`;
 }
 
 function simControls(site) {

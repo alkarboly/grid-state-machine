@@ -24,13 +24,15 @@ The sim agent runs after each tick's charts. An alarming code gets the registere
 
 ## In the working tree
 
-Nothing beyond `main`.
+An agent case and the unit's agent row show the latest step and a timer to `ends_at`.
+
+The in-tick writer is two managers. The maintenance manager posts alarm steps with `actor` `maintenance`. The fleet manager posts the price call with `actor` `fleet` on a home set to dispatch. An open code response still outranks that call. Each home draws its own `hour_kw` from the shared daily energy, and the fleet manager compares this hour with that owner's average. Closed panel usage replaces the prior for that clock hour. The side panel lists them as Fleet manager and Maintenance manager. A user post and a remote-model row are filed by the job. `sim` remains a valid actor for a row written before the split. `return_online` keeps the actor of the service it closes.
 
 ## Not standing yet
 
 The bot and the web service are described in `render.yaml` and [deploy.md](deploy.md). The Supabase project and the two Render services have not been created from this repo. Until they are, the map people open is the local process, and a model has nowhere to write except `POST /api/actions` on that process.
 
-`LLM_URL` is unset, so no remote model is called. The sim agent still resolves alarming codes and a home set to dispatch. The remote request and response shapes are in [llm.md](llm.md).
+`LLM_URL` is unset, so no remote model is called. The maintenance manager still resolves alarming codes, and the fleet manager still resolves a home set to dispatch. The remote request and response shapes are in [llm.md](llm.md).
 
 `rate_basis` on the local map is `simulated` until the official price reports return rows. The public dashboard is already live.
 

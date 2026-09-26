@@ -25,6 +25,7 @@ from gridsim.db import (
     upsert_sites,
 )
 from gridsim.fleet.actions import (
+    CASE_ACTORS,
     OPEN,
     apply_actions,
     catalog_rows,
@@ -682,7 +683,7 @@ class Fleet:
                 ],
                 "market": self.market,
                 "actions": sorted(
-                    (row for row in self.actions if row.get("actor") in ("sim", "llm", "api")),
+                    (row for row in self.actions if row.get("actor") in CASE_ACTORS),
                     key=lambda row: row.get("ts") or "",
                     reverse=True,
                 )[:40],

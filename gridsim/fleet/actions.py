@@ -15,6 +15,8 @@ from gridsim.timeutil import iso
 
 KINDS = ("scheduled_service", "set_signal", "install_addon", "remove_addon", "return_online")
 OPEN = ("pending", "active")
+# `sim` is a row written before the two managers. New rows use `fleet` or `maintenance`.
+CASE_ACTORS = ("fleet", "maintenance", "llm", "api", "sim")
 
 # Rated kilowatts are assumptions. The disco is the component that meters them.
 ADDON_CATALOG = {
@@ -218,7 +220,7 @@ def apply_actions(sites: list[dict], actions: list[dict], now: datetime) -> list
                         "ends_at": iso(now),
                         "note": "Back online after scheduled service",
                         "payload": {"service_id": action["id"]},
-                        "actor": "sim",
+                        "actor": action.get("actor") or "maintenance",
                     }
                 )
             else:

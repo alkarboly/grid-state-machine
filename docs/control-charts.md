@@ -32,9 +32,9 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 | `soc_tracking` | Post `scheduled_service`. The reported charge has left the coulomb count. |
 | `dispatch_response` | Post `set_signal` hold, then `scheduled_service`. The battery is not doing what it was told. |
 
-`action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`. When the sim agent posts a step, the note leads with the alarm past ±3σ and then this procedure.
+`action` is catalog text. It is the same on every point of that chart, it rides on `GET /api/scene` as `codes`, and it is not a column in `control_points`. When the maintenance manager posts a step, the note leads with the alarm past ±3σ and then this procedure.
 
-Each code also has `steps`, the rows the sim agent posts when that chart's `alarm` is true. A warning does not post them. `frequency` has no steps.
+Each code also has `steps`, the rows the maintenance manager posts when that chart's `alarm` is true. A warning does not post them. `frequency` has no steps.
 
 | Code | `steps` |
 | --- | --- |

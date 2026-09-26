@@ -7,7 +7,7 @@ from datetime import timedelta
 from gridsim.fleet.actions import simulated_rate
 from gridsim.timeutil import iso, parse_ercot_ts
 
-# The overlay and the sim agent share this window: trailing actuals, then the
+# The overlay and the fleet manager share this window: trailing actuals, then the
 # short forecast. The dashboard's forecast array runs for days; we keep six hours.
 HISTORY = timedelta(hours=24)
 FORECAST = timedelta(hours=6)

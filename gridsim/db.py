@@ -113,7 +113,13 @@ CREATE TABLE IF NOT EXISTS fleet_rollups (
   load_kw REAL NOT NULL,
   stored_kwh REAL NOT NULL,
   capacity_kwh REAL NOT NULL,
-  mean_soc_pct REAL NOT NULL
+  mean_soc_pct REAL NOT NULL,
+  offline INTEGER NOT NULL DEFAULT 0,
+  solar_charge_kw REAL NOT NULL DEFAULT 0,
+  solar_kw REAL NOT NULL DEFAULT 0,
+  ev_kw REAL NOT NULL DEFAULT 0,
+  grid_in_kw REAL NOT NULL DEFAULT 0,
+  grid_out_kw REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS dispatch_ticks (
   ts TEXT PRIMARY KEY,
@@ -197,13 +203,22 @@ CREATE TABLE IF NOT EXISTS site_addons (
 _ROLLUP_COLUMNS = (
     "ts", "units", "pushing", "pulling", "holding", "alarms", "warnings",
     "discharge_kw", "charge_kw", "load_kw", "stored_kwh", "capacity_kwh", "mean_soc_pct",
+    "offline", "solar_charge_kw", "solar_kw", "ev_kw", "grid_in_kw", "grid_out_kw",
 )
 
 LOG_CAP = 20000
 OBSERVATION_CAP = 20000
 CONTROL_CAP = 60000
 
-_ADDED_COLUMNS = (("control_points", "component", "TEXT NOT NULL DEFAULT ''"),)
+_ADDED_COLUMNS = (
+    ("control_points", "component", "TEXT NOT NULL DEFAULT ''"),
+    ("fleet_rollups", "offline", "INTEGER NOT NULL DEFAULT 0"),
+    ("fleet_rollups", "solar_charge_kw", "REAL NOT NULL DEFAULT 0"),
+    ("fleet_rollups", "solar_kw", "REAL NOT NULL DEFAULT 0"),
+    ("fleet_rollups", "ev_kw", "REAL NOT NULL DEFAULT 0"),
+    ("fleet_rollups", "grid_in_kw", "REAL NOT NULL DEFAULT 0"),
+    ("fleet_rollups", "grid_out_kw", "REAL NOT NULL DEFAULT 0"),
+)
 
 _OBSERVATION_COLUMNS = (
     "ts", "site_id", "hour", "demand_mw", "demand_percentile", "storage_gen_mw", "lmp_usd_mwh",

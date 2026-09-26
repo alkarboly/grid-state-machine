@@ -94,34 +94,56 @@ def persist_sample(sites: list[dict], size: int) -> set[str]:
     return chosen
 
 
+def _addon_kw(metrics: dict, addon_id: str) -> float:
+    disco = metrics.get("disco") or {}
+    return sum(item.get("kw") or 0.0 for item in disco.get("addons") or [] if item.get("addon_id") == addon_id)
+
+
 def rollup(sites: list[dict], stamp: str) -> dict:
+    """Sum every unit. Counts add to the fleet. Power adds to the grid interchange."""
     counts = {"push": 0, "pull": 0, "hold": 0}
-    alarms = warnings = 0
+    alarms = warnings = offline = 0
     discharge = charge = load = stored = capacity = 0.0
+    grid_in = grid_out = solar = ev = solar_charge = 0.0
     for site in sites:
         counts[site.get("state", "hold")] = counts.get(site.get("state", "hold"), 0) + 1
-        base = (site.get("metrics") or {}).get("base") or {}
-        care = (site.get("metrics") or {}).get("maintenance") or {}
+        metrics = site.get("metrics") or {}
+        base = metrics.get("base") or {}
+        care = metrics.get("maintenance") or {}
+        grid = metrics.get("grid") or {}
         if care.get("alarm"):
             alarms += 1
         if care.get("warning"):
             warnings += 1
+        if base.get("availability") == "offline":
+            offline += 1
         discharge += base.get("discharge_kw") or 0.0
         charge += base.get("charge_kw") or 0.0
-        load += ((site.get("metrics") or {}).get("panel") or {}).get("load_kw") or 0.0
+        solar_charge += base.get("solar_charge_kw") or 0.0
+        load += (metrics.get("panel") or {}).get("load_kw") or 0.0
         stored += base.get("soc_kwh") or 0.0
         capacity += base.get("capacity_kwh") or 0.0
+        grid_in += grid.get("in_kw") or 0.0
+        grid_out += grid.get("out_kw") or 0.0
+        solar += _addon_kw(metrics, "solar")
+        ev += _addon_kw(metrics, "ev_charger")
     return {
         "ts": stamp,
         "units": len(sites),
         "pushing": counts["push"],
         "pulling": counts["pull"],
         "holding": counts["hold"],
+        "offline": offline,
         "alarms": alarms,
         "warnings": warnings,
         "discharge_kw": round(discharge, 2),
         "charge_kw": round(charge, 2),
+        "solar_charge_kw": round(solar_charge, 2),
         "load_kw": round(load, 2),
+        "solar_kw": round(solar, 2),
+        "ev_kw": round(ev, 2),
+        "grid_in_kw": round(grid_in, 2),
+        "grid_out_kw": round(grid_out, 2),
         "stored_kwh": round(stored, 2),
         "capacity_kwh": round(capacity, 2),
         "mean_soc_pct": round(100.0 * stored / capacity, 2) if capacity else 0.0,

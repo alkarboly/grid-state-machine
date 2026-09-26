@@ -28,6 +28,9 @@ const LAND = new THREE.Color(COLOR.land);
 const canvas = document.getElementById("map");
 const tip = document.getElementById("tip");
 const panel = document.getElementById("panel");
+const panelBody = document.getElementById("panel-body");
+const panelToggle = document.getElementById("panel-toggle");
+let panelOpen = true;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -173,13 +176,6 @@ const pick = flatRing(0.05, 0.062, 0xe7e1d6, 0.9);
 pick.renderOrder = 5;
 pick.visible = false;
 scene.add(pick);
-
-const arcs = new THREE.LineSegments(
-  new THREE.BufferGeometry(),
-  new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.75 }),
-);
-arcs.renderOrder = 2;
-scene.add(arcs);
 
 const constraintArcs = new THREE.LineSegments(
   new THREE.BufferGeometry(),
@@ -336,33 +332,6 @@ function renderStations(data) {
   }
 }
 
-// One arc, for the selected battery, tying it back to its metro. Thousands of
-// arcs is a hairball, and even one per flagged unit reads as noise rather than
-// information. The red rings already say which units need a person.
-function renderArcs(data) {
-  const positions = [];
-  const colors = [];
-  const site = data.sites.find((item) => item.id === selected);
-  const hub = site && hubs.get(site.metro);
-  if (site && hub) {
-    const curve = arcCurve(hub.point, project(site.lat, site.lon, NODE_Y));
-    const samples = curve.getPoints(20);
-    const tint = new THREE.Color(COLOR[modeOf(site)]);
-    for (let index = 0; index < samples.length - 1; index += 1) {
-      for (const step of [index, index + 1]) {
-        const point = samples[step];
-        const along = step / (samples.length - 1);
-        const shade = tint.clone().lerp(LAND, (1 - along) * 0.55);
-        positions.push(point.x, point.y, point.z);
-        colors.push(shade.r, shade.g, shade.b);
-      }
-    }
-  }
-  arcs.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  arcs.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  arcs.geometry.computeBoundingSphere();
-}
-
 function renderConstraints(edges) {
   const positions = [];
   for (const edge of edges || []) {
@@ -385,7 +354,6 @@ function renderScene(data) {
   for (const metro of data.metros || []) ensureHub(metro, metro.units / total);
   renderUnits(data);
   renderStations(data);
-  renderArcs(data);
   renderConstraints(data.edges);
   screen = null;
 }
@@ -398,16 +366,20 @@ function fmt(value, digits = 0) {
   });
 }
 
+function mw(kw) {
+  return `${fmt((kw || 0) / 1000, 2)} MW`;
+}
+
 function renderStats(data) {
   const grid = data.grid || {};
   const ercot = data.ercot || {};
   const fleet = data.fleet || {};
-  const net = (fleet.discharge_kw || 0) - (fleet.charge_kw || 0);
+  const interchange = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
   document.getElementById("stats").innerHTML = `
     <span>demand <b>${fmt(grid.demand_mw)} MW</b></span>
     <span>storage <b>${fmt(grid.storage_gen_mw)} MW</b></span>
     <span>fleet <b>${fmt(fleet.units)}</b></span>
-    <span>net <b>${net >= 0 ? "+" : ""}${fmt(net / 1000, 2)} MW</b></span>
+    <span>grid <b>${interchange >= 0 ? "+" : ""}${fmt(interchange / 1000, 2)} MW</b></span>
     <span>soc <b>${fmt(fleet.mean_soc_pct, 0)}%</b></span>
     <span>flagged <b>${fmt(fleet.alarms)}</b></span>
     <span>feed <b>${ercot.dashboard === "live" ? "live" : ercot.dashboard || "offline"}</b></span>
@@ -495,7 +467,7 @@ function usageBlock(site) {
 function renderPanel(data) {
   const sites = data.sites || [];
   if (!sites.length) {
-    panel.innerHTML = `<p class="muted">No batteries in this snapshot.</p>`;
+    panelBody.innerHTML = `<p class="muted">No batteries in this snapshot.</p>`;
     return;
   }
   const fleet = data.fleet || {};
@@ -544,13 +516,35 @@ function renderPanel(data) {
         .join("")}</ul>`
     : `<p class="muted">Arcs between stations appear once the ERCOT key is set and both station codes are in station_geo.json.</p>`;
 
-  panel.innerHTML = `
+  const gridNet = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
+  panelBody.innerHTML = `
     <h2>Fleet</h2>
-    <div class="sub">${fmt(fleet.units)} batteries · <span class="key push"><i></i>${fmt(fleet.pushing)} pushing</span> · <span class="key pull"><i></i>${fmt(fleet.pulling)} pulling</span> · <span class="key hold"><i></i>${fmt(fleet.holding)} holding</span>${
+    <div class="sub">${
       data.dispatch
-        ? ` · <span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
+        ? `<span class="key ${data.dispatch.signal}"><i></i>call ${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)}</span> · ${data.dispatch.source}`
         : ""
     }</div>
+    <div class="stack ledger">
+      ${row("units", fmt(fleet.units))}
+      ${row("pushing", fmt(fleet.pushing))}
+      ${row("pulling", fmt(fleet.pulling))}
+      ${row("holding", fmt(fleet.holding))}
+      ${row("offline", fmt(fleet.offline))}
+    </div>
+    <p class="muted note">${fmt(fleet.pushing)} + ${fmt(fleet.pulling)} + ${fmt(fleet.holding)} = ${fmt(fleet.units)}. Offline units are holding.</p>
+    <div class="stack ledger">
+      <h3>Power</h3>
+      ${row("grid in", mw(fleet.grid_in_kw))}
+      ${row("grid out", mw(fleet.grid_out_kw))}
+      ${row("house load", mw(fleet.load_kw))}
+      ${row("solar", mw(fleet.solar_kw))}
+      ${row("car chargers", mw(fleet.ev_kw))}
+      ${row("charge", mw(fleet.charge_kw))}
+      ${row("discharge", mw(fleet.discharge_kw))}
+      ${row("solar into batteries", mw(fleet.solar_charge_kw))}
+      ${row("stored", `${fmt(fleet.stored_kwh, 0)} kWh`)}
+    </div>
+    <p class="muted note">Grid in − out is ${mw(gridNet)}. That is load + chargers − solar + solar into batteries + charge − discharge.</p>
     <div class="chips">${chips}</div>
     ${marketBlock(data)}
     ${actionBlock(data)}
@@ -934,8 +928,15 @@ modal.addEventListener("close", () => {
   history.replaceState(null, "", location.pathname);
 });
 
+panelToggle.addEventListener("click", () => {
+  panelOpen = !panelOpen;
+  document.querySelector("main").classList.toggle("collapsed", !panelOpen);
+  panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
+  panelToggle.textContent = panelOpen ? "hide" : "fleet";
+});
+
 panel.addEventListener("click", (event) => {
-  if (!payload) return;
+  if (!payload || event.target.closest("#panel-toggle")) return;
   const chip = event.target.closest("[data-family]");
   if (chip) {
     family = chip.dataset.family;
@@ -1042,15 +1043,33 @@ function nearestOf(items, x, y, rect, limit) {
   return best;
 }
 
+function placeHash(next) {
+  if (modal.open) return;
+  if ((location.hash || "") === next) return;
+  history.replaceState(null, "", next || location.pathname);
+}
+
 function focusMetro(metro) {
   focusedStation = null;
   if (!metro) {
     focusPoint = { x: 0, z: 0.4, distance: 20 };
+    if (location.hash.startsWith("#metro/") || location.hash.startsWith("#station/")) placeHash("");
   } else {
     const point = project(metro.lat, metro.lon, 0);
     focusPoint = { x: point.x, z: point.z, distance: 1.7 };
+    placeHash(`#metro/${metro.id}`);
   }
   if (payload) renderScene(payload);
+}
+
+function stepBack() {
+  const station = (payload?.stations || []).find((item) => item.id === focusedStation);
+  const metro = station && (payload.metros || []).find((item) => item.id === station.metro);
+  if (metro) {
+    focusMetro(metro);
+    return;
+  }
+  focusMetro(null);
 }
 
 function focusStation(station) {
@@ -1058,9 +1077,7 @@ function focusStation(station) {
   const point = project(station.lat, station.lon, 0);
   focusPoint = { x: point.x, z: point.z, distance: 0.36 };
   if (payload) renderScene(payload);
-  if (location.hash !== `#station/${station.id}`) {
-    history.replaceState(null, "", `#station/${station.id}`);
-  }
+  placeHash(`#station/${station.id}`);
 }
 
 function pointerTarget(event) {
@@ -1173,7 +1190,7 @@ async function poll() {
       renderUnit();
     }
   } catch (error) {
-    panel.innerHTML = `<p class="muted">Scene unavailable. ${error.message}</p>`;
+    panelBody.innerHTML = `<p class="muted">Scene unavailable. ${error.message}</p>`;
   }
 }
 
@@ -1189,9 +1206,26 @@ function glide() {
   if (controls.target.distanceTo(GOAL) < 0.02) focusPoint = null;
 }
 
+const backButton = document.getElementById("back");
+
+function renderBack() {
+  const zoomed = Boolean(focusedStation) || (focusPoint && focusPoint.distance < 8) || viewDistance() < 8;
+  if (!zoomed || !payload) {
+    backButton.hidden = true;
+    return;
+  }
+  const station = (payload.stations || []).find((item) => item.id === focusedStation);
+  const metro = station && (payload.metros || []).find((item) => item.id === station.metro);
+  backButton.hidden = false;
+  backButton.textContent = metro ? `back to ${metro.name}` : "back to Texas";
+}
+
+backButton.addEventListener("click", stepBack);
+
 function frame() {
   resize();
   glide();
+  renderBack();
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);

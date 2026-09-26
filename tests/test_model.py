@@ -368,6 +368,16 @@ class ScaleTests(unittest.TestCase):
             round(sum(site["metrics"]["base"]["discharge_kw"] for site in sites), 2),
             places=1,
         )
+        # Grid interchange is the sum of every home: load, chargers, solar, and the battery.
+        parts = (
+            totals["load_kw"]
+            + totals["ev_kw"]
+            - totals["solar_kw"]
+            + totals["solar_charge_kw"]
+            + totals["charge_kw"]
+            - totals["discharge_kw"]
+        )
+        self.assertAlmostEqual(totals["grid_in_kw"] - totals["grid_out_kw"], parts, places=0)
 
     def test_control_rules(self):
         spec = CHARTS[0]

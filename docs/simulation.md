@@ -46,6 +46,8 @@ Solar and the car charger are optional add-ons. With neither installed, that is 
 
 Positive net is grid/meter in. Negative net is grid/meter out. The grid component records that true split. The meter adds a tight error (standard deviation 0.02 kW on the net). The disco adds a wider error (standard deviation 0.06 kW) because it is the Pi measurement, not the billing meter.
 
+The fleet ledger adds those same quantities across every unit. Pushing, pulling, and holding add up to the fleet. Grid in minus grid out adds up to house load plus car chargers minus solar plus solar that went into the batteries plus battery charge minus battery discharge. Solar used on site is the solar that did not charge the battery.
+
 Each battery has its own one-way efficiency `eta`, drawn between 0.94 and 0.975. State of charge moves with wall-clock time unless `SIM_TIME_SCALE` is set above 1. Scale multiplies elapsed time inside the battery integral only. Log timestamps stay on the wall clock.
 
 The coulomb count is `physical_soc_kwh`. The reported `soc_kwh` is that count plus a bias. A healthy battery has bias 0. `sat-0001` reports 2.5 kWh high, which is the energy-chart fault.
@@ -56,7 +58,7 @@ The call is what the fleet was asked to do. An external order is one call for ev
 
 An external order is `{signal, intensity}` with `signal` of `push`, `pull`, or `hold`. It arrives on `POST /api/dispatch` and is applied on the next tick, or it is the newest row in Supabase `dispatch_orders`, which the tick reads when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set. `auto` clears the order and the ladder takes over. Intensity is optional: when it is omitted, the ladder's own intensity for that signal is used. Hold always has intensity 0. While an order is in force, every home receives it. Load-zone prices do not split the fleet.
 
-`source` on the grid component is `external` for an order and `rules` for the ladder. The values the controller sees are one `dispatch_ticks` row per tick: demand, storage, frequency, the call that was applied, and what the fleet then did. `GET /api/dispatch` returns that row, the order waiting for the next tick, and whether the Supabase write succeeded. The browser does not receive the service-role key.
+`source` on the grid component is `external` for an order, `rules` for the ladder, and `action` while a `set_signal` row is in force on that home. The values the controller sees are one `dispatch_ticks` row per tick: demand, storage, frequency, the call that was applied, and what the fleet then did. `GET /api/dispatch` returns that row, the order waiting for the next tick, and whether the Supabase write succeeded. The browser does not receive the service-role key.
 
 The ladder, used whenever no order is set, is evaluated in this order:
 

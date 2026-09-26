@@ -36,4 +36,4 @@ ERCOT_SUBSCRIPTION_KEY=
 
 Do not commit `.env`.
 
-Contracts, the dispatch rules, and the open questions are in [docs/README.md](docs/README.md).
+Where the build stands, and the next slice, is [docs/status.md](docs/status.md). Contracts, the dispatch rules, and the open questions are in [docs/README.md](docs/README.md).

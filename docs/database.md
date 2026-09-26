@@ -1,6 +1,8 @@
 # Database
 
-Local development uses SQLite at `data/gridsim.db`. The column names are the contract for a later Supabase Postgres database. Types below are the SQLite types. On Postgres, integer primary keys become `bigint generated always as identity`, `in_control` and `islanded` become `boolean`, `rules_json` becomes `jsonb`, and timestamp text becomes `timestamptz`.
+Local development uses SQLite at `data/gridsim.db`. Types below are the SQLite types. On Postgres, integer primary keys become `bigint generated always as identity`, `in_control` and `islanded` become `boolean`, `rules_json` becomes `jsonb`, and timestamp text becomes `timestamptz`.
+
+`sites`, `grid_snapshots`, `raw_records`, `metric_logs`, `observations`, `control_points`, and `fleet_rollups` stay in this file. `dispatch_ticks` is written here and, when Supabase is configured, copied there. `dispatch_orders`, `market_ticks`, `unit_latest`, `usage_hours`, `unit_actions`, `addon_catalog`, and `site_addons` are the Supabase tables a controller uses. Which slice is next is [status.md](status.md).
 
 The browser does not connect to the database. The FastAPI process writes it and serves `/api/scene`.
 
@@ -58,9 +60,13 @@ The chart contract from [control-charts.md](control-charts.md). One row per batt
 
 One row per tick for the whole fleet, so aggregate history survives even though per-unit history is sampled.
 
-`ts`, `units`, `pushing`, `pulling`, `holding`, `alarms`, `warnings`, `discharge_kw`, `charge_kw`, `load_kw`, `stored_kwh`, `capacity_kwh`, `mean_soc_pct`.
+`ts`, `units`, `pushing`, `pulling`, `holding`, `offline`, `alarms`, `warnings`, `discharge_kw`, `charge_kw`, `solar_charge_kw`, `load_kw`, `solar_kw`, `ev_kw`, `grid_in_kw`, `grid_out_kw`, `stored_kwh`, `capacity_kwh`, `mean_soc_pct`.
 
-`pushing`, `pulling`, and `holding` count what the batteries did, not what they were told. They sum to `units`.
+`pushing`, `pulling`, and `holding` count what the batteries did, not what they were told. They sum to `units`. `offline` is how many of those units are out for service; they sit in `holding`.
+
+Every power column is the sum of that metric across the fleet. They close:
+
+`grid_in_kw − grid_out_kw = load_kw + ev_kw − solar_kw + solar_charge_kw + charge_kw − discharge_kw`.
 
 ## `dispatch_ticks`
 
@@ -68,7 +74,7 @@ One row per tick. This is the object a controller reads in order to decide the n
 
 `ts`, `demand_mw`, `demand_percentile`, `storage_gen_mw`, `frequency_hz`, `signal`, `intensity`, `source`, `zones_json`, `pushing`, `pulling`, `holding`, `discharge_kw`, `charge_kw`, `load_kw`, `mean_soc_pct`, `stored_kwh`, `alarms`.
 
-`signal` and `intensity` are the call that was applied on this tick. `source` is `rules` or `external`. `zones_json` is a JSON object of load zone to the signal that zone actually ran. Under an external order every zone has the same signal. Under the ladder, a zone with a price can differ.
+`signal` and `intensity` are the fleet call applied on this tick. `source` is `rules` or `external`. A home's own grid `source` can be `action` while a `set_signal` row is in force; that override stays on the unit and does not change this row. `zones_json` is a JSON object of load zone to the signal that zone actually ran. Under an external order every zone has the same signal. Under the ladder, a zone with a price can differ.
 
 The Postgres tables the bot and a controller share are created by the SQL files in `supabase/migrations`, in filename order. Local SQLite mirrors the column names. Row level security is enabled and there is no anon policy, so the browser cannot read them. Only the bot's service role can.
 

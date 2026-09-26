@@ -12,9 +12,13 @@
     <div class="stats" id="stats"></div>
   </header>
   <main>
+    <button type="button" id="back" hidden>back</button>
     <canvas id="map"></canvas>
     <aside id="panel">
-      <p class="muted">Loading the fleet…</p>
+      <button type="button" id="panel-toggle" aria-expanded="true" aria-controls="panel-body">hide</button>
+      <div id="panel-body">
+        <p class="muted">Loading the fleet…</p>
+      </div>
     </aside>
   </main>
   <div id="tip" hidden></div>

@@ -46,22 +46,19 @@ Every battery is one particle, coloured by what it actually did this tick: amber
 
 Left-drag orbits the camera, the wheel zooms, and right-drag pans the orbit target. The target stays inside a box around the state, so a long drag cannot lose Texas.
 
-The homes in a neighborhood sit on a hex around one modeled distribution substation. That substation, not the downtown dot, is the center of the patch. Hovering the city dot names the metro and how many substations it holds. Clicking it flies in. Hovering a substation diamond names it and how many units supply it. Clicking the diamond flies closer and dims every unit that supplies a different substation. `/#metro/austin` and `/#station/aus-s03` open those same views. The side panel metro list does too.
+The homes in a neighborhood sit on a hex around one modeled distribution substation. That substation, not the downtown dot, is the center of the patch. Hovering the city dot names the metro and how many substations it holds. Clicking it flies in. Hovering a substation diamond names it and how many units supply it. Clicking the diamond flies closer and dims every unit that supplies a different substation. `/#metro/austin` and `/#station/aus-s03` open those same views. The side panel metro list does too. Once the camera is inside a city, a **back** button sits on the map. From a substation it returns to that city. From a city, or from a wheel zoom with no substation chosen, it returns to the whole state.
 
 Metro hubs are separate dots, sized by how many batteries they hold. Only metros holding at least 3% of the fleet are labelled, which keeps five or six names on the map instead of twenty-one.
 
-Two kinds of arc are drawn, and they mean different things:
+A constraint arc connects two stations named by a live ERCOT binding constraint. It is drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. The pale ring marks the selected unit.
 
-- **Exception arcs** connect the selected battery to its metro hub. One arc per battery would be a hairball at this scale, and one per flagged unit reads as noise; the red rings already mark those. The arc takes the unit's colour.
-- **Constraint arcs** connect two stations named by a live ERCOT binding constraint. They are drawn only when the subscription key is set and both station codes appear in `data/station_geo.json`. No arc is drawn between metro hubs, because ERCOT data does not support that topology.
-
-Choosing a maintenance family in the side panel dims every battery that is not out of limits in that family, so the map answers one question at a time. The side panel is an exception queue and a metro list rather than a roster of every unit; clicking a metro flies the camera to it.
+The side panel is the fleet ledger. Its counts and kilowatts are the sum of every unit, and the state counts add up to the fleet. A control on the panel's edge hides it so the map can use the full width. Choosing a maintenance family dims every battery that is not out of limits in that family. The rest of the panel is an exception queue and a metro list; clicking a metro flies the camera to it.
 
 Hit testing projects all 3000 positions to screen space once per camera move and caches them, so hovering stays smooth.
 
 ## Unit view
 
-The side panel is the fleet roster. Clicking a node on the map or a row in the roster opens one unit.
+Clicking a node on the map or a row in the exception queue opens one unit.
 
 The unit view is a one-line diagram of the chain in [contracts.md](contracts.md): grid, meter, disco, panel, base. The connectors carry the measured flow, so the arrow direction is import or export and the dash speed and line weight follow the kilowatts. The panel branch leaves the disco sideways because house load is the one leg that never reverses.
 
@@ -77,7 +74,7 @@ The open unit lives in the URL fragment, so `/#hou-0002` is a link straight to o
 
 `data/gridsim.db` holds the tables in [database.md](database.md): raw ERCOT payloads, one utility snapshot per interval, one identity row per battery, component logs, a flat observation row for machine learning, and one control-chart point per battery per chart per tick.
 
-The database file is local and gitignored. Column names are the shape intended for Supabase Postgres. Restarting the process creates a new fleet state; rows already on disk remain until the cap drops the oldest.
+The database file is local and gitignored. The controller tables are also created in Supabase by the migrations in [deploy.md](deploy.md). Restarting the process creates a new fleet state; rows already on disk remain until the cap drops the oldest. Open actions and installed add-ons are reloaded from SQLite, then from Supabase when those credentials are set.
 
 ## Run
 

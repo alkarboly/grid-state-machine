@@ -4,6 +4,7 @@ Source of truth for names, shapes, and flows. If code and these pages disagree, 
 
 | Doc | What it decides |
 | --- | --- |
+| [status.md](status.md) | What is built, what is only in the working tree, and the next slice |
 | [architecture.md](architecture.md) | Layers, process, and the path from ERCOT to the map |
 | [ercot-sources.md](ercot-sources.md) | Which ERCOT feeds are live, which need a key, and the raw fields |
 | [contracts.md](contracts.md) | Timestamped metrics for grid, meter, disco, panel, base, and maintenance |

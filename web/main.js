@@ -81,6 +81,8 @@ const STACK = {
   rowStep: 0.0064,
   laneRows: 8,
   holdRows: 6,
+  holdDrift: 0.0018,
+  holdLift: 0.0011,
 };
 
 function project(lat, lon, y = 0) {
@@ -108,22 +110,31 @@ function buildMap() {
   scene.add(border);
 }
 
-function labelSprite(text) {
-  const label = text.toUpperCase();
+function labelSprite(text, options = {}) {
+  const lines = String(text || "").toUpperCase().split(/\n+/).filter(Boolean);
+  const size = options.size || 44;
+  const weight = options.weight || 600;
+  const padX = options.padX ?? 28;
+  const padY = options.padY ?? 14;
+  const lineHeight = options.lineHeight || 1.04;
   const element = document.createElement("canvas");
   const ctx = element.getContext("2d");
-  const font = "600 44px 'Segoe UI', sans-serif";
+  const font = `${weight} ${size}px 'Segoe UI', sans-serif`;
   ctx.font = font;
-  const padX = 28;
-  const width = Math.ceil(ctx.measureText(label).width) + padX * 2;
-  const height = 80;
+  const widest = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+  const width = Math.ceil(widest) + padX * 2;
+  const height = Math.ceil(size * lineHeight * Math.max(lines.length, 1)) + padY * 2;
   element.width = width;
   element.height = height;
   ctx.font = font;
   ctx.fillStyle = "#8d887f";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(label, width / 2, height / 2);
+  const step = size * lineHeight;
+  const start = height / 2 - (step * (lines.length - 1)) / 2;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, width / 2, start + index * step);
+  });
   const texture = new THREE.CanvasTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(
@@ -131,6 +142,13 @@ function labelSprite(text) {
   );
   sprite.userData.aspect = width / height;
   return sprite;
+}
+
+function stackStationName(name) {
+  const text = String(name || "");
+  const match = text.match(/^(.+?)\s+(\d+)$/);
+  if (!match) return text;
+  return `${match[1]}\n${match[2]}`;
 }
 
 function fitLabel(sprite, height) {
@@ -306,7 +324,7 @@ function stackYard(data) {
     ? project(metro.lat, metro.lon, NODE_Y)
     : stations.reduce((sum, station) => sum.add(project(station.lat, station.lon, NODE_Y)), new THREE.Vector3())
       .multiplyScalar(1 / stations.length);
-  const rowGap = Math.max(0.011, Math.min(0.037, 0.5 / Math.max(stations.length, 1)));
+  const rowGap = Math.max(0.018, Math.min(0.058, 0.9 / Math.max(stations.length, 1)));
   const span = rowGap * Math.max(stations.length - 1, 0);
   const stationRows = new Map();
   stations.forEach((station, index) => {
@@ -421,9 +439,15 @@ function renderUnits(data) {
       const targetZ = yard.targetZ[index];
       x = point.x + (targetX - point.x) * unfold;
       z = point.z + (targetZ - point.z) * unfold;
-      if (unfold > 0.75 && (site.state === "pull" || site.state === "push")) {
-        const pulse = Math.abs(Math.sin(now + index * 0.61)) * 0.0022 * unfold;
-        x += site.state === "push" ? pulse : -pulse;
+      if (unfold > 0.75) {
+        const wave = now + index * 0.61;
+        if (site.state === "pull" || site.state === "push") {
+          const pulse = Math.abs(Math.sin(wave)) * 0.0022 * unfold;
+          x += site.state === "push" ? pulse : -pulse;
+        } else {
+          z += Math.sin(wave * 0.65) * STACK.holdDrift * unfold;
+          y += (0.0004 + Math.abs(Math.sin(wave * 0.5)) * STACK.holdLift) * unfold;
+        }
       }
     } else if (focusedStation) {
       const delay = (drawn % 20) / 20 * 0.28;
@@ -451,7 +475,7 @@ function renderUnits(data) {
     drawn += 1;
     if (site.id === selected) {
       marked = true;
-      if (focusedStation) {
+      if (focusedStation || yard) {
         pick.visible = false;
       } else {
         const halfWorld = Math.max(viewDistance(), 0.2) * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
@@ -480,7 +504,12 @@ function ensureStation(station) {
   mark.rotation.x = -Math.PI / 2;
   mark.rotation.z = Math.PI / 4;
   group.add(mark);
-  const label = labelSprite(station.name);
+  const label = labelSprite(stackStationName(station.name), {
+    size: 38,
+    padX: 20,
+    padY: 12,
+    lineHeight: 1.14,
+  });
   label.center.set(0.5, 1);
   label.position.set(0, 0.04, 0.045);
   label.visible = false;
@@ -518,9 +547,12 @@ function renderStations(data) {
       entry.group.visible = unfold > 0.08;
       const size = (0.009 + Math.min(0.007, station.units / 16000)) * unfold;
       entry.mark.scale.set(size, size, 1);
+      entry.mark.visible = false;
       entry.mark.material.color.setHex(0xe4e8ef);
-      fitLabel(entry.label, Math.min(0.095, 0.02 + dist * 0.01));
-      entry.label.visible = labelsOn && unfold > 0.62;
+      entry.label.center.set(0, 0.5);
+      entry.label.position.set(0.018, 0.026, 0);
+      fitLabel(entry.label, Math.min(0.094, 0.022 + dist * 0.01));
+      entry.label.visible = labelsOn && unfold > 0.5;
     }
     return;
   }
@@ -543,7 +575,10 @@ function renderStations(data) {
     entry.group.visible = show && near < reach + 0.15 && mark > 0.04;
     const size = Math.max(0.006, Math.min(0.014, 0.004 * dist)) * mark;
     entry.mark.scale.set(size, size, 1);
+    entry.mark.visible = true;
     entry.mark.material.color.setHex(0xd5dbe2);
+    entry.label.center.set(0.5, 1);
+    entry.label.position.set(0, 0.04, 0.045);
     fitLabel(entry.label, Math.min(0.11, 0.028 * dist));
     entry.label.visible = show && dist < 4.5 && near < reach && mark > 0.82;
   }
@@ -1948,8 +1983,9 @@ function paintDecisions() {
     decisionBox.innerHTML = `<p class="decision">Waiting for a decision.</p>`;
     return;
   }
-  const stick = decisionBox.scrollHeight - decisionBox.scrollTop - decisionBox.clientHeight < 28;
-  decisionBox.innerHTML = decisionRows.map((row) => {
+  const stick = decisionBox.scrollTop < 28;
+  const ordered = decisionRows.slice().reverse();
+  decisionBox.innerHTML = ordered.map((row) => {
     const tone = decisionTone(row.text);
     const site = row.site
       ? `<button type="button" data-site="${escapeHtml(row.site)}">${escapeHtml(row.site)}</button>`
@@ -1959,7 +1995,7 @@ function paintDecisions() {
       : `<b class="decision-step">${escapeHtml(row.text)}</b>`;
     return `<p class="decision" title="${escapeHtml(row.text)}"><span class="decision-time">${escapeHtml(row.time)}</span><span>${escapeHtml(row.who)}</span>${site}${body}</p>`;
   }).join("");
-  if (stick) decisionBox.scrollTop = decisionBox.scrollHeight;
+  if (stick) decisionBox.scrollTop = 0;
 }
 
 function ingestDecisions(data) {

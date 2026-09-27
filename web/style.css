@@ -579,6 +579,26 @@ h2 {
   overflow-wrap: anywhere;
 }
 .alert.case-row .case-step { color: var(--ink); font-size: 12px; }
+.alert.case-row .case-evidence {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.case-payload {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: #101114;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  text-align: left;
+}
 .alert.case-row .case-est { color: var(--muted); font-size: 11px; }
 .alert.case-row.status-pending { border-left-color: var(--watch); }
 .alert.case-row.status-active { border-left-color: var(--pull); }

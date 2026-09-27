@@ -33,7 +33,7 @@ from gridsim.fleet.actions import (
     merge_actions,
     new_action,
 )
-from gridsim.llm import propose
+from gridsim.llm import propose, pull_site
 from gridsim.sync import (
     pull_actions,
     pull_addons,
@@ -54,7 +54,7 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
 )
-from gridsim.fleet.agent import audit, day_shape, record_toggle
+from gridsim.fleet.agent import audit, close_model_ticket, day_shape, open_model_tickets, record_toggle
 from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
 from gridsim.fleet.simulate import (
     build_sites,
@@ -215,6 +215,45 @@ def _action_stamp(action: dict) -> tuple:
         payload.get("stage"),
         tuple((item.get("stage"), item.get("result")) for item in steps if isinstance(item, dict)),
     )
+
+
+def _resolve_model_tickets(fleet: Fleet, model_ids: list[str], now) -> list[dict]:
+    """Pull each open visit from this API server and close it from the contract."""
+    if not model_ids:
+        return []
+    pulled: dict[str, dict] = {}
+    with fleet._lock:
+        wanted = {
+            action["id"]: action.get("site_id")
+            for action in fleet.actions
+            if action.get("id") in model_ids
+        }
+    for action_id, site_id in wanted.items():
+        if not site_id:
+            continue
+        detail = pull_site(str(site_id))
+        if detail is not None:
+            pulled[action_id] = detail
+    if not pulled:
+        return []
+    resolved: list[dict] = []
+    with fleet._lock:
+        by_id = {action["id"]: action for action in fleet.actions}
+        sites = {site["id"]: site for site in fleet.sites}
+        for action_id, detail in pulled.items():
+            ticket = by_id.get(action_id)
+            site = sites.get(detail.get("id"))
+            if ticket is None or site is None:
+                continue
+            online = close_model_ticket(site, ticket, detail, now)
+            if online is None:
+                continue
+            fleet.actions.append(online)
+            resolved.append(ticket)
+            resolved.append(online)
+        if resolved:
+            fleet._trim_actions()
+    return resolved
 
 
 def _maintenance_row(action: dict) -> bool:
@@ -524,6 +563,7 @@ class Fleet:
         usage_rows: list[dict] = []
         dirty_actions: list[dict] = []
         addon_sites: list[dict] = []
+        model_ids: list[str] = []
         with self._lock:
             if due:
                 self._llm_at = now
@@ -596,9 +636,17 @@ class Fleet:
             dirty_actions = [
                 action for action in self.actions if before_stamp.get(action["id"]) != _action_stamp(action)
             ]
+            model_ids = [action["id"] for action in open_model_tickets(self.actions)]
             addon_sites = [
                 site for site in sites if tuple(site.get("addons") or []) != before_addons.get(site["id"], ())
             ]
+        resolved = _resolve_model_tickets(self, model_ids, now)
+        if resolved:
+            seen = {action.get("id") for action in dirty_actions}
+            for action in resolved:
+                if action.get("id") not in seen:
+                    dirty_actions.append(action)
+                    seen.add(action.get("id"))
         publish_error = None
         if self._conn and row and market:
             if logs:

@@ -4,7 +4,16 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from gridsim.fleet.actions import market_rate
-from gridsim.fleet.agent import RESOLUTION, audit, choose_unit_signal, day_shape, expected_kw, record_toggle, typical_kw
+from gridsim.fleet.agent import (
+    RESOLUTION,
+    audit,
+    choose_unit_signal,
+    close_model_ticket,
+    day_shape,
+    expected_kw,
+    record_toggle,
+    typical_kw,
+)
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import build_sites, tick_sites
 
@@ -103,6 +112,38 @@ class AgentTests(unittest.TestCase):
         )
         self.assertEqual(ticket["payload"]["escalation"][-1]["actor"], "llm")
         self.assertIn("soc 55", ticket["note"])
+
+    def test_a_model_pull_closes_the_ticket_as_done(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare({"base_temp"})
+        site["armed"] = ["base_temp"]
+        site["metrics"] = {"base": {"soc_pct": 40, "temp_c": 49.0}, "panel": {"load_kw": 1.2}}
+        rows = audit([site], [], _grid(0.5), {}, now)
+        ticket = rows[0]
+        spec = next(item for item in CHARTS if item["chart_id"] == "base_temp")
+        detail = {
+            "id": site["id"],
+            "metrics": site["metrics"],
+            "charts": [{
+                "chart_id": "base_temp",
+                "z": 11.286,
+                "measured": 49.0,
+                "expected": 33.2,
+                "action": spec["action"],
+            }],
+        }
+        online = close_model_ticket(site, ticket, detail, now)
+        self.assertEqual(ticket["status"], "done")
+        self.assertEqual(ticket["payload"]["decision"]["result"], "done")
+        self.assertEqual(ticket["payload"]["decision"]["action"], spec["action"])
+        self.assertEqual(ticket["payload"]["pull"]["method"], "GET")
+        self.assertEqual(ticket["payload"]["pull"]["path"], "/api/site/aus-0099")
+        self.assertEqual(ticket["payload"]["pull"]["evidence"]["z"], 11.286)
+        self.assertEqual(ticket["payload"]["escalation"][-1]["result"], "done")
+        self.assertEqual(ticket["payload"]["escalation"][-1]["actor"], "llm")
+        self.assertEqual(site["armed"], [])
+        self.assertEqual(online["kind"], "return_online")
+        self.assertIsNone(close_model_ticket(site, ticket, detail, now))
 
     def test_a_warning_posts_nothing(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)

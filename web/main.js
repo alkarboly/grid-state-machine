@@ -1175,6 +1175,30 @@ function stepText(item) {
   return `${item.stage || "step"} ${bit}${item.result || ""}`.trim();
 }
 
+function evidenceText(evidence) {
+  if (!evidence) return "";
+  const bits = [];
+  const fields = [
+    ["z", "z", ""],
+    ["measured", "measured", ""],
+    ["expected", "expected", ""],
+    ["soc_pct", "soc", "%"],
+    ["temp_c", "temp", " °C"],
+    ["load_kw", "load", " kW"],
+  ];
+  for (const [key, label, suffix] of fields) {
+    if (evidence[key] == null || evidence[key] === "") continue;
+    bits.push(`${label} ${evidence[key]}${suffix}`);
+  }
+  return bits.join(" · ");
+}
+
+function payloadBlock(payload) {
+  if (!payload || !payload.pull) return "";
+  const body = { pull: payload.pull, decision: payload.decision || null };
+  return `<pre class="case-payload">${escapeHtml(JSON.stringify(body, null, 2))}</pre>`;
+}
+
 function stepList(payload) {
   const steps = (payload || {}).escalation || [];
   if (!steps.length) return "";
@@ -1203,6 +1227,8 @@ function caseCard(entry, opts = {}) {
     const estimateText = estimateLabel(payload.estimate_min);
     const estimate = estimateText ? `<span class="case-est">est ${escapeHtml(estimateText)}</span>` : "";
     const steps = stepList(payload);
+    const evidence = evidenceText((payload.pull && payload.pull.evidence) || payload.evidence);
+    const evidenceLine = evidence ? `<span class="case-evidence">${escapeHtml(evidence)}</span>` : "";
     const whoLine = !steps && named ? `<span class="escalation">${escapeHtml(named)}</span>` : "";
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
       ${pill || `<span class="status">case</span>`}
@@ -1212,6 +1238,8 @@ function caseCard(entry, opts = {}) {
       ${estimate}
       ${whoLine}
       ${steps}
+      ${evidenceLine}
+      ${payloadBlock(payload)}
     </button>`;
   }
   const site = opts.site === false
@@ -2395,13 +2423,19 @@ function ingestDecisions(data) {
     if (steps.length) {
       steps.forEach((step, index) => {
         const actor = step.actor || action.actor;
+        const evidence = step.result === "done"
+          ? evidenceText(((action.payload || {}).pull || {}).evidence || (action.payload || {}).evidence)
+          : "";
+        const text = evidence
+          ? `${title} · ${stepText(step)} · ${evidence}`
+          : `${title} · ${stepText(step)}`;
         incoming.push({
           key: `act:${action.id}:step:${index}:${step.result}:${actor}`,
           ts: step.ts || action.ts || "",
           time: (step.ts || action.ts || "").slice(11, 19),
           who: whoLabel(actor),
           site: action.site_id || "",
-          text: `${title} · ${stepText(step)}`,
+          text,
         });
       });
       continue;
@@ -2451,7 +2485,7 @@ const ARCH_ROLE = {
   map: "The browser. It polls this origin for /api/scene. It never opens SQLite or Supabase.",
   sqlite: "data/gridsim.db on the service disk. Render's disk is ephemeral. This file keeps sites, raw_records, grid_snapshots, metric_logs, observations, control_points, fleet_rollups, and a copy of dispatch_ticks. Identity stays here. There is no sites table in Supabase.",
   supabase: "A separate hosted Postgres project. It has not been created from this repo yet. The controller tables live here: market_ticks, unit_latest, usage_hours, dispatch_orders, dispatch_ticks, unit_actions, addon_catalog, and site_addons. Row level security is on and there is no anon policy, so the browser cannot read them.",
-  llm: "A remote model does not sit inside the tick. When LLM_URL is set, this process POSTs the read model and turns the reply into unit_actions. The model may also insert those rows in Supabase. The next tick applies them and does not wait. LLM_URL is unset, so no remote model is called. An OpenAI note on an escalated ticket is a separate call and does not use LLM_URL.",
+  llm: "A remote model does not sit inside the tick. An escalated maintenance ticket is resolved here: this process pulls GET /api/site/{id}, keeps that payload as evidence, and closes the ticket done using the chart's action sentence. When LLM_URL is set, this process also POSTs the fleet read model and turns the reply into unit_actions. LLM_URL is unset, so that fleet call is not made. An OpenAI note on an escalated ticket is a separate call and does not use LLM_URL.",
 };
 let viewName = "fleet";
 let archFocus = "scene";

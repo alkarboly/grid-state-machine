@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from gridsim.fleet.actions import OPEN, market_rate, new_action
-from gridsim.llm import write_ticket
+from gridsim.llm import site_evidence, write_ticket
 from gridsim.timeutil import iso
 from gridsim.fleet.charts import CHARTS, mean_sigma, subgroup_size
 from gridsim.fleet.simulate import HOUR_MEAN_KW, panel_kw
@@ -433,6 +433,59 @@ def _escalate(site, ticket, chart, spec, policy, now) -> None:
     ticket["status"] = "active"
     ticket["ends_at"] = iso(now + timedelta(minutes=policy["service_min"]))
     ticket["note"] = _agent_note(site, spec["chart_id"], gathered, reset_min)
+
+
+def open_model_tickets(actions: list[dict]) -> list[dict]:
+    """Escalated visits the model still has to close from a site pull."""
+    found = []
+    for action in actions:
+        if action.get("kind") != "scheduled_service" or action.get("actor") != "llm":
+            continue
+        if action.get("status") not in OPEN:
+            continue
+        payload = action.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("stage") != "ticket" or payload.get("decision") or not payload.get("chart_id"):
+            continue
+        found.append(action)
+    return found
+
+
+def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) -> dict | None:
+    """Close one visit from a GET /api/site/{id} body. The chart action is the decision."""
+    if detail.get("id") != site.get("id") or detail.get("id") != ticket.get("site_id"):
+        return None
+    payload = ticket.setdefault("payload", {})
+    chart_id = payload.get("chart_id")
+    if not chart_id or payload.get("decision"):
+        return None
+    evidence = site_evidence(detail, chart_id)
+    if not evidence or not evidence.get("action"):
+        return None
+    payload["pull"] = {
+        "method": "GET",
+        "path": f"/api/site/{site['id']}",
+        "evidence": evidence,
+    }
+    payload["evidence"] = evidence
+    payload["gathered"] = {
+        key: evidence.get(key)
+        for key in ("z", "measured", "expected", "soc_pct", "temp_c", "load_kw")
+    }
+    payload["decision"] = {"result": "done", "action": evidence["action"]}
+    _append_step(ticket, "ticket", payload.get("estimate_min"), "done", "llm", now)
+    ticket["status"] = "done"
+    ticket["actor"] = "llm"
+    ticket["note"] = evidence["action"]
+    site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
+    return _return_online(
+        site["id"],
+        now,
+        "llm",
+        ticket["id"],
+        note="Back online after the model closed the ticket",
+    )
 
 
 def record_toggle(site: dict, actions: list[dict], chart_id: str, armed: bool, now: datetime) -> list[dict]:

@@ -2,6 +2,8 @@
 
 A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
+An escalated maintenance ticket is closed by a pull on this API server, not by `LLM_URL`. After the maintenance manager sets `stage` to `ticket` and `actor` to `llm`, the tick thread calls `GET /api/site/{id}` on this process (`GRIDSIM_ORIGIN` if set, otherwise `http://127.0.0.1` and `PORT`, default 8000). The model may use only that home's chart for the ticket and the readings below. The chart's `action` sentence is the decision. The same ticket is marked `done`, the chart is disarmed, and the bot writes `return_online`. The service estimate stays on the payload. The case does not wait out that estimate. A failed pull leaves the ticket open and retries on the next tick.
+
 Two managers do sit in the tick. After the charts are written, the maintenance manager opens or escalates a ticket, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). When a reset does not clear the fault, the in-tick agent writes the visit with `actor` `llm`. If `OPENAI_API_KEY` is set, that note is two sentences from `OPENAI_MODEL` (default `gpt-4o-mini`) using the gathered readings. A missing key or a failed call keeps the gathered sentence. That call does not use `LLM_URL`. `LLM_URL` is still optional. A remote model remains a third writer and is not either manager.
 
 The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
@@ -44,7 +46,7 @@ Insert into `unit_actions` with a new hex `id`. `POST /api/actions` assigns the 
 
 | kind | payload | What the next tick does |
 | --- | --- | --- |
-| `scheduled_service` | `{}`, or `{chart_id, stage, estimate_min, escalation, gathered}` | Base goes `offline` until `ends_at`. A missing end is 1–2 hours. A `reset` stage stays open so the maintenance manager can clear it or escalate the same row. `escalation` is `{stage, estimate_min, result, actor, ts}`, oldest first. New steps are appended. A finished `ticket` disarms that chart. The bot writes `return_online`. |
+| `scheduled_service` | `{}`, or `{chart_id, stage, estimate_min, escalation, gathered, pull, decision}` | Base goes `offline` until `ends_at`, or until a model decision sets `decision.result` to `done`. A missing end is 1–2 hours. A `reset` stage stays open so the maintenance manager can clear it or escalate the same row. `escalation` is `{stage, estimate_min, result, actor, ts}`, oldest first. New steps are appended. A finished `ticket` disarms that chart. The bot writes `return_online`. |
 | `set_signal` | `{"signal": "hold", "intensity": 0}` | That home's call changes until `ends_at`. Default window is one hour. `signal` is `push`, `pull`, or `hold`. |
 | `install_addon` | `{"addon_id": "solar"}` | Disco starts metering `solar` or `ev_charger`. |
 | `remove_addon` | `{"addon_id": "solar"}` | Disco stops metering it. |
@@ -52,6 +54,35 @@ Insert into `unit_actions` with a new hex `id`. `POST /api/actions` assigns the 
 Do not insert `return_online`. The simulator does that when a service window ends.
 
 `POST /api/actions` takes the same fields without `id`, `status`, or `actor`. The bot assigns those.
+
+## Maintenance pull
+
+`GET /api/site/{id}` is the read. The stored payload is the slice the decision is allowed to use:
+
+```json
+{
+  "pull": {
+    "method": "GET",
+    "path": "/api/site/aus-0004",
+    "evidence": {
+      "chart_id": "base_temp",
+      "z": 11.286,
+      "measured": 49.0,
+      "expected": 33.2,
+      "soc_pct": 55,
+      "temp_c": 32.0,
+      "load_kw": 0.8,
+      "action": "Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings."
+    }
+  },
+  "decision": {
+    "result": "done",
+    "action": "Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings."
+  }
+}
+```
+
+`evidence.action` is the chart catalog sentence from [control-charts.md](control-charts.md). `decision.action` copies it. `decision.result` is `done`. The escalation step for that close is `{stage: "ticket", result: "done", actor: "llm"}`. Maintenance manager shows the row as a done case, with the evidence line and this payload. The decisions log shows that step, the evidence, and `model`.
 
 ## Optional HTTP call
 

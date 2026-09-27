@@ -1,6 +1,6 @@
 # grid state machine
 
-Live at https://gridstatemachine.com/. ERCOT demand and storage, joined to a simulated fleet of Base-style home batteries. The map is a minimal Three.js view of those homes.
+Live at https://gridstatemachine.com/. 
 
 ## Submission
 

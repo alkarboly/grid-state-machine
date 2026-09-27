@@ -1048,8 +1048,68 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 }
 
+function callVerb(signal) {
+  if (signal === "push") return "Discharge to the grid";
+  if (signal === "pull") return "Charge from the grid";
+  return "Hold";
+}
+
+function callDepth(signal, intensity) {
+  if (signal === "hold") return "";
+  const n = Number(intensity);
+  if (!(n > 0) || n <= 0.4) return "light";
+  if (n <= 0.7) return "medium";
+  return "strong";
+}
+
+function callWho(source) {
+  if (source === "external") return "posted order";
+  if (source === "action") return "this home";
+  return "ladder";
+}
+
+function describeCall(dispatch) {
+  if (!dispatch || !dispatch.signal) return "—";
+  const verb = callVerb(dispatch.signal);
+  const who = callWho(dispatch.source);
+  const depth = callDepth(dispatch.signal, dispatch.intensity);
+  if (!depth) return `${verb} · ${who}`;
+  return `${verb} · ${depth} · ${who}`;
+}
+
+function describeBecause(clause) {
+  const line = clause.line || "";
+  const storage = line.match(/storage (-?\d+) MW/);
+  const demand = line.match(/demand percentile ([\d.]+)/);
+  if (line.includes("ladder is not running")) return "A posted order is running. The ladder is off.";
+  if (storage && line.includes("≥")) {
+    return `ERCOT batteries are discharging ${fmt(Number(storage[1]), 0)} MW, above 200 MW`;
+  }
+  if (storage && line.includes("≤") && !line.includes("inside")) {
+    return `ERCOT batteries are charging ${fmt(Math.abs(Number(storage[1])), 0)} MW, past −200 MW`;
+  }
+  if (line.includes("inside ±")) {
+    const pct = demand ? demand[1] : "";
+    return `Texas demand is mid-range${pct ? ` (${pct} of today)` : ""}, and ERCOT storage is quiet`;
+  }
+  if (demand && line.includes("≥")) {
+    return `Texas demand is high (${demand[1]} of today), above 0.75`;
+  }
+  if (demand && line.includes("≤")) {
+    return `Texas demand is low (${demand[1]} of today), below 0.35`;
+  }
+  if (line.includes("load-zone price") && line.includes("≥")) {
+    return "This zone's price is high enough to discharge";
+  }
+  if (line.includes("load-zone price") && line.includes("≤")) {
+    return "This zone's price is low enough to charge";
+  }
+  return line;
+}
+
 function markLine(clause) {
-  let line = escapeHtml(clause.line || "");
+  const text = describeBecause(clause);
+  let line = escapeHtml(text);
   const mark = escapeHtml(clause.threshold || "");
   if (mark && line.includes(mark)) line = line.replace(mark, `<mark>${mark}</mark>`);
   return `<p class="because">${line}</p>`;
@@ -1059,9 +1119,7 @@ function nowBlock(data) {
   const market = data.market || {};
   const basis = market.rate_basis === "ercot" ? "live" : "simulated";
   const shape = data.shape && data.shape.shape ? data.shape.shape : "—";
-  const call = data.dispatch
-    ? `${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)} · ${data.dispatch.source}`
-    : "—";
+  const call = describeCall(data.dispatch);
   const because = (data.dispatch && data.dispatch.because) || [];
   const visit = modelVisit(data);
   const model = visit
@@ -2517,8 +2575,8 @@ function paintDecisions() {
 function ingestDecisions(data) {
   const incoming = [];
   for (const call of data.calls || []) {
-    const why = (call.because || []).map((item) => item.line).filter(Boolean).join(" · ");
-    const text = why ? `${call.signal || "hold"} · ${why}` : (call.signal || "hold");
+    const why = (call.because || []).map((item) => describeBecause(item)).filter(Boolean).join(" · ");
+    const text = why ? `${callVerb(call.signal || "hold")} · ${why}` : callVerb(call.signal || "hold");
     incoming.push({
       key: `call:${call.ts}:${call.who}:${call.signal}:${why}`,
       ts: call.ts || "",
@@ -2585,7 +2643,7 @@ const ARCH_ROLE = {
   ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
   gateway: "On-premises gateway, simulated telemetry collection.",
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
-  machine: "The state machine runs on the API server. It tells the fleet to push, pull, or hold. When a chart alarms, it opens a maintenance visit. When a home is set to dispatch, it posts a price call. Those steps show up in the decisions log as [state machine].",
+  machine: "The state machine runs on the API server. Push means discharge to the grid. Pull means charge from the grid. Hold does neither. A light call reaches about a third of the homes; a strong call reaches almost all of them. The ladder picks that from ERCOT demand and whether Texas batteries are discharging. Those steps show up in the decisions log as [state machine].",
   map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
   sqlite: "The API writes this file every tick. It is data/gridsim.db on the service disk. Identity, ERCOT payloads, logs, dispatch, and the controller tables live here. There is no sites table in Supabase.",
   supabase: "Hosted Postgres. Only the API talks to it. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
@@ -2659,7 +2717,7 @@ function archLive(data) {
       ercot: ["Demand and short forecast", `${demand} · ${priceWord}`],
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
-      machine: ["Tells the fleet to push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
+      machine: [callVerb(signal), `${callDepth(signal, dispatch.intensity) || "idle"} · ${callWho(dispatch.source || "rules")}`],
       map: ["Map in the browser", `${flow} ${fmt(mw, 2)} MW`],
       sqlite: ["Written every tick", "gridsim.db"],
       supabase: ["Dispatch, market, actions", data.supabase || "—"],

@@ -77,7 +77,7 @@ The ladder, used whenever no order is set, is evaluated in this order:
 
 Steps 1 to 6 run per home, so two load zones can be given different calls when their prices disagree. Intensity is 0 on hold, and otherwise at least 0.35, rising as the percentile moves further into the push or pull region.
 
-The fleet call keeps the clause that fired as `because`: `{line, threshold}`. `line` is the comparison, and `threshold` is the limit in that line (0.75, 0.35, 200 MW, −200 MW, or the load-zone price bar). `GET /api/scene` puts the current clause on `dispatch.because`. `calls` gains a row when the signal or that clause changes, so the sidebar can show why the fleet is pushing or pulling. An external order's clause is that the ladder is not running.
+The fleet call keeps the clause that fired as `because`: `{line, threshold}`. `line` is the comparison, and `threshold` is the limit in that line (0.75, 0.35, 200 MW, −200 MW, or the load-zone price bar). `GET /api/scene` puts the current clause on `dispatch.because`. The map sidebar phrases that clause in words. `calls` gains a row when the signal or that clause changes. An external order's clause is that the ladder is not running.
 
 ### Who actually answers
 

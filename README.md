@@ -85,7 +85,7 @@ The three `ERCOT_*` values turn on official prices and constraints. `SUPABASE_*`
 
 ## Architecture
 
-Ingest takes the ERCOT snapshot and a simulated on-premises gateway stream and runs every home under the data contract. The state machine then chooses discharge, charge, or hold from Texas demand and ERCOT storage. OpenAI summarizes an escalated service ticket. The API copies controller tables to Supabase when the keys are set. The browser only talks to this origin. Full path: [docs/architecture.md](docs/architecture.md).
+Ingest takes the ERCOT snapshot and a simulated on-premises gateway stream and runs every home under the data contract. The state machine then chooses discharge, charge, or hold from Texas demand and ERCOT storage. OpenAI uses an incident summary data contract to select which data is shared with the LLM to auto-classify and summarize the incident. The API copies controller tables to Supabase when the keys are set. The browser only talks to this origin. Full path: [docs/architecture.md](docs/architecture.md).
 
 ```mermaid
 flowchart LR
@@ -93,7 +93,7 @@ flowchart LR
   gateway[on-premises gateway] --> ingest
   ingest --> machine[state machine]
   ingest -->|copy| supabase[Supabase]
-  machine --> map[browser map]
+  machine --> map[User Interface]
   machine --> openai[OpenAI]
 ```
 

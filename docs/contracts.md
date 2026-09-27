@@ -95,3 +95,5 @@ Identity does not move with the tick. Capacity, power limit, centers, fault, and
 Each `state_log` entry is one tick of the shared fields above, and only those fields. `GET /api/site/{id}` returns the log newest first. The process keeps the last 180 ticks. It is not a table. A restart clears it, and startup writes a simulated 180 rows before the first live tick.
 
 `grid` on a log row is `off` for every tick the contactor was open. `out_of_control` lists the charts that were out of control on that tick, which includes `alarming`.
+
+The incident summary data contract — which fields the LLM may see — is [llm.md](llm.md).

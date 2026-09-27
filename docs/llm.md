@@ -1,6 +1,6 @@
 # Model
 
-OpenAI summarizes an escalated service ticket. It does not sit inside the tick, does not open Supabase, and does not choose discharge or charge. The API server holds the service-role key, reads and writes Supabase, and the next tick applies the rows. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
+OpenAI uses an incident summary data contract to select which data is shared with the LLM to auto-classify and summarize the incident. It does not sit inside the tick, does not open Supabase, and does not choose discharge or charge. The API server holds the service-role key, reads and writes Supabase, and the next tick applies the rows. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
 After the maintenance manager sets `stage` to `ticket` and `actor` to `llm`, that visit stays active through `ends_at`. The base is `offline`. The service wait is a normal draw around 2 hours, clipped to 45–240 minutes. Maintenance manager opens on the case. Now does not show a model line. After the window ends, the next tick calls `GET /api/site/{id}` on this process (`GRIDSIM_ORIGIN` if set, otherwise `http://127.0.0.1` and `PORT`, default 8000). On Render, `PORT` is set by the platform. Set `GRIDSIM_ORIGIN` to https://gridstatemachine.com only if that pull must use the public name. OpenAI may use only that home's chart for the ticket and the readings below. When `OPENAI_API_KEY` is set, `OPENAI_MODEL` (default `gpt-4o-mini`) writes `decision.action`: two sentences on what the readings show and how the chart procedure resolves it. A missing key or a failed call keeps the chart's `action` sentence and omits `decision.model`. The state machine then marks the same ticket `done`, disarms the chart, and writes `return_online`. The service estimate stays on the payload. A `ticket` stage is not auto-closed at `ends_at`; the summary runs after that window. A failed pull leaves the ticket open and retries on the next tick.
 
@@ -59,7 +59,7 @@ Do not insert `return_online`. The simulator does that when a posted service win
 
 ## Ticket summary
 
-`GET /api/site/{id}` is the read. The stored payload is the slice the summary is allowed to use:
+The incident summary data contract is the stored `pull` slice. It selects which data is shared with the LLM to auto-classify and summarize the incident. `GET /api/site/{id}` is the read. The stored payload is the slice the summary is allowed to use:
 
 ```json
 {

@@ -2687,9 +2687,9 @@ const ARCH_ROLE = {
   ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
   gateway: "On-premises gateway, simulated telemetry collection.",
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
-  machine: "The state machine runs on the API server. It tells Base batteries to discharge to the grid, charge from the grid, or hold. A light call reaches about a third of the homes; a strong call reaches almost all of them. The ladder picks that from ERCOT demand and grid storage. Those steps show up in the decisions log as [state machine].",
-  map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
-  model: "The model summarizes an escalated service ticket after the visit window. That wait is a normal draw around two hours. After it ends, the next tick pulls that home from the API. With the OpenAI key set, it writes two sentences: what the readings show and how the chart procedure resolves it. Without the key, that text is the chart sentence. The state machine then closes the ticket and brings the battery back online. The model does not choose discharge or charge.",
+  machine: "Rule-based decision matrix with fleet management protocols and human dispatch escalation.",
+  map: "The User Interface. It asks the server for an update every five seconds and draws one dot per home.",
+  model: "Uses an incident summary data contract to select which data is shared with the LLM to auto-classify and summarize the incident.",
   supabase: "Hosted Postgres. Only the API talks to it. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
 };
 let viewName = "fleet";
@@ -2762,9 +2762,9 @@ function archLive(data) {
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: [callVerb(signal), `${callDepth(signal, dispatch.intensity) || "idle"} · ${callWho(dispatch.source || "rules")}`],
-      map: ["Map in the browser", `${flow} ${fmt(mw, 2)} MW`],
-      model: ["Summarizes service tickets", data.openai === "live" ? "OpenAI two sentences" : "chart sentence · no key"],
-      supabase: ["Dispatch, market, actions", data.supabase || "—"],
+      map: ["Asks every five seconds", `${flow} ${fmt(mw, 2)} MW`],
+      model: ["Incident summary data contract", data.openai === "live" ? "OpenAI live" : "no key"],
+      supabase: ["historical database", data.supabase || "disabled"],
     },
     tone: {
       in: ercot.dashboard === "live" ? "push" : "hold",
@@ -2781,17 +2781,22 @@ function archLive(data) {
 
 function archBox(id, name, note, state) {
   const [x, y] = ARCH_BOX[id];
-  const lines = Array.isArray(note) ? note : [note];
+  const names = Array.isArray(name) ? name : [name];
+  const lines = Array.isArray(note) ? note : note ? [note] : [];
   const classes = ["blk"];
   if (archFocus === id) classes.push("on");
   if (state) classes.push(state);
-  const text = lines.map((line, index) => (
-    `<text class="blk-note" data-note="${id}:${index}" x="${x + 14}" y="${y + 40 + index * 14}">${escapeHtml(line)}</text>`
+  const label = names.join(" ");
+  const title = names.map((line, index) => (
+    `<text class="blk-name" x="${x + 14}" y="${y + 22 + index * 14}">${escapeHtml(line)}</text>`
   )).join("");
-  return `<g class="${classes.join(" ")}" data-arch="${id}" tabindex="0" role="button" aria-label="${name}">
+  const text = lines.map((line, index) => (
+    `<text class="blk-note" data-note="${id}:${index}" x="${x + 14}" y="${y + 22 + names.length * 14 + 4 + index * 14}">${escapeHtml(line)}</text>`
+  )).join("");
+  return `<g class="${classes.join(" ")}" data-arch="${id}" tabindex="0" role="button" aria-label="${escapeHtml(label)}">
     <rect class="blk-bg" x="${x}" y="${y}" width="${ARCH_W}" height="${ARCH_H}" rx="3" />
     <rect class="blk-edge" x="${x}" y="${y}" width="2.5" height="${ARCH_H}" />
-    <text class="blk-name" x="${x + 14}" y="${y + 22}">${name}</text>
+    ${title}
     ${text}
   </g>`;
 }
@@ -2831,7 +2836,7 @@ function archSvg(live) {
     ["gateway", "gateway"],
     ["tick", "data ingest protocol"],
     ["machine", "state machine"],
-    ["map", "map"],
+    ["map", "User Interface"],
     ["supabase", "Supabase"],
     ["model", "model"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");

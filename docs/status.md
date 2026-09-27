@@ -30,7 +30,7 @@ An agent case shows a status pill and, while it is open, a timer to `ends_at`. T
 
 **Peak now** on the 24h card posts `demand_pin` on `POST /api/agent`. The scene keeps today's curve and uses the highest actual as now. The next tick runs the ladder from that sample, so a mid-evening hold becomes a discharge. **Live now** restores the newest actual. A restart returns to peak.
 
-The origin HTML has a three-ring favicon and Open Graph tags. Discord and Teams cards use `/og.png` and the one-line description on `web/index.html`.
+The origin HTML has a three-ring favicon and Open Graph tags. Discord and Teams cards use `/og.png` and the description **grid state machine simulation**.
 
 ## Not standing yet
 

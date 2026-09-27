@@ -11,9 +11,9 @@ Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch 
 ## Submission
 
 - [x] **Project title** — grid state machine
-- [ ] **2–5 min demo video** (Loom). Show the core loop live.
+- [x] **2–5 min demo video** (Loom) — [Grid State Machine: Data Observability and Fleet Control](https://www.loom.com/share/4f817a223a5c4efc9bd7470e550d93ab)
 
-    Record the running app, not slides. Open the fleet map, wait for a tick, read **Now** (the fleet call in words and why it fired). Open **Architecture**. Click one home, flag a chart, and show the maintenance ticket and the decisions log. Keep it under five minutes.
+  The recording is the running app: fleet map, a tick, **Now**, **Architecture**, one home, a chart flag, the maintenance ticket, and the decisions log.
 
 - [x] **Repo link** (public) — https://github.com/alkarboly/grid-state-machine
     - [x] Quick start

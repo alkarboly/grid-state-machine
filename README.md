@@ -110,9 +110,9 @@ Do not commit `.env` or `data/gridsim.db`.
 
 ## Known limitations and next steps
 
-This is a prototype policy, not an ERCOT market award. Open gaps are in [docs/gaps.md](docs/gaps.md): official prices need the subscription key; neighborhood positions and load shape are not metered Base data; 11.5 kW continuous power is an assumption; disco hardware is unknown; station coordinates are unpublished; bus-to-home join is not ingested.
+Prototype policy, not an ERCOT market award. Gaps in [docs/gaps.md](docs/gaps.md): official prices need the subscription key; neighborhood positions and load shape are not metered; 11.5 kW is an assumption; disco hardware is unknown; station coordinates are unpublished; bus-to-home join is not ingested. Data collection is simulated — sample content, rate, and what a PLC-style app could collect are assumptions. Charts are not statistically accurate; sample size was not verified for the hackathon. Architecture is a hackathon setup and needs a production refactor.
 
-Next: keep the Render service and Supabase copy healthy; set official ERCOT credentials when the key exists; replace assumed kilowatts, load, and territory counts only when real data exists. [docs/status.md](docs/status.md).
+Next: keep Render and Supabase healthy; set ERCOT credentials when the key exists; replace assumed kW, load, and territory counts only with real data. [docs/status.md](docs/status.md).
 
 ## Short write-up
 
@@ -120,6 +120,8 @@ Texas already has home batteries that can charge and discharge against ERCOT. Wh
 
 gridsim is for a VPP operator and the person who has to visit a cabinet. It is a hackathon prototype, not a market award and not a real service territory.
 
-Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of the homes; a strong call reaches almost all of them. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
+Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. Adherence to that contract is how ingest keeps data quality. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of the homes; a strong call reaches almost all of them. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
+
+Once those rows are stored — SQLite every tick, and hosted Postgres when the keys are set — the same telemetry feeds control charts for automated anomaly detection. Reverse demand, chart flags, and posted fleet calls are built in to stress the state machine's rules. When a visit is escalated, an LLM writes a two-sentence summary from that home's contract readings. Without the key, that text is the chart sentence.
 
 The impact is that loop in one place: live Texas context, a readable fleet call, a cabinet you can open, and a ticket when something is out of control. The homes are synthetic. The ERCOT snapshot is not.

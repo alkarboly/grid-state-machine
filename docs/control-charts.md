@@ -2,7 +2,7 @@
 
 Each battery keeps six X-bar charts. The charted number is the mean residual in the bucket, the average of `measured − expected` over the ticks in that point. The center line is 0. σ in the table is the given standard for one tick. The limits on a point are `±3 * σ / √n`, where n is how many ticks are in that point. A chart is `in_control` when `beyond_3sigma` and `two_of_three_2sigma` have not fired. `seven_same_side` is recorded and left alone.
 
-The standard is given. It is not estimated from the trace, so a fault cannot widen its own limits. Healthy sensor noise sits inside the standard. The chart reacts when the subgroup mean leaves `±3 σ/√n`.
+The standard is given. It is not estimated from the trace, so a fault cannot widen its own limits. Healthy sensor noise sits inside the standard. The chart reacts when the subgroup mean leaves `±3 σ/√n`. n and those limits were not verified for this hackathon.
 
 `expected` is the operating point, not a fleet-wide constant. Cabinet temperature is the lagged temperature the thermal model predicts for this unit at the power it is actually moving. A hot reading during discharge is in control when it matches that lag. A reading that jumps to the steady-state value in one tick is ahead of the model.
 

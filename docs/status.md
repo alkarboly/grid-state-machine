@@ -50,4 +50,4 @@ A `scheduled_service` on `aus-0004` was inserted only to check the Agent list. I
 4. When the ERCOT subscription key is available, set the three credentials on the bot so `rate_basis` can be `ercot`.
 5. Add a station pair to `data/station_geo.json` only for codes a live constraint actually names, with a source note. That is what draws a constraint arc.
 
-After the bus is up, the open joins in [gaps.md](gaps.md) are the settlement-point to electrical-bus report, then replacing the assumed kilowatts, load shape, and neighborhood positions with real territory data. Leave those numbers alone until the data exists.
+After the bus is up, the open joins in [gaps.md](gaps.md) are the settlement-point to electrical-bus report, then replacing the assumed kilowatts, load shape, and neighborhood positions with real territory data. Leave those numbers alone until the data exists. Chart n and the one-process layout still need a check and a production refactor.

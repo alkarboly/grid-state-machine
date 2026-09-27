@@ -1,6 +1,6 @@
 # Architecture
 
-gridsim is a hackathon prototype. It joins a live ERCOT snapshot with a simulated fleet of Base Power-style home batteries and draws that fleet on a minimal map.
+gridsim is a hackathon prototype. Live ERCOT snapshot plus a simulated Base-style fleet on a map. Needs a production refactor.
 
 ## Layers
 

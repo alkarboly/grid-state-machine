@@ -32,6 +32,8 @@ An agent case shows a status pill and, while it is open, a timer to `ends_at`. T
 
 **Reverse demand** on the 24h card posts `demand_reverse` on `POST /api/agent`. The scene inverts today's demand around its min and max. The next tick runs the ladder as the opposite of the live call, so a storage-driven discharge becomes a charging window.
 
+The origin HTML has a three-ring favicon and Open Graph tags. Discord and Teams cards use `/og.png` and the one-line description on `web/index.html`.
+
 ## Not standing yet
 
 The web service is live at https://gridstatemachine.com/. It serves the map and the API from one process. The header brand is **grid state machine**. The API server is what talks to Supabase.

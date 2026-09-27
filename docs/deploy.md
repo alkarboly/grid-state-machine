@@ -44,7 +44,7 @@ The free instance has 512 MB. Startup builds all 3000 homes, including the 30-ho
 
 That same startup line stays up while the history is filled. On a laptop that takes about two minutes. The free CPU is slower, so leave the deploy on that line until the port opens.
 
-The map polls `/api/scene` on that same origin. https://gridstatemachine.com/ is the custom domain on this Render service. The header brand is **grid state machine**. `/#api` is the HTTP catalog. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
+The map polls `/api/scene` on that same origin. https://gridstatemachine.com/ is the custom domain on this Render service. The header brand is **grid state machine**, with a three-ring mark. `/#api` is the HTTP catalog. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit. The HTML includes Open Graph tags so a paste in Teams or Discord shows the title, a one-line description, and `/og.png`. The tab icon is `/favicon.svg`.
 
 ## 3. Check
 

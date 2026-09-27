@@ -122,4 +122,4 @@ grid state machine is a data-observability and fleet-management prototype. It or
 
 The UI starts at the market, then a service area, then one unit. That unit is a digital twin. Every 10 seconds it records voltage, frequency, temperature, alarms, and control charts.
 
-A temperature three standard deviations outside normal fires the state machine. That opens a maintenance alert and a ticket. A reset that does not clear the fault escalates the visit. The same machine dispatches the fleet: push, pull, or hold.
+There is a state machine that manages the entire fleet as well.

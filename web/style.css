@@ -304,6 +304,13 @@ body[data-view="architecture"] canvas { visibility: hidden; }
 }
 #arch-diagram { flex: 1; min-height: 0; }
 .arch-svg { width: 100%; height: 100%; }
+.diagram .arch-region { fill: #14161a; stroke: #262931; }
+.diagram .arch-label {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  fill: #5a5f68;
+}
 
 #tip {
   position: fixed;

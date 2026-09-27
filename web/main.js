@@ -2425,36 +2425,36 @@ function ingestDecisions(data) {
   paintDecisions();
 }
 
-const ARCH_W = 156;
-const ARCH_H = 54;
+const ARCH_W = 150;
+const ARCH_H = 52;
 const ARCH_BOX = {
-  dashboard: [28, 24],
-  official: [28, 108],
-  raw: [220, 66],
-  snapshot: [412, 66],
-  tick: [604, 66],
-  managers: [796, 66],
-  sqlite: [796, 250],
-  supabase: [412, 250],
-  scene: [220, 250],
-  map: [28, 250],
-  controller: [220, 390],
+  dashboard: [32, 48],
+  official: [32, 120],
+  snapshot: [248, 48],
+  tick: [420, 48],
+  managers: [592, 48],
+  contracts: [248, 136],
+  scene: [592, 136],
+  map: [824, 64],
+  sqlite: [40, 312],
+  supabase: [384, 312],
+  llm: [728, 312],
 };
 const ARCH_ROLE = {
   dashboard: "Public dashboard JSON, fetched with no key: system demand, the short forecast, and five-minute generation by fuel, including power-storage megawatts.",
-  official: "When the official credentials are set, api.ercot.com adds binding transmission constraints, settlement-point LMPs, and a capped page of electrical-bus LMPs.",
-  raw: "Raw payloads are stored in SQLite before they are normalized.",
-  snapshot: "The normalized grid snapshot, constraints, and prices. This is what the fleet tick reads.",
-  tick: "One battery at a time: load, dispatch, sensor noise, and control charts.",
-  managers: "The maintenance manager opens or escalates a ticket, then the fleet manager posts a price call. Both append unit_actions.",
-  sqlite: "metric_logs, observations, control_points, and dispatch_ticks.",
-  supabase: "When configured, Supabase receives the dispatch row, the market row, unit_latest, closed usage hours, and action status.",
-  scene: "GET /api/scene is the map. GET /api/dispatch is the control row a controller reads.",
-  map: "The Three.js map, the actions list, and the selected battery's charts.",
-  controller: "A controller reads market_ticks, unit_latest, and usage_hours and writes the next fleet call or a per-unit row. The next tick applies those rows. It does not wait on the model.",
+  official: "When ERCOT_USERNAME, ERCOT_PASSWORD, and ERCOT_SUBSCRIPTION_KEY are set, api.ercot.com adds binding constraints and settlement-point LMPs. The public dashboard works without them.",
+  snapshot: "The normalized grid snapshot, constraints, and prices, held in this process. Raw payloads are written to SQLite raw_records before they are normalized.",
+  tick: "One battery at a time, in this process: load, dispatch, sensor noise, and control charts. The log state for each home stays in memory, last 180 ticks. It is not a table.",
+  managers: "Still inside the tick. The maintenance manager opens or escalates a ticket, then the fleet manager posts a price call. Both append unit_actions.",
+  contracts: "contracts.md is the component metrics, the state snapshot, and the log state. The unit view shows those shapes. Instrumented homes also write the component contract to SQLite metric_logs. llm.md is the controller contract: the tables the model reads in Supabase, and the unit_actions it may write.",
+  scene: "One process is the API and the map. Deployed, that process is the Render web service gridsim. That service has not been created from this repo, so this machine is it. The browser talks only to this origin. GET /api/scene is the map. GET /api/dispatch is the control row.",
+  map: "The browser. It polls this origin for /api/scene. It never opens SQLite or Supabase.",
+  sqlite: "data/gridsim.db on the service disk. Render's disk is ephemeral. This file keeps sites, raw_records, grid_snapshots, metric_logs, observations, control_points, fleet_rollups, and a copy of dispatch_ticks. Identity stays here. There is no sites table in Supabase.",
+  supabase: "A separate hosted Postgres project. It has not been created from this repo yet. The controller tables live here: market_ticks, unit_latest, usage_hours, dispatch_orders, dispatch_ticks, unit_actions, addon_catalog, and site_addons. Row level security is on and there is no anon policy, so the browser cannot read them.",
+  llm: "A remote model does not sit inside the tick. When LLM_URL is set, this process POSTs the read model and turns the reply into unit_actions. The model may also insert those rows in Supabase. The next tick applies them and does not wait. LLM_URL is unset, so no remote model is called. An OpenAI note on an escalated ticket is a separate call and does not use LLM_URL.",
 };
 let viewName = "fleet";
-let archFocus = "tick";
+let archFocus = "scene";
 let archKey = "";
 
 function archRight(id) {
@@ -2519,15 +2519,15 @@ function archLive(data) {
     notes: {
       dashboard: `${ercot.dashboard || "—"} · ${demand}`,
       official: constraints ? `${official} · ${fmt(constraints)} constraints` : official,
-      raw: "SQLite",
       snapshot: `percentile ${fmt(grid.demand_percentile, 2)}`,
       tick: `${fmt(fleet.units, 0)} homes`,
       managers: `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`,
-      sqlite: "each tick",
-      supabase: data.supabase || "—",
-      scene: "every 5s",
+      contracts: "memory · metric_logs",
+      scene: "this origin · 5s",
       map: `${flow} ${fmt(mw, 2)} MW`,
-      controller: `llm ${data.llm || "—"}`,
+      sqlite: "gridsim.db",
+      supabase: data.supabase || "—",
+      llm: data.llm || "—",
     },
     tone: {
       in: ercot.dashboard === "live" ? "push" : "hold",
@@ -2538,8 +2538,8 @@ function archLive(data) {
     state: {
       dashboard: ercot.dashboard === "unavailable" ? "flagged" : ercot.dashboard === "cached" ? "watch" : "",
       official: official === "error" ? "flagged" : official === "pending" ? "watch" : "",
-      supabase: data.supabase === "error" ? "flagged" : "",
-      controller: data.llm === "error" ? "flagged" : "",
+      supabase: data.supabase === "error" ? "flagged" : data.supabase === "live" ? "" : "watch",
+      llm: data.llm === "error" ? "flagged" : data.llm === "live" ? "" : "watch",
     },
   };
 }
@@ -2557,37 +2557,52 @@ function archBox(id, name, note, state) {
   </g>`;
 }
 
+function archRegion(x, y, w, h, label) {
+  return `<rect class="arch-region" x="${x}" y="${y}" width="${w}" height="${h}" />
+    <text class="arch-label" x="${x + 12}" y="${y + 18}">${label}</text>`;
+}
+
 function archSvg(live) {
   const call = live.tone.call;
+  const tickBottom = archBottom("tick");
+  const regions = [
+    archRegion(12, 12, 196, 188, "ERCOT"),
+    archRegion(224, 12, 548, 196, "API server · Render web service"),
+    archRegion(788, 12, 220, 140, "browser"),
+    archRegion(12, 248, 330, 156, "SQLite · service disk"),
+    archRegion(356, 248, 330, 156, "Supabase · hosted Postgres"),
+    archRegion(700, 248, 308, 156, "LLM · outside the tick"),
+  ].join("");
   const links = [
-    archLink(archJoin("dashboard", "raw"), live.tone.in),
-    archLink(archJoin("official", "raw"), live.tone.official),
-    archLink([archRight("raw"), archLeft("snapshot")], "hold"),
+    archLink(archJoin("dashboard", "snapshot"), live.tone.in),
+    archLink(archJoin("official", "snapshot"), live.tone.official),
     archLink([archRight("snapshot"), archLeft("tick")], call),
     archLink([archRight("tick"), archLeft("managers")], call),
-    archLink([archBottom("managers"), archTop("sqlite")], "hold"),
-    archLink([archLeft("sqlite"), archRight("supabase")], live.tone.store),
-    archLink([archLeft("supabase"), archRight("scene")], "hold"),
-    archLink([archLeft("scene"), archRight("map")], "hold"),
-    archLink([archBottom("map"), [archBottom("map")[0], archLeft("controller")[1]], archLeft("controller")], "hold"),
-    archLink([archRight("controller"), [archBottom("tick")[0], archRight("controller")[1]], archBottom("tick")], call),
+    archLink([archBottom("snapshot"), archTop("contracts")], "hold"),
+    archLink([archBottom("managers"), archTop("scene")], "hold"),
+    archLink([archRight("scene"), [806, archRight("scene")[1]], [806, archLeft("map")[1]], archLeft("map")], "hold"),
+    archLink([tickBottom, [tickBottom[0], 286], [archTop("sqlite")[0], 286], archTop("sqlite")], "hold"),
+    archLink([archRight("managers"), [760, archRight("managers")[1]], [760, 286], [archTop("supabase")[0], 286], archTop("supabase")], live.tone.store),
+    archLink([archRight("supabase"), archLeft("llm")], live.tone.store),
+    archLink([archTop("llm"), [archTop("llm")[0], 232], [tickBottom[0], 232], tickBottom], call),
   ].join("");
   const boxes = [
     ["dashboard", "ERCOT dashboard"],
     ["official", "public API"],
-    ["raw", "raw records"],
     ["snapshot", "grid snapshot"],
     ["tick", "fleet tick"],
     ["managers", "managers"],
-    ["sqlite", "SQLite"],
-    ["supabase", "Supabase"],
+    ["contracts", "contracts"],
     ["scene", "scene"],
     ["map", "map"],
-    ["controller", "controller"],
+    ["sqlite", "SQLite"],
+    ["supabase", "Supabase"],
+    ["llm", "LLM"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
-  return `<svg viewBox="0 0 980 500" class="diagram arch-svg">
+  return `<svg viewBox="0 0 1020 420" class="diagram arch-svg">
+    ${regions}
     ${links}
-    <text class="flow-kw ${call}" x="700" y="446">next tick</text>
+    <text class="flow-kw ${call}" x="560" y="226">next tick</text>
     ${boxes}
   </svg>`;
 }
@@ -2604,7 +2619,7 @@ function renderArch(data) {
     live.state.dashboard,
     live.state.official,
     live.state.supabase,
-    live.state.controller,
+    live.state.llm,
   ].join("|");
   const holder = document.getElementById("arch-diagram");
   const role = document.getElementById("arch-role");

@@ -2,12 +2,6 @@
 
 Live at https://gridstatemachine.com/. ERCOT demand and storage, joined to a simulated fleet of Base-style home batteries. The map is a minimal Three.js view of those homes.
 
-Demand, the short forecast, and fuel mix (including power-storage megawatts) come from ERCOT's public dashboard feeds and need no key. Binding constraints, settlement-point prices, and electrical-bus prices turn on when the official Public API credentials are in `.env`.
-
-Homes are synthetic. They sit near Austin, Houston, Dallas, and San Antonio so the fleet has a footprint, not because those coordinates are substations. A transmission line is drawn only when ERCOT names both ends of a binding constraint and both station codes are in `data/station_geo.json`.
-
-Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch rules, and open questions are in [docs/README.md](docs/README.md).
-
 ## Submission
 
 - [x] **Project title** — grid state machine

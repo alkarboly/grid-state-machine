@@ -889,25 +889,47 @@ function renderDay(data) {
   const points = (data && data.day) || [];
   const actuals = points.filter((point) => point.kind !== "forecast");
   const latest = actuals[actuals.length - 1];
+  const reversed = Boolean(data.demand_reverse);
+  if (!host.dataset.ready) {
+    host.innerHTML = `
+      <p class="day-kicker" id="day-kicker">24h</p>
+      <p class="day-row" id="day-demand-row"><span>demand</span><b id="day-demand-val">—</b></p>
+      <div id="day-demand-spark"></div>
+      <p class="day-row" id="day-price-row"><span>price</span><b id="day-price-val">—</b></p>
+      <div id="day-price-spark"></div>
+      <button type="button" class="day-toggle" id="day-reverse" data-demand-reverse="0">Reverse demand</button>
+    `;
+    host.dataset.ready = "1";
+  }
+  const kicker = document.getElementById("day-kicker");
+  const demandVal = document.getElementById("day-demand-val");
+  const priceVal = document.getElementById("day-price-val");
+  const demandSpark = document.getElementById("day-demand-spark");
+  const priceSpark = document.getElementById("day-price-spark");
+  const toggle = document.getElementById("day-reverse");
+  kicker.textContent = reversed ? "24h · reversed" : "24h";
+  toggle.classList.toggle("on", reversed);
+  toggle.dataset.demandReverse = reversed ? "1" : "0";
+  toggle.textContent = reversed ? "Use live demand" : "Reverse demand";
   if (!latest) {
-    host.innerHTML = `<p class="day-kicker">24h</p><p class="day-row"><span>demand</span><b>—</b></p>`;
+    demandVal.textContent = "—";
+    priceVal.textContent = "—";
+    demandSpark.innerHTML = "";
+    priceSpark.innerHTML = "";
     return;
   }
   const demand = spark(points, "demand_mw");
   const price = spark(points, "rate_usd_mwh");
-  const basis = latest.rate_basis === "ercot" ? "" : `<span class="ercot">simulated</span>`;
+  const basis = latest.rate_basis === "ercot" ? "" : ` <span class="ercot">simulated</span>`;
   const line = (drawn, tone) => `<svg class="day-svg" viewBox="0 0 ${drawn.width} ${drawn.height}" aria-hidden="true">
       ${drawn.nowX === null ? "" : `<line class="day-now" x1="${drawn.nowX.toFixed(1)}" y1="0" x2="${drawn.nowX.toFixed(1)}" y2="${drawn.height}" />`}
       <path class="${tone}" d="${drawn.actual}" />
       ${drawn.forecast ? `<path class="day-forecast" d="${drawn.forecast}" />` : ""}
     </svg>`;
-  host.innerHTML = `
-    <p class="day-kicker">24h</p>
-    <p class="day-row"><span>demand</span><b>${fmt(latest.demand_mw)} MW</b></p>
-    ${line(demand, "day-demand")}
-    <p class="day-row"><span>price</span><b>${fmt(latest.rate_usd_mwh, 0)} $/MWh ${basis}</b></p>
-    ${line(price, "day-price")}
-  `;
+  demandVal.textContent = `${fmt(latest.demand_mw)} MW`;
+  priceVal.innerHTML = `${fmt(latest.rate_usd_mwh, 0)} $/MWh${basis}`;
+  demandSpark.innerHTML = line(demand, "day-demand");
+  priceSpark.innerHTML = line(price, "day-price");
 }
 
 function renderStats(data) {
@@ -1079,6 +1101,7 @@ function describeCall(dispatch) {
 
 function describeBecause(clause) {
   const line = clause.line || "";
+  const bar = clause.threshold || "";
   const storage = line.match(/storage (-?\d+) MW/);
   const demand = line.match(/demand percentile ([\d.]+)/);
   if (line.includes("ladder is not running")) return "A posted order is running. The ladder is off.";
@@ -1092,11 +1115,23 @@ function describeBecause(clause) {
     const pct = demand ? demand[1] : "";
     return `Texas demand is mid-range${pct ? ` (${pct} of today)` : ""}, and grid storage is quiet, so Base batteries hold`;
   }
+  if (line.includes("charging window")) {
+    return "Reversed demand opens a charging window, so Base batteries charge";
+  }
+  if (line.includes("inverted peak")) {
+    return "Reversed demand looks like a peak, so Base batteries discharge";
+  }
+  if (line.includes("reversed demand") && demand && (line.includes("≤") || line.includes("<"))) {
+    return `Reversed demand is low (${demand[1]} of today), so Base batteries charge`;
+  }
+  if (line.includes("reversed demand") && demand) {
+    return `Reversed demand is high (${demand[1]} of today), so Base batteries discharge`;
+  }
   if (demand && line.includes("≥")) {
-    return `Texas demand is high (${demand[1]} of today), so Base batteries discharge (above 0.75)`;
+    return `Texas demand is high (${demand[1]} of today), so Base batteries discharge (above ${bar || "0.75"})`;
   }
   if (demand && line.includes("≤")) {
-    return `Texas demand is low (${demand[1]} of today), so Base batteries charge (below 0.35)`;
+    return `Texas demand is low (${demand[1]} of today), so Base batteries charge (below ${bar || "0.35"})`;
   }
   if (line.includes("load-zone price") && line.includes("≥")) {
     return "This zone's price is high enough for Base batteries to discharge";
@@ -1235,7 +1270,12 @@ function estimateLabel(minutes) {
   const value = Number(minutes);
   if (!Number.isFinite(value) || value <= 0) return "";
   if (value < 1) return `${Math.round(value * 60)}s`;
-  return Number.isInteger(value) ? `${value}m` : `${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}m`;
+  if (value < 60) {
+    return Number.isInteger(value) ? `${value}m` : `${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}m`;
+  }
+  const hours = value / 60;
+  if (Math.abs(hours - Math.round(hours)) < 1e-9) return `${Math.round(hours)}h`;
+  return `${hours.toFixed(1)}h`;
 }
 
 function stepText(item) {
@@ -1298,7 +1338,8 @@ function caseCard(entry, opts = {}) {
     const steps = stepList(payload);
     const evidence = evidenceText((payload.pull && payload.pull.evidence) || payload.evidence);
     const evidenceLine = evidence ? `<span class="case-evidence">${escapeHtml(evidence)}</span>` : "";
-    const pulling = !payload.decision && payload.stage === "ticket" && entry.actor === "llm"
+    const due = !entry.ends_at || Date.parse(entry.ends_at) <= Date.now();
+    const pulling = due && !payload.decision && payload.stage === "ticket" && entry.actor === "llm"
       ? `<span class="case-evidence">pulling GET /api/site/${escapeHtml(entry.site)}</span>`
       : "";
     const decided = (payload.decision && payload.decision.action) || "";
@@ -2605,8 +2646,8 @@ const ARCH_BOX = {
   machine: [508, 48],
   map: [752, 48],
   gateway: [20, 214],
-  sqlite: [264, 214],
-  supabase: [264, 372],
+  supabase: [264, 214],
+  model: [508, 214],
 };
 const ARCH_ROLE = {
   ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
@@ -2614,7 +2655,7 @@ const ARCH_ROLE = {
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
   machine: "The state machine runs on the API server. It tells Base batteries to discharge to the grid, charge from the grid, or hold. A light call reaches about a third of the homes; a strong call reaches almost all of them. The ladder picks that from ERCOT demand and grid storage. Those steps show up in the decisions log as [state machine].",
   map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
-  sqlite: "The API writes this file every tick. It is data/gridsim.db on the service disk. Identity, ERCOT payloads, logs, dispatch, and the controller tables live here. There is no sites table in Supabase.",
+  model: "The model summarizes an escalated service ticket after the visit window. That wait is a normal draw around two hours. After it ends, the next tick pulls that home from the API. With the OpenAI key set, it writes two sentences: what the readings show and how the chart procedure resolves it. Without the key, that text is the chart sentence. The state machine then closes the ticket and brings the battery back online. The model does not choose discharge or charge.",
   supabase: "Hosted Postgres. Only the API talks to it. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
 };
 let viewName = "fleet";
@@ -2683,12 +2724,12 @@ function archLive(data) {
   return {
     signal,
     notes: {
-      ercot: ["Demand and short forecast", `${demand} · ${priceWord}`],
+      ercot: ["Demand and short forecast", `${demand} · ${priceWord}${data.demand_reverse ? " · reversed" : ""}`],
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: [callVerb(signal), `${callDepth(signal, dispatch.intensity) || "idle"} · ${callWho(dispatch.source || "rules")}`],
       map: ["Map in the browser", `${flow} ${fmt(mw, 2)} MW`],
-      sqlite: ["Written every tick", "gridsim.db"],
+      model: ["Summarizes service tickets", data.openai === "live" ? "OpenAI two sentences" : "chart sentence · no key"],
       supabase: ["Dispatch, market, actions", data.supabase || "—"],
     },
     tone: {
@@ -2699,6 +2740,7 @@ function archLive(data) {
     state: {
       ercot: ercot.dashboard === "unavailable" ? "flagged" : ercot.dashboard === "cached" ? "watch" : "",
       supabase: data.supabase === "error" ? "flagged" : data.supabase === "live" ? "" : "watch",
+      model: data.openai === "live" ? "" : "watch",
     },
   };
 }
@@ -2738,17 +2780,17 @@ function archSvg(live) {
     archRegion(8, 20, 224, 122, "ERCOT"),
     archRegion(8, 186, 224, 122, "on premises"),
     archRegion(248, 20, 476, 122, "Render · gridsim"),
-    archRegion(248, 186, 232, 122, ""),
+    archRegion(248, 186, 232, 122, "Supabase"),
+    archRegion(492, 186, 232, 122, "OpenAI"),
     archRegion(736, 20, 232, 122, "browser"),
-    archRegion(248, 344, 232, 122, "Supabase"),
   ].join("");
   const links = [
     archLink(archJoin("ercot", "tick"), live.tone.in),
     archLink([gateEdge, [streamX, gateEdge[1]], [streamX, streamY], [tickEdge[0], streamY]], "hold"),
     archLink(archJoin("tick", "machine"), call),
     archLink(archJoin("machine", "map"), call),
-    archLink([archBottom("tick"), archTop("sqlite")], "hold"),
-    archLink([archBottom("sqlite"), archTop("supabase")], store),
+    archLink([archBottom("tick"), archTop("supabase")], store),
+    archLink([archBottom("machine"), archTop("model")], "hold"),
   ].join("");
   const boxes = [
     ["ercot", "ERCOT"],
@@ -2756,23 +2798,24 @@ function archSvg(live) {
     ["tick", "data ingest protocol"],
     ["machine", "state machine"],
     ["map", "map"],
-    ["sqlite", "SQLite"],
     ["supabase", "Supabase"],
+    ["model", "model"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
-  const dumped = archBottom("tick");
-  const copied = archBottom("sqlite");
-  return `<svg viewBox="0 0 980 490" class="diagram arch-svg">
+  const copied = archBottom("tick");
+  const summarized = archBottom("machine");
+  return `<svg viewBox="0 0 980 330" class="diagram arch-svg">
     ${regions}
     ${links}
     <text class="flow-kw hold" x="150" y="176">stream</text>
-    <text class="flow-kw hold" x="${dumped[0] + 10}" y="${dumped[1] + 32}">writes</text>
     <text class="flow-kw ${store}" x="${copied[0] + 10}" y="${copied[1] + 32}">copy</text>
+    <text class="flow-kw hold" x="${summarized[0] + 10}" y="${summarized[1] + 32}">summary</text>
     ${boxes}
   </svg>`;
 }
 
 function renderArch(data) {
   if (!data || viewName !== "architecture") return;
+  if (!ARCH_BOX[archFocus]) archFocus = "machine";
   const live = archLive(data);
   const key = [
     archFocus,
@@ -2781,6 +2824,8 @@ function renderArch(data) {
     live.tone.store,
     live.state.ercot || "",
     live.state.supabase || "",
+    live.state.model || "",
+    data.demand_reverse ? "rev" : "",
   ].join("|");
   const holder = document.getElementById("arch-diagram");
   const role = document.getElementById("arch-role");
@@ -3046,6 +3091,26 @@ function frame() {
 // A unit id in the hash opens that battery, so a link points at one cabinet.
 // Add a block, as in #hou-0002/disco, and it opens on that block.
 // #metro/austin flies the camera to that city, close enough to see the substations.
+let reverseBusy = false;
+document.getElementById("day").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-demand-reverse]");
+  if (!button || reverseBusy) return;
+  event.stopPropagation();
+  reverseBusy = true;
+  button.disabled = true;
+  try {
+    await fetch(api("/api/agent"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ demand_reverse: button.dataset.demandReverse !== "1" }),
+    });
+    await poll();
+  } finally {
+    button.disabled = false;
+    reverseBusy = false;
+  }
+});
+
 document.querySelector(".nav").addEventListener("click", (event) => {
   const button = event.target.closest("[data-view]");
   if (button) showView(button.dataset.view);

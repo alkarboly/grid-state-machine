@@ -71,7 +71,7 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-The three `ERCOT_*` values turn on official prices and constraints. `SUPABASE_*` copies controller tables to hosted Postgres. `OPENAI_API_KEY` is unused on the architecture tab. Deploy is [docs/deploy.md](docs/deploy.md). Sample file is `.env.example`.
+The three `ERCOT_*` values turn on official prices and constraints. `SUPABASE_*` copies controller tables to hosted Postgres. `OPENAI_API_KEY` turns on a two-sentence summary of escalated service tickets. Deploy is [docs/deploy.md](docs/deploy.md). Sample file is `.env.example`.
 
 ## Tech stack
 
@@ -83,16 +83,16 @@ The three `ERCOT_*` values turn on official prices and constraints. `SUPABASE_*`
 
 ## Architecture
 
-Ingest takes the ERCOT snapshot and a simulated on-premises gateway stream, runs every home under the data contract, and writes SQLite. The state machine then chooses discharge, charge, or hold from Texas demand and ERCOT storage. The browser only talks to this origin. Full path: [docs/architecture.md](docs/architecture.md).
+Ingest takes the ERCOT snapshot and a simulated on-premises gateway stream and runs every home under the data contract. The state machine then chooses discharge, charge, or hold from Texas demand and ERCOT storage. OpenAI summarizes an escalated service ticket. The API copies controller tables to Supabase when the keys are set. The browser only talks to this origin. Full path: [docs/architecture.md](docs/architecture.md).
 
 ```mermaid
 flowchart LR
   ERCOT --> ingest[data ingest protocol]
   gateway[on-premises gateway] --> ingest
   ingest --> machine[state machine]
-  ingest --> sqlite[SQLite]
+  ingest -->|copy| supabase[Supabase]
   machine --> map[browser map]
-  sqlite -->|copy| supabase[Supabase]
+  machine --> openai[OpenAI]
 ```
 
 ## Datasets and synthetic data

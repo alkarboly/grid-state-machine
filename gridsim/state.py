@@ -42,6 +42,7 @@ from gridsim.sync import (
     push_addons,
     push_latest,
     push_market,
+    push_order,
     push_tick,
     push_usage,
 )
@@ -53,6 +54,7 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     price_day,
     prices_from_rows,
+    reverse_demand,
 )
 from gridsim.fleet.agent import audit, close_model_ticket, day_shape, open_model_tickets, record_toggle
 from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
@@ -349,6 +351,7 @@ class Fleet:
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
         self.day: list[dict] = []
+        self.demand_reverse = False
         self.status = {
             "dashboard": "unavailable",
             "dashboard_error": None,
@@ -468,13 +471,26 @@ class Fleet:
         with self._lock:
             if signal == "auto":
                 self._pending = None
-                return
-            self._pending = {
-                "signal": signal,
-                "intensity": intensity,
-                "source": "external",
-                "ts": iso(now_central()),
-            }
+            else:
+                self._pending = {
+                    "signal": signal,
+                    "intensity": intensity,
+                    "source": "external",
+                    "ts": iso(now_central()),
+                }
+        push_order(signal, intensity)
+
+    def set_demand_reverse(self, on: bool) -> dict:
+        """Invert today's ERCOT demand for the next tick. A restart clears it.
+
+        A posted order is cleared so the ladder can follow the inverted demand.
+        That clear is written to Supabase `dispatch_orders` when the keys are set.
+        """
+        with self._lock:
+            self.demand_reverse = bool(on)
+            self._pending = None
+        push_order("auto", None)
+        return {"demand_reverse": self.demand_reverse}
 
     def dispatch_view(self) -> dict:
         with self._lock:
@@ -561,7 +577,13 @@ class Fleet:
                         "dispatch": dispatch,
                         "grid": "off" if grid_off else "on",
                     })
-            return {"sites": rows}
+            return {"sites": rows, "demand_reverse": self.demand_reverse}
+
+    def _demand_view(self) -> tuple[dict, list[dict]]:
+        """Live ERCOT, or that series flipped around today's min and max."""
+        if not self.demand_reverse:
+            return self.grid, self.day
+        return reverse_demand(self.grid, self.day)
 
     def tick(self) -> None:
         remote, remote_error = pull_order()
@@ -614,9 +636,10 @@ class Fleet:
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
+            view_grid, view_day = self._demand_view()
             sites, logs, observations, points = tick_sites(
                 self.sites,
-                self.grid,
+                view_grid,
                 now,
                 dt_hours,
                 persist=self.persist,
@@ -635,17 +658,17 @@ class Fleet:
                 "because": note.get("because") or [],
             }
             self._remember_call(now)
-            row = _snapshot(self.grid, self.fleet, self.applied, note["frequency_hz"])
+            row = _snapshot(view_grid, self.fleet, self.applied, note["frequency_hz"])
             self.snapshot = row
             self._last_tick = now
             self._keep_usage(note.get("usage") or [])
-            grid = dict(self.grid)
-            grid["day"] = self.day
+            grid = dict(view_grid)
+            grid["day"] = view_day
             fresh = audit(self.sites, self.actions, grid, self.usage, now)
             if fresh:
                 self.actions.extend(fresh)
                 self._trim_actions()
-            market = _market(self.grid, self.fleet, self.applied, note["frequency_hz"], sites)
+            market = _market(view_grid, self.fleet, self.applied, note["frequency_hz"], sites)
             self.market = market
             publish = self._publish_sites()
             latest = [_latest(site, iso(now)) for site in publish]
@@ -715,7 +738,7 @@ class Fleet:
         usage = []
         for site_id in wanted:
             usage.extend(self.usage.get(site_id, [])[-6:])
-        return {"market": self.market, "units": units, "usage": usage, "day": list(self.day)}
+        return {"market": self.market, "units": units, "usage": usage, "day": list(self._demand_view()[1])}
 
     def _publish_sites(self) -> list[dict]:
         """Instrumented homes, plus any home an action or add-on has touched."""
@@ -758,6 +781,7 @@ class Fleet:
     def scene(self) -> dict:
         """Map payload. One row per battery, small enough to poll at fleet scale."""
         with self._lock:
+            view_grid, view_day = self._demand_view()
             sites = []
             for site in self.sites:
                 metrics = site.get("metrics") or {}
@@ -787,8 +811,8 @@ class Fleet:
                     row["flagged"] = flagged
                 sites.append(row)
             return {
-                "grid": {key: value for key, value in self.grid.items() if key != "prices"},
-                "prices": self.grid.get("prices") or [],
+                "grid": {key: value for key, value in view_grid.items() if key != "prices"},
+                "prices": view_grid.get("prices") or [],
                 "constraints": self.constraints,
                 "edges": self.edges,
                 "metros": self.metros,
@@ -821,8 +845,10 @@ class Fleet:
                 "gateway": gateway_view(self._gateway_batches, config.TICK_SECONDS),
                 "supabase": self.supabase,
                 "llm": self.llm,
-                "day": list(self.day),
-                "shape": day_shape(self.day),
+                "openai": "live" if config.OPENAI_API_KEY else "disabled",
+                "day": list(view_day),
+                "shape": day_shape(view_day),
+                "demand_reverse": self.demand_reverse,
                 "tick_seconds": config.TICK_SECONDS,
             }
 

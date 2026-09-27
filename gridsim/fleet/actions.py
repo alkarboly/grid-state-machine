@@ -13,6 +13,32 @@ from datetime import datetime, timedelta
 
 from gridsim.timeutil import iso
 
+# Crew wait on a field ticket. Mean two hours. Clipped so a visit is never instant.
+SERVICE_MEAN_MIN = 120.0
+SERVICE_SIGMA_MIN = 25.0
+SERVICE_FLOOR_MIN = 45
+SERVICE_CEIL_MIN = 240
+
+
+def service_wait_minutes(seed: str) -> int:
+    """Minutes until a service window ends. Normal around 2 hours."""
+    minutes = random.Random(seed).gauss(SERVICE_MEAN_MIN, SERVICE_SIGMA_MIN)
+    return int(min(SERVICE_CEIL_MIN, max(SERVICE_FLOOR_MIN, round(minutes))))
+
+
+def service_due(ends_at: str | None, now: datetime) -> bool:
+    """True when the service window has ended, or when no window is set."""
+    if not ends_at:
+        return True
+    try:
+        end = datetime.fromisoformat(ends_at)
+    except ValueError:
+        return True
+    left = now.replace(tzinfo=None) if now.tzinfo else now
+    right = end.replace(tzinfo=None) if end.tzinfo else end
+    return left >= right
+
+
 KINDS = ("scheduled_service", "set_signal", "install_addon", "remove_addon", "return_online")
 OPEN = ("pending", "active")
 # `sim` is a row written before the two managers. New rows use `fleet` or `maintenance`.
@@ -127,8 +153,9 @@ def new_action(
     start = starts_at or now
     end = ends_at
     if kind == "scheduled_service" and end is None:
-        hours = 1.0 + random.Random(action_id).random()
-        end = start + timedelta(hours=hours)
+        wait = service_wait_minutes(action_id)
+        end = start + timedelta(minutes=wait)
+        body.setdefault("estimate_min", wait)
     if kind == "set_signal" and end is None:
         end = start + timedelta(hours=1)
     return {
@@ -210,12 +237,9 @@ def apply_actions(sites: list[dict], actions: list[dict], now: datetime) -> list
             stage = payload.get("stage")
             # A reset stays open past its estimate. The maintenance manager
             # either clears it or escalates the same row into a field ticket.
-            if now >= end and stage != "reset":
+            # A ticket stays open until the model pull after ends_at.
+            if now >= end and stage not in ("reset", "ticket"):
                 action["status"] = "done"
-                chart_id = payload.get("chart_id")
-                armed = site.get("armed") or []
-                if stage == "ticket" and chart_id in armed:
-                    site["armed"] = [item for item in armed if item != chart_id]
                 created.append(
                     {
                         "id": uuid.uuid4().hex,

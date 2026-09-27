@@ -1,11 +1,12 @@
-"""Optional call out to a model that writes unit actions.
+"""OpenAI summarizes an escalated service ticket. LLM_URL is a separate optional writer.
 
-The tick does not wait on this unless LLM_URL is set, and even then it runs
-at most once per LLM_EVERY_S. The request and response shapes are docs/llm.md.
-A missing URL means the remote model is skipped. The fleet and maintenance managers still write rows.
+decide_maintenance writes two sentences from GET /api/site/{id}: the readings
+and how the chart procedure resolves them. The state machine still closes the
+ticket. A missing OPENAI_API_KEY keeps the chart sentence.
 
-An escalated maintenance ticket is separate. The model pulls GET /api/site/{id}
-on this API server and closes that ticket from the chart contract.
+LLM_URL is optional and outside the tick. It POSTs at most once per
+LLM_EVERY_S. Shapes are docs/llm.md. The fleet and maintenance managers still
+write rows when that URL is unset.
 """
 
 from __future__ import annotations
@@ -51,10 +52,10 @@ def _chat(system: str, user: str) -> str | None:
 
 
 def decide_maintenance(pull: dict) -> dict | None:
-    """Ask OPENAI_MODEL how to resolve this pull. None keeps the chart sentence."""
+    """Ask OPENAI_MODEL to summarize this pull. None keeps the chart sentence."""
     raw = _chat(
         (
-            "You resolve one home-battery maintenance ticket. "
+            "You summarize one home-battery maintenance ticket. "
             "Use only the JSON you are given. evidence.action is the procedure for this chart. "
             'Reply with JSON {"result":"done","action":"..."}. '
             "action is two sentences: what the readings show, and how that procedure resolves it. "

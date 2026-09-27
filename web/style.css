@@ -130,6 +130,23 @@ main {
 .day-price { fill: none; stroke: var(--watch); stroke-width: 1.25; }
 .day-forecast { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-dasharray: 3 3; }
 .day-now { stroke: var(--line); stroke-width: 1; }
+.day-toggle {
+  pointer-events: auto;
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.day-toggle:hover { color: var(--ink); border-color: var(--ink); }
+.day-toggle.on { color: var(--watch); border-color: var(--watch); }
 
 #back {
   position: absolute;

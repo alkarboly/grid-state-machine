@@ -12,7 +12,7 @@ Source of truth for names, shapes, and flows. If code and these pages disagree, 
 | [control-charts.md](control-charts.md) | The six chart families, limits, and rules |
 | [database.md](database.md) | Tables, the machine-learning row, and the Postgres mapping |
 | [data-model.md](data-model.md) | Entity diagram of the Supabase tables, and the disco sample |
-| [llm.md](llm.md) | What the model reads and which action rows it may write |
+| [llm.md](llm.md) | What OpenAI summarizes on a service ticket, and which action rows `LLM_URL` may write |
 | [deploy.md](deploy.md) | Supabase migrations and the Render web service |
 | [simulation.md](simulation.md) | Per-battery load, dispatch, and the trigger that starts maintenance |
 | [gaps.md](gaps.md) | Facts we do not have yet |

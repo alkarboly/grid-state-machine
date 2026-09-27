@@ -35,12 +35,29 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(base["discharge_kw"], 0.0)
         self.assertEqual(action["status"], "active")
 
-        later = now + timedelta(hours=3)
+        later = now + timedelta(hours=5)
         created = apply_actions(updated, [action], later)
         self.assertEqual(action["status"], "done")
         self.assertEqual(created[0]["kind"], "return_online")
         self.assertEqual(created[0]["actor"], "api")
         self.assertNotIn("offline", updated[0])
+
+    def test_a_ticket_stage_stays_open_past_ends_at(self):
+        now = datetime(2026, 9, 25, 13, 0, tzinfo=CENTRAL)
+        site = build_sites(fleet_size=40)[0]
+        action = new_action(
+            site["id"],
+            "scheduled_service",
+            now,
+            actor="llm",
+            payload={"stage": "ticket", "chart_id": "base_temp"},
+        )
+        apply_actions([site], [action], now)
+        self.assertEqual(action["status"], "active")
+        created = apply_actions([site], [action], now + timedelta(hours=5))
+        self.assertEqual(action["status"], "active")
+        self.assertEqual(created, [])
+        self.assertTrue(site["offline"])
 
     def test_solar_feeds_the_house_and_the_battery(self):
         now = datetime(2026, 9, 25, 13, 0, tzinfo=CENTRAL)

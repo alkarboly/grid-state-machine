@@ -6,7 +6,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from gridsim import config
-from gridsim.fleet.actions import market_rate
+from gridsim.fleet.actions import market_rate, service_wait_minutes
 from gridsim.llm import decide_maintenance
 from gridsim.fleet.agent import (
     RESOLUTION,
@@ -21,6 +21,7 @@ from gridsim.fleet.agent import (
 )
 from gridsim.fleet.charts import CHARTS
 from gridsim.fleet.simulate import build_sites, tick_sites
+from gridsim.timeutil import iso
 
 CENTRAL = ZoneInfo("America/Chicago")
 
@@ -60,6 +61,7 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(RESOLUTION["dispatch_response"]["clears"])
         self.assertIsNone(RESOLUTION["base_temp"]["reset_min"])
         self.assertNotIn("frequency", RESOLUTION)
+        self.assertNotIn("service_min", RESOLUTION["base_temp"])
 
     def test_an_alarm_opens_one_ticket(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
@@ -74,9 +76,12 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(voltage["payload"]["stage"], "reset")
         self.assertEqual(voltage["payload"]["estimate_min"], RESOLUTION["disco_voltage"]["reset_min"])
         thermal = by_code["base_temp"]
+        wait = service_wait_minutes(f"{site['id']}:base_temp:{iso(now)}")
         self.assertEqual(thermal["actor"], "llm")
         self.assertEqual(thermal["payload"]["stage"], "ticket")
-        self.assertEqual(thermal["payload"]["estimate_min"], 30)
+        self.assertEqual(thermal["payload"]["estimate_min"], wait)
+        self.assertGreaterEqual(wait, 45)
+        self.assertLessEqual(wait, 240)
         self.assertIn("temp 49.0", thermal["note"])
         self.assertEqual(thermal["payload"]["escalation"][-1]["result"], "reset skipped")
         again = audit([site], rows, _grid(0.5), {}, now)
@@ -110,7 +115,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(ticket["id"], rows[0]["id"])
         self.assertEqual(ticket["actor"], "llm")
         self.assertEqual(ticket["payload"]["stage"], "ticket")
-        self.assertEqual(ticket["payload"]["estimate_min"], 20)
+        wait = service_wait_minutes(f"{site['id']}:soc_tracking:{iso(later)}")
+        self.assertEqual(ticket["payload"]["estimate_min"], wait)
+        self.assertGreaterEqual(wait, 45)
+        self.assertLessEqual(wait, 240)
         self.assertEqual(
             [item["result"] for item in ticket["payload"]["escalation"]],
             ["trying", "did not clear", "reset 15s did not clear"],
@@ -152,15 +160,24 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(online["kind"], "return_online")
         self.assertIsNone(close_model_ticket(site, ticket, detail, now))
 
-    def test_the_pull_waits_until_the_next_tick(self):
+    def test_the_pull_waits_until_ends_at(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
         site = _bare({"base_temp"})
         site["armed"] = ["base_temp"]
         rows = audit([site], [], _grid(0.5), {}, now)
         self.assertTrue(site["offline"])
         self.assertEqual(open_model_tickets(rows, now), [])
-        later = open_model_tickets(rows, now + timedelta(seconds=10))
+        self.assertEqual(open_model_tickets(rows, now + timedelta(seconds=10)), [])
+        end = datetime.fromisoformat(rows[0]["ends_at"])
+        self.assertEqual(open_model_tickets(rows, end - timedelta(seconds=1)), [])
+        later = open_model_tickets(rows, end)
         self.assertEqual(later[0]["id"], rows[0]["id"])
+
+    def test_service_wait_is_a_clipped_normal(self):
+        draws = [service_wait_minutes(str(seed)) for seed in range(80)]
+        self.assertTrue(all(45 <= minutes <= 240 for minutes in draws))
+        self.assertGreater(sum(draws) / len(draws), 90)
+        self.assertLess(sum(draws) / len(draws), 150)
 
     def test_a_model_reply_is_the_decision(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)

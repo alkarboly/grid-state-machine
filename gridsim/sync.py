@@ -1,8 +1,10 @@
 """The real-time dispatch bus.
 
 Supabase is optional. When it is configured, each tick inserts one
-`dispatch_ticks` row and reads the newest `dispatch_orders` row. The browser
-never sees the service-role key. A failed call does not stop the tick.
+`dispatch_ticks` row and reads the newest `dispatch_orders` row. A posted
+fleet call, and reverse demand clearing that call, write `dispatch_orders`.
+The browser never sees the service-role key. A failed call does not stop
+the tick.
 """
 
 from __future__ import annotations
@@ -69,6 +71,21 @@ def pull_order() -> tuple[dict | None, str | None]:
         "source": "external",
         "ts": row.get("ts") or "",
     }, None
+
+
+def push_order(signal: str, intensity: float | None) -> str | None:
+    """Insert a dispatch_orders row. None means success or not configured."""
+    if not config.supabase_configured():
+        return None
+    if signal not in ("push", "pull", "hold", "auto"):
+        return "dispatch order has an unknown signal"
+    url = f"{config.SUPABASE_URL}/rest/v1/dispatch_orders"
+    body = {"signal": signal, "intensity": intensity}
+    try:
+        _request("POST", url, body, {"Prefer": "return=minimal"})
+    except Exception as exc:
+        return str(exc)
+    return None
 
 
 def push_tick(row: dict) -> str | None:

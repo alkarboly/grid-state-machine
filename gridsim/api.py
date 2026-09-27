@@ -61,6 +61,10 @@ def agent():
 
 @app.post("/api/agent")
 def post_agent(body: dict):
+    if "demand_reverse" in body:
+        if not isinstance(body.get("demand_reverse"), bool):
+            raise HTTPException(status_code=400, detail="demand_reverse must be true or false")
+        return fleet.set_demand_reverse(body["demand_reverse"])
     site_id = body.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=400, detail="site_id is required")

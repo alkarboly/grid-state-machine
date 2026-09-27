@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from gridsim.fleet.actions import OPEN, market_rate, new_action
+from gridsim.fleet.actions import OPEN, market_rate, new_action, service_due, service_wait_minutes
 from gridsim.llm import decide_maintenance, site_evidence
 from gridsim.timeutil import iso
 from gridsim.fleet.charts import CHARTS, mean_sigma, subgroup_size
@@ -195,16 +195,21 @@ def _price_note(because: list[dict], expected: float, source: str, shape: dict |
 
 # Simulated maintenance. Minutes are assumptions, not a crew schedule.
 # 15 seconds keeps reset flows visible in a short demo.
+# A field ticket waits a normal draw around 2 hours (see service_wait_minutes).
 RESET_MIN = 0.25
 # A reset is a short outage. `clears` means that reboot is assumed to fix it.
 # Otherwise the same ticket escalates and the agent writes the visit.
 RESOLUTION = {
-    "disco_meter_delta": {"reset_min": RESET_MIN, "clears": True, "service_min": 20},
-    "disco_voltage": {"reset_min": RESET_MIN, "clears": True, "service_min": 20},
-    "soc_tracking": {"reset_min": RESET_MIN, "clears": False, "service_min": 20},
-    "dispatch_response": {"reset_min": RESET_MIN, "clears": False, "service_min": 20},
-    "base_temp": {"reset_min": None, "clears": False, "service_min": 30},
+    "disco_meter_delta": {"reset_min": RESET_MIN, "clears": True},
+    "disco_voltage": {"reset_min": RESET_MIN, "clears": True},
+    "soc_tracking": {"reset_min": RESET_MIN, "clears": False},
+    "dispatch_response": {"reset_min": RESET_MIN, "clears": False},
+    "base_temp": {"reset_min": None, "clears": False},
 }
+
+
+def _ticket_wait(site_id: str, chart_id: str, now: datetime) -> int:
+    return service_wait_minutes(f"{site_id}:{chart_id}:{iso(now)}")
 
 
 def _open_ticket(actions: list[dict], site_id: str, chart_id: str) -> dict | None:
@@ -237,9 +242,14 @@ def _estimate_label(minutes: float | None) -> str:
         return ""
     if minutes < 1:
         return f"{round(minutes * 60)}s"
-    if float(minutes).is_integer():
-        return f"{int(minutes)}m"
-    return f"{minutes:g}m"
+    if minutes < 60:
+        if float(minutes).is_integer():
+            return f"{int(minutes)}m"
+        return f"{minutes:g}m"
+    hours = float(minutes) / 60.0
+    if abs(hours - round(hours)) < 1e-9:
+        return f"{int(round(hours))}h"
+    return f"{hours:.1f}h"
 
 
 def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: float | None) -> str:
@@ -340,7 +350,8 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             ends_at=now + timedelta(minutes=policy["reset_min"]),
         )
     else:
-        payload = _ticket_payload(spec, policy, gathered, because, None, now)
+        wait = _ticket_wait(site["id"], spec["chart_id"], now)
+        payload = _ticket_payload(spec, gathered, because, None, now, wait)
         row = new_action(
             site["id"],
             "scheduled_service",
@@ -348,7 +359,7 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             note=_agent_note(site, spec["chart_id"], gathered, None),
             payload=payload,
             actor="llm",
-            ends_at=now + timedelta(minutes=policy["service_min"]),
+            ends_at=now + timedelta(minutes=wait),
         )
     site["offline"] = True
     pending.append(row)
@@ -375,16 +386,16 @@ def _append_step(ticket: dict, stage: str, estimate_min, result: str, actor: str
     steps.append(_step(stage, estimate_min, result, actor, now))
 
 
-def _ticket_payload(spec, policy, gathered, because, reset_min, now: datetime) -> dict:
+def _ticket_payload(spec, gathered, because, reset_min, now: datetime, wait: int) -> dict:
     result = "reset skipped" if not reset_min else f"reset {_estimate_label(reset_min)} did not clear"
     steps = []
     if reset_min:
         steps.append(_step("reset", reset_min, "did not clear", "maintenance", now))
-    steps.append(_step("ticket", policy["service_min"], result, "llm", now))
+    steps.append(_step("ticket", wait, result, "llm", now))
     return {
         "chart_id": spec["chart_id"],
         "stage": "ticket",
-        "estimate_min": policy["service_min"],
+        "estimate_min": wait,
         "because": because,
         "gathered": gathered,
         "escalation": steps,
@@ -413,28 +424,28 @@ def _clear_reset(site, ticket, now, created) -> None:
 def _escalate(site, ticket, chart, spec, policy, now) -> None:
     reset_min = policy["reset_min"]
     gathered = _gathered(site, chart)
+    wait = _ticket_wait(site["id"], spec["chart_id"], now)
     payload = ticket.setdefault("payload", {})
     payload["chart_id"] = spec["chart_id"]
     payload["stage"] = "ticket"
-    payload["estimate_min"] = policy["service_min"]
+    payload["estimate_min"] = wait
     payload["gathered"] = gathered
     payload["because"] = payload.get("because") or []
     if reset_min:
         _append_step(ticket, "reset", reset_min, "did not clear", "maintenance", now)
     result = "reset skipped" if not reset_min else f"reset {_estimate_label(reset_min)} did not clear"
-    _append_step(ticket, "ticket", policy["service_min"], result, "llm", now)
+    _append_step(ticket, "ticket", wait, result, "llm", now)
     ticket["actor"] = "llm"
     ticket["status"] = "active"
-    ticket["ends_at"] = iso(now + timedelta(minutes=policy["service_min"]))
+    ticket["ends_at"] = iso(now + timedelta(minutes=wait))
     ticket["note"] = _agent_note(site, spec["chart_id"], gathered, reset_min)
     site["offline"] = True
 
 
 def open_model_tickets(actions: list[dict], now: datetime | None = None) -> list[dict]:
-    """Escalated visits the model still has to close from a site pull.
+    """Escalated visits whose service window has ended, waiting on a summary.
 
-    A visit opened on this tick stays active so the case is visible. The pull
-    runs on a later tick.
+    The visit stays active through ends_at. The pull runs on a later tick.
     """
     stamp = iso(now) if now is not None else ""
     found = []
@@ -448,6 +459,8 @@ def open_model_tickets(actions: list[dict], now: datetime | None = None) -> list
             continue
         if payload.get("stage") != "ticket" or payload.get("decision") or not payload.get("chart_id"):
             continue
+        if now is not None and not service_due(action.get("ends_at"), now):
+            continue
         steps = payload.get("escalation") or []
         opened = steps[-1].get("ts") if steps and isinstance(steps[-1], dict) else ""
         if stamp and opened == stamp:
@@ -459,8 +472,9 @@ def open_model_tickets(actions: list[dict], now: datetime | None = None) -> list
 def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) -> dict | None:
     """Close one visit from a GET /api/site/{id} body.
 
-    When OPENAI_API_KEY is set, OPENAI_MODEL writes decision.action from the pull.
-    A missing key or a failed call keeps the chart's action sentence.
+    When OPENAI_API_KEY is set, OPENAI_MODEL summarizes the ticket into
+    decision.action. A missing key or a failed call keeps the chart sentence.
+    The close itself is this function: done, disarm, return_online.
     """
     if detail.get("id") != site.get("id") or detail.get("id") != ticket.get("site_id"):
         return None
@@ -494,7 +508,7 @@ def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) ->
         now,
         "llm",
         ticket["id"],
-        note="Back online after the model closed the ticket",
+        note="Back online after the ticket summary",
     )
 
 

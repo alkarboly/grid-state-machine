@@ -2570,36 +2570,28 @@ function ingestDecisions(data) {
   paintDecisions();
 }
 
-const ARCH_W = 150;
-const ARCH_H = 52;
+const ARCH_W = 188;
+const ARCH_H = 74;
 const ARCH_BOX = {
-  dashboard: [32, 48],
-  official: [32, 120],
-  snapshot: [248, 48],
-  tick: [420, 48],
-  managers: [592, 48],
-  contracts: [248, 136],
-  scene: [592, 136],
-  map: [824, 64],
-  sqlite: [40, 312],
-  supabase: [384, 312],
-  llm: [728, 312],
+  ercot: [28, 44],
+  tick: [248, 44],
+  machine: [468, 44],
+  map: [708, 44],
+  sqlite: [248, 214],
+  model: [468, 214],
+  supabase: [708, 214],
 };
 const ARCH_ROLE = {
-  dashboard: "Public dashboard JSON, fetched with no key: system demand, the short forecast, and five-minute generation by fuel, including power-storage megawatts.",
-  official: "When ERCOT_USERNAME, ERCOT_PASSWORD, and ERCOT_SUBSCRIPTION_KEY are set, api.ercot.com adds binding constraints and settlement-point LMPs. The public dashboard works without them.",
-  snapshot: "The normalized grid snapshot, constraints, and prices, held in this process. Raw payloads are written to SQLite raw_records before they are normalized.",
-  tick: "One battery at a time, in this process: load, dispatch, sensor noise, and control charts. The log state for each home stays in memory, last 180 ticks. It is not a table.",
-  managers: "Still inside the tick. The maintenance manager opens or escalates a ticket, then the fleet manager posts a price call. Both append unit_actions.",
-  contracts: "contracts.md is the component metrics, the state snapshot, and the log state. The unit view shows those shapes. Instrumented homes also write the component contract to SQLite metric_logs. llm.md is the controller contract: the tables the model reads in Supabase, and the unit_actions it may write.",
-  scene: "One process is the API and the map. Deployed, that process is the Render web service gridsim. That service has not been created from this repo, so this machine is it. The browser talks only to this origin. GET /api/scene is the map. GET /api/dispatch is the control row.",
-  map: "The browser. It polls this origin for /api/scene. It never opens SQLite or Supabase.",
-  sqlite: "data/gridsim.db on the service disk. Render's disk is ephemeral. This file keeps sites, raw_records, grid_snapshots, metric_logs, observations, control_points, fleet_rollups, and a copy of dispatch_ticks. Identity stays here. There is no sites table in Supabase.",
-  supabase: "A separate hosted Postgres project. It has not been created from this repo yet. The controller tables live here: market_ticks, unit_latest, usage_hours, dispatch_orders, dispatch_ticks, unit_actions, addon_catalog, and site_addons. Row level security is on and there is no anon policy, so the browser cannot read them.",
-  llm: "A remote model does not sit inside the tick. An escalated maintenance ticket is resolved here: this process pulls GET /api/site/{id} and closes the ticket done. When OPENAI_API_KEY is set, OPENAI_MODEL writes the decision from that pull. Otherwise the decision is the chart's action sentence. When LLM_URL is set, this process also POSTs the fleet read model and turns the reply into unit_actions. LLM_URL is unset, so that fleet call is not made.",
+  ercot: "Live system demand, the short forecast, and generation by fuel, from the public dashboard. No key. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
+  tick: "The Render web service gridsim, one home at a time. That service has not been created, so this machine is it. Load, battery dispatch, sensor noise, and the control charts. Each home keeps the last 180 ticks in memory. The same tick writes Supabase when that project is configured.",
+  machine: "The state machine. The ladder chooses push, pull, or hold for the fleet. The maintenance manager opens one visit when a chart alarms. The fleet manager posts a price call on a home set to dispatch. The decisions log labels these steps [state machine].",
+  model: "Closes a visit. On the tick after one opens, this process reads GET /api/site/{id} and writes the close. With no OpenAI key, the sentence is the chart's action. The next tick applies it.",
+  map: "The browser. It polls the Render service every 5 seconds and draws one dot per home. It does not open SQLite or Supabase.",
+  sqlite: "data/gridsim.db on the Render service disk. That disk is ephemeral, and the service has not been created, so the file is on this machine. Identity, raw ERCOT payloads, component logs, and a copy of dispatch_ticks. There is no sites table in Supabase.",
+  supabase: "Hosted Postgres, separate from the Render service. The tick writes market_ticks, unit_latest, usage_hours, dispatch_ticks, and unit_actions, and it reads dispatch_orders, when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set. The line under the box is that scene field. The project has not been created, so it reads disabled. The browser cannot read these tables.",
 };
 let viewName = "fleet";
-let archFocus = "scene";
+let archFocus = "machine";
 let archKey = "";
 
 function archRight(id) {
@@ -2647,6 +2639,22 @@ function archJoin(from, to) {
   return [start, [x, start[1]], [x, end[1]], end];
 }
 
+function archModelNote(data) {
+  const rows = (data.actions || []).filter((action) => {
+    if (action.kind !== "scheduled_service") return false;
+    const payload = action.payload || {};
+    const steps = payload.escalation || [];
+    return action.actor === "llm" || payload.decision || steps.some((step) => step.actor === "llm");
+  });
+  const open = rows.find((action) => (action.status === "active" || action.status === "pending") && !(action.payload || {}).decision);
+  if (open) return `pulling ${open.site_id}`;
+  const latest = rows.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""))[0];
+  const decision = latest && (latest.payload || {}).decision;
+  if (decision && decision.model) return decision.model;
+  if (decision) return "chart sentence";
+  return "site pull";
+}
+
 function archLive(data) {
   const ercot = data.ercot || {};
   const grid = data.grid || {};
@@ -2657,48 +2665,44 @@ function archLive(data) {
   const mw = Math.abs(netKw) / 1000;
   const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
   const demand = grid.demand_mw == null ? "—" : `${fmt(grid.demand_mw, 0)} MW`;
-  const constraints = (data.constraints || []).length;
-  const official = ercot.official_api || "—";
+  const modelNote = archModelNote(data);
   return {
     signal,
     notes: {
-      dashboard: `${ercot.dashboard || "—"} · ${demand}`,
-      official: constraints ? `${official} · ${fmt(constraints)} constraints` : official,
-      snapshot: `percentile ${fmt(grid.demand_percentile, 2)}`,
-      tick: `${fmt(fleet.units, 0)} homes`,
-      managers: `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`,
-      contracts: "memory · metric_logs",
-      scene: "this origin · 5s",
-      map: `${flow} ${fmt(mw, 2)} MW`,
-      sqlite: "gridsim.db",
-      supabase: data.supabase || "—",
-      llm: data.llm || "—",
+      ercot: ["Public demand, no key", `${ercot.dashboard || "—"} · ${demand}`],
+      tick: ["Each home's load and charts", `${fmt(fleet.units, 0)} homes`],
+      machine: ["Decides push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
+      model: ["Reads the home, writes the close", modelNote],
+      map: ["Polls the Render service", `${flow} ${fmt(mw, 2)} MW`],
+      sqlite: ["File on the service disk", "gridsim.db"],
+      supabase: ["Dispatch, market, actions", data.supabase || "—"],
     },
     tone: {
       in: ercot.dashboard === "live" ? "push" : "hold",
-      official: official === "live" ? "push" : "hold",
       call: signal === "pull" || signal === "push" ? signal : "hold",
       store: data.supabase === "live" ? "push" : "hold",
     },
     state: {
-      dashboard: ercot.dashboard === "unavailable" ? "flagged" : ercot.dashboard === "cached" ? "watch" : "",
-      official: official === "error" ? "flagged" : official === "pending" ? "watch" : "",
+      ercot: ercot.dashboard === "unavailable" ? "flagged" : ercot.dashboard === "cached" ? "watch" : "",
       supabase: data.supabase === "error" ? "flagged" : data.supabase === "live" ? "" : "watch",
-      llm: data.llm === "error" ? "flagged" : data.llm === "live" ? "" : "watch",
     },
   };
 }
 
 function archBox(id, name, note, state) {
   const [x, y] = ARCH_BOX[id];
+  const lines = Array.isArray(note) ? note : [note];
   const classes = ["blk"];
   if (archFocus === id) classes.push("on");
   if (state) classes.push(state);
+  const text = lines.map((line, index) => (
+    `<text class="blk-note" data-note="${id}:${index}" x="${x + 14}" y="${y + 40 + index * 14}">${escapeHtml(line)}</text>`
+  )).join("");
   return `<g class="${classes.join(" ")}" data-arch="${id}" tabindex="0" role="button" aria-label="${name}">
     <rect class="blk-bg" x="${x}" y="${y}" width="${ARCH_W}" height="${ARCH_H}" rx="3" />
     <rect class="blk-edge" x="${x}" y="${y}" width="2.5" height="${ARCH_H}" />
     <text class="blk-name" x="${x + 14}" y="${y + 22}">${name}</text>
-    <text class="blk-note" data-note="${id}" x="${x + 14}" y="${y + 40}">${escapeHtml(note)}</text>
+    ${text}
   </g>`;
 }
 
@@ -2709,45 +2713,38 @@ function archRegion(x, y, w, h, label) {
 
 function archSvg(live) {
   const call = live.tone.call;
-  const tickBottom = archBottom("tick");
+  const store = live.tone.store;
+  const fork = archBottom("tick");
+  const storeTop = archTop("supabase");
   const regions = [
-    archRegion(12, 12, 196, 188, "ERCOT"),
-    archRegion(224, 12, 548, 196, "API server · Render web service"),
-    archRegion(788, 12, 220, 140, "browser"),
-    archRegion(12, 248, 330, 156, "SQLite · service disk"),
-    archRegion(356, 248, 330, 156, "Supabase · hosted Postgres"),
-    archRegion(700, 248, 308, 156, "LLM · outside the tick"),
+    archRegion(12, 20, 216, 130, "ERCOT"),
+    archRegion(232, 20, 444, 292, "Render · gridsim"),
+    archRegion(692, 20, 220, 130, "browser"),
+    archRegion(692, 186, 220, 126, "Supabase"),
   ].join("");
   const links = [
-    archLink(archJoin("dashboard", "snapshot"), live.tone.in),
-    archLink(archJoin("official", "snapshot"), live.tone.official),
-    archLink([archRight("snapshot"), archLeft("tick")], call),
-    archLink([archRight("tick"), archLeft("managers")], call),
-    archLink([archBottom("snapshot"), archTop("contracts")], "hold"),
-    archLink([archBottom("managers"), archTop("scene")], "hold"),
-    archLink([archRight("scene"), [806, archRight("scene")[1]], [806, archLeft("map")[1]], archLeft("map")], "hold"),
-    archLink([tickBottom, [tickBottom[0], 286], [archTop("sqlite")[0], 286], archTop("sqlite")], "hold"),
-    archLink([archRight("managers"), [760, archRight("managers")[1]], [760, 286], [archTop("supabase")[0], 286], archTop("supabase")], live.tone.store),
-    archLink([archRight("supabase"), archLeft("llm")], live.tone.store),
-    archLink([archTop("llm"), [archTop("llm")[0], 232], [tickBottom[0], 232], tickBottom], call),
+    archLink(archJoin("ercot", "tick"), live.tone.in),
+    archLink(archJoin("tick", "machine"), call),
+    archLink(archJoin("machine", "map"), call),
+    archLink([archBottom("tick"), archTop("sqlite")], "hold"),
+    archLink([archBottom("machine"), archTop("model")], call),
+    archLink([[fork[0], 176], [storeTop[0], 176], storeTop], store),
   ].join("");
   const boxes = [
-    ["dashboard", "ERCOT dashboard"],
-    ["official", "public API"],
-    ["snapshot", "grid snapshot"],
-    ["tick", "fleet tick"],
-    ["managers", "managers"],
-    ["contracts", "contracts"],
-    ["scene", "scene"],
+    ["ercot", "ERCOT"],
+    ["tick", "tick"],
+    ["machine", "state machine"],
     ["map", "map"],
     ["sqlite", "SQLite"],
+    ["model", "model"],
     ["supabase", "Supabase"],
-    ["llm", "LLM"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
-  return `<svg viewBox="0 0 1020 420" class="diagram arch-svg">
+  const visit = archBottom("machine");
+  return `<svg viewBox="0 0 930 332" class="diagram arch-svg">
     ${regions}
     ${links}
-    <text class="flow-kw ${call}" x="560" y="226">next tick</text>
+    <text class="flow-kw ${call}" x="${visit[0] + 10}" y="${visit[1] + 32}">visit</text>
+    <text class="flow-kw ${store}" x="640" y="168">writes</text>
     ${boxes}
   </svg>`;
 }
@@ -2759,12 +2756,9 @@ function renderArch(data) {
     archFocus,
     live.signal,
     live.tone.in,
-    live.tone.official,
     live.tone.store,
-    live.state.dashboard,
-    live.state.official,
-    live.state.supabase,
-    live.state.llm,
+    live.state.ercot || "",
+    live.state.supabase || "",
   ].join("|");
   const holder = document.getElementById("arch-diagram");
   const role = document.getElementById("arch-role");
@@ -2775,8 +2769,11 @@ function renderArch(data) {
     return;
   }
   for (const [id, text] of Object.entries(live.notes)) {
-    const node = holder.querySelector(`[data-note="${id}"]`);
-    if (node) node.textContent = text;
+    const lines = Array.isArray(text) ? text : [text];
+    lines.forEach((line, index) => {
+      const node = holder.querySelector(`[data-note="${id}:${index}"]`);
+      if (node) node.textContent = line;
+    });
   }
 }
 

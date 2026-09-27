@@ -117,9 +117,9 @@ alter publication supabase_realtime add table dispatch_ticks;
 
 Add `dispatch_ticks` to the realtime publication so a subscriber sees each tick as it is inserted. The service-role key used by this process must not be placed in the browser.
 
-## What the controller reads
+## What the API server reads for the model
 
-These three tables are the read model in [llm.md](llm.md). The bot upserts them. It does not publish all 3000 homes: `unit_latest` and `usage_hours` cover the instrumented cohort plus any home with an action or an add-on, capped at 80 homes a tick.
+These three tables are the read model in [llm.md](llm.md). The API server upserts them. The model does not query them. The server does not publish all 3000 homes: `unit_latest` and `usage_hours` cover the instrumented cohort plus any home with an action or an add-on, capped at 80 homes a tick.
 
 ### `market_ticks`
 
@@ -133,7 +133,7 @@ One row per published home, replaced in place. `site_id`, `ts`, `soc_kwh`, `soc_
 
 One row per home per clock hour, written when that hour closes. `ts` is the first tick of the hour. `hour`, `load_kwh`, `import_kwh`, `export_kwh`, `solar_kwh`, `ev_kwh`, `temp_c`. `temp_c` is the mean cabinet temperature of every sample in that hour. The energy columns are integrals.
 
-## What the controller writes
+## What the API server writes for the model
 
 ### `unit_actions`
 

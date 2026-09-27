@@ -48,6 +48,10 @@ Solar and the car charger are optional add-ons. With neither installed, that is 
 
 Positive net is grid/meter in. Negative net is grid/meter out. The grid component records that true split. The meter adds a tight error (standard deviation 0.02 kW on the net). The disco adds a wider error (standard deviation 0.06 kW) because it is the Pi measurement, not the billing meter.
 
+## Field stream
+
+There is no device in the field and no socket. Each tick this process generates one disco sample per home, the sample in [data-model.md](data-model.md), and names that batch an on-premises gateway stream. `GET /api/scene` returns `gateway` with `place` `on_prem`, `source` `simulated`, `status` `generating`, the home count, and `stream` (the latest four batches, newest first). The map card and the architecture box both say simulated and generating now.
+
 The fleet ledger adds those same quantities across every unit. Pushing, pulling, and holding add up to the fleet. Grid in minus grid out adds up to house load plus car chargers minus solar plus solar that went into the batteries plus battery charge minus battery discharge. Solar used on site is the solar that did not charge the battery.
 
 Each battery has its own one-way efficiency `eta`, drawn between 0.94 and 0.975. State of charge moves with wall-clock time unless `SIM_TIME_SCALE` is set above 1. Scale multiplies elapsed time inside the battery integral only. Log timestamps stay on the wall clock.

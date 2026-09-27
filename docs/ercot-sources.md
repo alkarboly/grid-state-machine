@@ -54,7 +54,7 @@ The ID token is minted with a password grant against `https://ercotb2c.b2clogin.
 | NP6-788-CD | `/np6-788-cd/lmp_node_zone_hub` | Latest interval: settlement point and LMP |
 | NP6-787-CD | `/np6-787-cd/lmp_electrical_bus` | One page (1000 rows), stored raw. `bus_lmp_rows` counts how many of those rows sit in the latest SCED interval. This is a sample of the bus set, not every bus. |
 
-Query window parameters are `SCEDTimestampFrom` and `SCEDTimestampTo`. Pagination uses `size` and `page`. Rows come back as `fields` plus `data` (a list of lists).
+Query window parameters are `SCEDTimestampFrom` and `SCEDTimestampTo`, Central time as `yyyy-MM-ddThh:mm:ss` with no offset. An offset is a 400. Pagination uses `size` and `page`. Rows come back as `fields` plus `data` (a list of lists).
 
 Constraint field names are matched after lowercasing and stripping punctuation, so `FromStation`, `fromStation`, and `from_station` all map to `from_station`.
 

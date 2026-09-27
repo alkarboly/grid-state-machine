@@ -1,6 +1,6 @@
 # Deploy
 
-One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table a controller reads and writes. The browser talks only to that service. The service-role key stays in the service environment.
+One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table the API server reads and writes. The model talks to the API server, not to Supabase. The browser talks only to that service. The service-role key stays in the service environment.
 
 Do not paste the service-role key, the OpenAI key, the ERCOT password, or the subscription key into chat. Set them in the Render dashboard.
 

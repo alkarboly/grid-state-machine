@@ -608,5 +608,42 @@ class ScaleTests(unittest.TestCase):
         self.assertEqual(totals["alarms"], 0)
 
 
+class ErcotWindowTests(unittest.TestCase):
+    def test_the_sced_window_has_no_offset(self):
+        from gridsim.ercot.client import _window
+
+        window = _window(1)
+        for stamp in window.values():
+            self.assertRegex(stamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+
+
+class GatewayStreamTests(unittest.TestCase):
+    def test_the_gateway_says_it_is_generating(self):
+        from gridsim.state import gateway_view
+
+        view = gateway_view(
+            [
+                {"ts": "2026-09-26T21:16:02", "homes": 2, "samples": 2},
+                {"ts": "2026-09-26T21:16:12", "homes": 2, "samples": 2},
+            ],
+            10,
+        )
+        self.assertEqual(view["place"], "on_prem")
+        self.assertEqual(view["source"], "simulated")
+        self.assertEqual(view["status"], "generating")
+        self.assertEqual(view["samples"], 2)
+        self.assertEqual(view["stream"][0]["ts"], "2026-09-26T21:16:12")
+        self.assertEqual(view["interval_s"], 10)
+
+    def test_an_empty_gateway_is_still_generating(self):
+        from gridsim.state import gateway_view
+
+        view = gateway_view([], 10)
+        self.assertEqual(view["status"], "generating")
+        self.assertEqual(view["source"], "simulated")
+        self.assertEqual(view["homes"], 0)
+        self.assertEqual(view["stream"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

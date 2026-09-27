@@ -131,6 +131,18 @@ main {
 .day-forecast { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-dasharray: 3 3; }
 .day-now { stroke: var(--line); stroke-width: 1; }
 
+#field {
+  position: absolute;
+  z-index: 3;
+  top: 168px;
+  left: 14px;
+  width: min(232px, 70vw);
+  padding: 8px 10px 6px;
+  background: rgba(16, 17, 20, 0.9);
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+
 #back {
   position: absolute;
   z-index: 3;
@@ -291,6 +303,7 @@ body[data-view="architecture"] main { grid-template-columns: 1fr; }
 body[data-view="architecture"] #arch { display: flex; }
 body[data-view="architecture"] #panel,
 body[data-view="architecture"] #day,
+body[data-view="architecture"] #field,
 body[data-view="architecture"] #stage,
 body[data-view="architecture"] #back { display: none; }
 body[data-view="architecture"] canvas { visibility: hidden; }

@@ -92,7 +92,7 @@ erDiagram
 
 ## Disco contract
 
-The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample. That sample is not a table in the three SQL files.
+The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample. That sample is generated in this process and presented as an on-premises gateway stream. There is no socket. The sample is not a table in the three SQL files.
 
 ```json
 {

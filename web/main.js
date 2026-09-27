@@ -910,6 +910,23 @@ function renderDay(data) {
   `;
 }
 
+function renderField(data) {
+  const gate = data.gateway || {};
+  const homes = gate.homes ? `${fmt(gate.homes, 0)} homes` : "—";
+  const when = (gate.ts || "").slice(11, 19) || "—";
+  const rows = (gate.stream || []).slice(0, 3).map((row) => {
+    const clock = (row.ts || "").slice(11, 19) || "—";
+    return `<p class="day-row"><span>${clock}</span><b>${fmt(row.samples, 0)} samples</b></p>`;
+  }).join("");
+  document.getElementById("field").innerHTML = `
+    <p class="day-kicker">on-prem gateway</p>
+    <p class="day-row"><span>field stream</span><b class="ercot">simulated</b></p>
+    <p class="day-row"><span>status</span><b class="ercot">generating now</b></p>
+    <p class="day-row"><span>${homes}</span><b>${when}</b></p>
+    ${rows}
+  `;
+}
+
 function renderStats(data) {
   const ercot = data.ercot || {};
   const fleet = data.fleet || {};
@@ -2570,25 +2587,27 @@ function ingestDecisions(data) {
   paintDecisions();
 }
 
-const ARCH_W = 188;
+const ARCH_W = 200;
 const ARCH_H = 74;
 const ARCH_BOX = {
-  ercot: [28, 44],
-  tick: [248, 44],
-  machine: [468, 44],
-  map: [708, 44],
-  sqlite: [248, 214],
-  model: [468, 214],
-  supabase: [708, 214],
+  ercot: [20, 36],
+  tick: [264, 36],
+  machine: [508, 36],
+  map: [752, 36],
+  gateway: [20, 180],
+  sqlite: [264, 180],
+  model: [508, 180],
+  supabase: [264, 310],
 };
 const ARCH_ROLE = {
   ercot: "Live system demand, the short forecast, and generation by fuel, from the public dashboard. No key. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
-  tick: "The Render web service gridsim, one home at a time. That service has not been created, so this machine is it. Load, battery dispatch, sensor noise, and the control charts. Each home keeps the last 180 ticks in memory. The same tick writes Supabase when that project is configured.",
-  machine: "The state machine. The ladder chooses push, pull, or hold for the fleet. The maintenance manager opens one visit when a chart alarms. The fleet manager posts a price call on a home set to dispatch. The decisions log labels these steps [state machine].",
-  model: "Closes a visit. On the tick after one opens, this process reads GET /api/site/{id} and writes the close. With no OpenAI key, the sentence is the chart's action. The next tick applies it.",
+  gateway: "On-premises gateway. There is no field device and no socket. Each tick this process generates one disco sample per home and treats that batch as the stream a gateway would have sent. The line says simulated, generating now.",
+  tick: "Data ingest protocol, inside the Render web service gridsim. That service has not been created, so this machine is it. It takes the ERCOT snapshot and the on-prem gateway stream. This process generates that stream. The model calls this server. This server writes Supabase when that project is configured.",
+  machine: "The state machine, inside the API server. The ladder chooses push, pull, or hold for the fleet. The maintenance manager opens one visit when a chart alarms. The fleet manager posts a price call on a home set to dispatch. The decisions log labels these steps [state machine].",
+  model: "Talks only to the API server. On the tick after a visit opens, it reads GET /api/site/{id} there. It does not open Supabase. The API server writes the close, and the API server writes Supabase. With no OpenAI key, the sentence is the chart's action.",
   map: "The browser. It polls the Render service every 5 seconds and draws one dot per home. It does not open SQLite or Supabase.",
   sqlite: "data/gridsim.db on the Render service disk. That disk is ephemeral, and the service has not been created, so the file is on this machine. Identity, raw ERCOT payloads, component logs, and a copy of dispatch_ticks. There is no sites table in Supabase.",
-  supabase: "Hosted Postgres, separate from the Render service. The tick writes market_ticks, unit_latest, usage_hours, dispatch_ticks, and unit_actions, and it reads dispatch_orders, when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set. The line under the box is that scene field. The project has not been created, so it reads disabled. The browser cannot read these tables.",
+  supabase: "Hosted Postgres. Only the API server talks to it. The model does not. The server writes market_ticks, unit_latest, usage_hours, dispatch_ticks, and unit_actions, and it reads dispatch_orders, when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set. The line under the box is that scene field. The project has not been created, so it reads disabled.",
 };
 let viewName = "fleet";
 let archFocus = "machine";
@@ -2666,13 +2685,17 @@ function archLive(data) {
   const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
   const demand = grid.demand_mw == null ? "—" : `${fmt(grid.demand_mw, 0)} MW`;
   const modelNote = archModelNote(data);
+  const gate = data.gateway || {};
+  const gateWhen = (gate.ts || "").slice(11, 19);
+  const gateLine = gate.homes ? `${fmt(gate.homes, 0)} homes · ${gateWhen}` : "generating";
   return {
     signal,
     notes: {
       ercot: ["Public demand, no key", `${ercot.dashboard || "—"} · ${demand}`],
-      tick: ["Each home's load and charts", `${fmt(fleet.units, 0)} homes`],
+      gateway: ["Simulated. Generating now", gateLine],
+      tick: ["One home at a time", `${fmt(fleet.units, 0)} homes`],
       machine: ["Decides push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
-      model: ["Reads the home, writes the close", modelNote],
+      model: ["Talks to the API server", modelNote],
       map: ["Polls the Render service", `${flow} ${fmt(mw, 2)} MW`],
       sqlite: ["File on the service disk", "gridsim.db"],
       supabase: ["Dispatch, market, actions", data.supabase || "—"],
@@ -2707,44 +2730,52 @@ function archBox(id, name, note, state) {
 }
 
 function archRegion(x, y, w, h, label) {
-  return `<rect class="arch-region" x="${x}" y="${y}" width="${w}" height="${h}" />
-    <text class="arch-label" x="${x + 12}" y="${y + 18}">${label}</text>`;
+  const name = label
+    ? `<text class="arch-label" x="${x + 12}" y="${y + 18}">${label}</text>`
+    : "";
+  return `<rect class="arch-region" x="${x}" y="${y}" width="${w}" height="${h}" />${name}`;
 }
 
 function archSvg(live) {
   const call = live.tone.call;
   const store = live.tone.store;
-  const fork = archBottom("tick");
-  const storeTop = archTop("supabase");
+  const streamX = 242;
+  const ask = archTop("model");
   const regions = [
-    archRegion(12, 20, 216, 130, "ERCOT"),
-    archRegion(232, 20, 444, 292, "Render · gridsim"),
-    archRegion(692, 20, 220, 130, "browser"),
-    archRegion(692, 186, 220, 126, "Supabase"),
+    archRegion(8, 16, 224, 112, "ERCOT"),
+    archRegion(8, 164, 224, 106, "on premises"),
+    archRegion(248, 16, 476, 110, "Render · gridsim"),
+    archRegion(248, 164, 232, 110, ""),
+    archRegion(736, 16, 232, 110, "browser"),
+    archRegion(492, 164, 232, 110, "model"),
+    archRegion(248, 294, 232, 106, "Supabase"),
   ].join("");
   const links = [
     archLink(archJoin("ercot", "tick"), live.tone.in),
+    archLink([archRight("gateway"), [streamX, archRight("gateway")[1]], [streamX, 95], [archLeft("tick")[0], 95]], "hold"),
     archLink(archJoin("tick", "machine"), call),
     archLink(archJoin("machine", "map"), call),
     archLink([archBottom("tick"), archTop("sqlite")], "hold"),
-    archLink([archBottom("machine"), archTop("model")], call),
-    archLink([[fork[0], 176], [storeTop[0], 176], storeTop], store),
+    archLink([archBottom("sqlite"), archTop("supabase")], store),
+    archLink([ask, archBottom("machine")], call),
   ].join("");
   const boxes = [
     ["ercot", "ERCOT"],
-    ["tick", "tick"],
+    ["gateway", "gateway"],
+    ["tick", "data ingest protocol"],
     ["machine", "state machine"],
     ["map", "map"],
     ["sqlite", "SQLite"],
     ["model", "model"],
     ["supabase", "Supabase"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
-  const visit = archBottom("machine");
-  return `<svg viewBox="0 0 930 332" class="diagram arch-svg">
+  const wrote = archBottom("sqlite");
+  return `<svg viewBox="0 0 980 416" class="diagram arch-svg">
     ${regions}
     ${links}
-    <text class="flow-kw ${call}" x="${visit[0] + 10}" y="${visit[1] + 32}">visit</text>
-    <text class="flow-kw ${store}" x="640" y="168">writes</text>
+    <text class="flow-kw hold" x="168" y="156">stream</text>
+    <text class="flow-kw ${call}" x="${ask[0] + 10}" y="${ask[1] - 16}">GET /api/site</text>
+    <text class="flow-kw ${store}" x="${wrote[0] + 10}" y="${wrote[1] + 28}">writes</text>
     ${boxes}
   </svg>`;
 }
@@ -2804,6 +2835,7 @@ async function poll() {
     renderScene(payload);
     renderStats(payload);
     renderDay(payload);
+    renderField(payload);
     renderPanel(payload);
     ingestDecisions(payload);
     renderArch(payload);

@@ -307,6 +307,21 @@ def _snapshot(grid: dict, fleet: dict, applied: dict, frequency_hz: float) -> di
     }
 
 
+def gateway_view(batches: list[dict], interval_s: int) -> dict:
+    """The on-premises field stream. This process generates it. There is no device."""
+    latest = batches[-1] if batches else {"ts": None, "homes": 0, "samples": 0}
+    return {
+        "place": "on_prem",
+        "source": "simulated",
+        "status": "generating",
+        "homes": latest["homes"],
+        "samples": latest["samples"],
+        "interval_s": interval_s,
+        "ts": latest["ts"],
+        "stream": list(reversed(batches[-4:])),
+    }
+
+
 class Fleet:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -330,6 +345,7 @@ class Fleet:
         self._llm_at = None
         self.llm = "disabled"
         self.supabase = "disabled"
+        self._gateway_batches: list[dict] = []
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
         self.day: list[dict] = []
@@ -608,6 +624,8 @@ class Fleet:
                 note=note,
             )
             self.sites = sites
+            self._gateway_batches.append({"ts": iso(now), "homes": len(sites), "samples": len(sites)})
+            del self._gateway_batches[:-4]
             self.fleet = rollup(sites, iso(now))
             self.applied = {
                 "signal": note["signal"],
@@ -800,6 +818,7 @@ class Fleet:
                 ],
                 "sites": sites,
                 "ercot": self.status,
+                "gateway": gateway_view(self._gateway_batches, config.TICK_SECONDS),
                 "supabase": self.supabase,
                 "llm": self.llm,
                 "day": list(self.day),

@@ -1,14 +1,16 @@
 # Controller contract
 
-A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
+A remote model does not sit inside the tick and does not open Supabase. It talks to this API server. The API server holds the service-role key, reads and writes Supabase, and the next tick applies the rows. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
 An escalated maintenance ticket is closed by a pull on this API server, not by `LLM_URL`. After the maintenance manager sets `stage` to `ticket` and `actor` to `llm`, that visit stays active for the rest of the tick. The base is `offline`. Now names the home and `pulling GET /api/site/{id}`, and Maintenance manager opens on the case. The next tick calls `GET /api/site/{id}` on this process (`GRIDSIM_ORIGIN` if set, otherwise `http://127.0.0.1` and `PORT`, default 8000). The model may use only that home's chart for the ticket and the readings below. When `OPENAI_API_KEY` is set, `OPENAI_MODEL` (default `gpt-4o-mini`) writes `decision.action` from that pull: two sentences on what the readings show and how the chart procedure resolves it. A missing key or a failed call keeps the chart's `action` sentence and omits `decision.model`. The same ticket is marked `done`, the chart is disarmed, and the bot writes `return_online`. The service estimate stays on the payload. The case does not wait out that estimate. A failed pull leaves the ticket open and retries on the next tick.
 
 Two managers do sit in the tick. After the charts are written, the maintenance manager opens or escalates a ticket, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). When a reset does not clear the fault, the in-tick agent writes the visit with `actor` `llm`. The OpenAI decision above is that close. It does not use `LLM_URL`. `LLM_URL` is still optional. A remote model remains a third writer and is not either manager.
 
-The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
+The service-role key stays on the API server. The model does not receive it. The model reads with `GET /api/site/{id}` and `GET /api/dispatch`, and writes with `POST /api/actions` and `POST /api/dispatch`. Do not put that key in the browser or on the model.
 
 ## Read
+
+The model does not query these tables. The API server does, and the model sees the result through the API.
 
 Newest row of `market_ticks`:
 

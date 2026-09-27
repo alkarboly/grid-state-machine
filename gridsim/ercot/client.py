@@ -69,6 +69,11 @@ def _headers() -> dict:
     }
 
 
+def _sced_stamp(moment) -> str:
+    """ERCOT rejects an offset. The clock is already Central."""
+    return moment.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def _window(hours: float) -> dict:
     end = now_central()
     start = end.timestamp() - hours * 3600
@@ -78,8 +83,8 @@ def _window(hours: float) -> dict:
 
     start_at = datetime.fromtimestamp(start, CENTRAL)
     return {
-        "SCEDTimestampFrom": start_at.isoformat(timespec="seconds"),
-        "SCEDTimestampTo": end.isoformat(timespec="seconds"),
+        "SCEDTimestampFrom": _sced_stamp(start_at),
+        "SCEDTimestampTo": _sced_stamp(end),
     }
 
 

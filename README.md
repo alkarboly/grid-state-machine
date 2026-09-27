@@ -6,7 +6,32 @@ Demand, the short forecast, and fuel mix (including power-storage megawatts) com
 
 Homes are synthetic. They sit near Austin, Houston, Dallas, and San Antonio so the fleet has a footprint, not because those coordinates are substations. A transmission line is drawn only when ERCOT names both ends of a binding constraint and both station codes are in `data/station_geo.json`.
 
-## Run
+Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch rules, and open questions are in [docs/README.md](docs/README.md).
+
+## Submission
+
+- [x] **Project title** — gridsim
+- [ ] **2–5 min demo video** (Loom). Show the core loop live.
+
+    Record the running app, not slides. Open the fleet map, wait for a tick, read **Now** (the fleet call in words and why it fired). Open **Architecture**. Click one home, flag a chart, and show the maintenance ticket and the decisions log. Keep it under five minutes.
+
+- [x] **Repo link** (public) — https://github.com/alkarboly/grid-state-machine
+    - [x] Quick start
+    - [x] Tech stack and architecture diagram
+    - [x] How to reproduce the demo (env vars, sample `.env`)
+    - [x] Datasets / synthetic data and provenance
+    - [x] Known limitations and next steps
+- [x] **Deployed URL** — https://gridsim-gvc5.onrender.com/
+- [x] **Team roster** (names, roles, contacts)
+- [x] **Short write-up** (below)
+
+### Team roster
+
+| Name | Role | Contact |
+| --- | --- | --- |
+| Ahmed Alkarboly | Data Engineer | |
+
+## Quick start
 
 Python 3.11+.
 
@@ -18,22 +43,83 @@ copy .env.example .env
 uvicorn gridsim.api:app --port 8000
 ```
 
-Open http://127.0.0.1:8000. The page loads Three.js from a CDN.
+On macOS or Linux, use `.venv/bin/activate` and `cp .env.example .env`.
+
+Open http://127.0.0.1:8000. Startup fills 3000 homes and about two minutes of simulated history before the port opens. The page loads Three.js from a CDN. Leave `.env` blank: the public ERCOT dashboard still runs.
 
 ```
 python -m unittest discover -s tests -t .
 ```
 
-## Credentials
+## Reproduce the demo
 
-Leave `.env` empty and the map still runs on the live dashboard. Deploy steps for Supabase and the Render web service are in [docs/deploy.md](docs/deploy.md). To add constraints and prices, register at the [ERCOT API Explorer](https://apiexplorer.ercot.com/), subscribe, and copy the primary key:
+1. Copy `.env.example` to `.env`. Empty values are enough for the live dashboard, the map, the ladder, and the architecture tab.
+2. Start the server as above and open http://127.0.0.1:8000 (or the deployed URL).
+3. Fleet view: 24h demand and price, the Texas map, **Now** (price, day shape, fleet call, why it fired).
+4. Click a city, then a home. Flag a chart on Disco or Base. The maintenance manager opens a ticket. The decisions log labels ladder and manager steps `[state machine]`.
+5. Open **Architecture** (`/#architecture`).
+
+Optional keys (never commit `.env`, never paste secrets into chat):
 
 ```
-ERCOT_USERNAME=you@email.com
+ERCOT_USERNAME=
 ERCOT_PASSWORD=
 ERCOT_SUBSCRIPTION_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
 ```
 
-Do not commit `.env`.
+The three `ERCOT_*` values turn on official prices and constraints. `SUPABASE_*` copies controller tables to hosted Postgres. `OPENAI_API_KEY` is unused on the architecture tab. Deploy is [docs/deploy.md](docs/deploy.md). Sample file is `.env.example`.
 
-Where the build stands, and the next slice, is [docs/status.md](docs/status.md). Contracts, the dispatch rules, and the open questions are in [docs/README.md](docs/README.md).
+## Tech stack
+
+- Python 3.11, FastAPI, uvicorn — one process is the API and the map
+- SQLite (`data/gridsim.db`, gitignored) — written every tick
+- Optional Supabase (hosted Postgres) — copy of dispatch, market, and actions
+- Three.js (CDN) — fleet map
+- ERCOT public dashboard JSON; optional ERCOT Public API
+
+## Architecture
+
+Ingest takes the ERCOT snapshot and a simulated on-premises gateway stream, runs every home under the data contract, and writes SQLite. The state machine then chooses discharge, charge, or hold from Texas demand and ERCOT storage. The browser only talks to this origin. Full path: [docs/architecture.md](docs/architecture.md).
+
+```mermaid
+flowchart LR
+  ERCOT --> ingest[data ingest protocol]
+  gateway[on-premises gateway] --> ingest
+  ingest --> machine[state machine]
+  ingest --> sqlite[SQLite]
+  machine --> map[browser map]
+  sqlite -->|copy| supabase[Supabase]
+```
+
+## Datasets and synthetic data
+
+| Source | What | Provenance |
+| --- | --- | --- |
+| ERCOT supply-demand and fuel-mix JSON | Live system demand, short forecast, power-storage megawatts | Public dashboard feeds, no key. URLs in [docs/ercot-sources.md](docs/ercot-sources.md). |
+| ERCOT Public API (optional) | Binding constraints, settlement-point and bus LMPs | Official reports when `ERCOT_USERNAME`, `ERCOT_PASSWORD`, and `ERCOT_SUBSCRIPTION_KEY` are set. |
+| `data/anchors.json` | 21 ERCOT metro points and household counts | Layout only. Counts are household estimates times an `adoption` multiplier (Central Texas weighted). Not customer addresses. [docs/simulation.md](docs/simulation.md). |
+| Simulated fleet | 3000 Base-style homes: load, dispatch, sensor noise, charts | Generated in this process each tick. Gateway samples are generated here too; there is no field device. Disco hardware is unknown. |
+| `web/geo.js` | Texas outline | Same outline the map draws. Homes that would land in water are rejected. |
+| `data/station_geo.json` | Constraint endpoints | Empty unless you add a code pair ERCOT actually named. |
+
+Do not commit `.env` or `data/gridsim.db`.
+
+## Known limitations and next steps
+
+This is a prototype policy, not an ERCOT market award. Open gaps are in [docs/gaps.md](docs/gaps.md): official prices need the subscription key; neighborhood positions and load shape are not metered Base data; 11.5 kW continuous power is an assumption; disco hardware is unknown; station coordinates are unpublished; bus-to-home join is not ingested.
+
+Next: keep the Render service and Supabase copy healthy; set official ERCOT credentials when the key exists; replace assumed kilowatts, load, and territory counts only when real data exists. [docs/status.md](docs/status.md).
+
+## Short write-up
+
+Texas already has home batteries that can charge and discharge against ERCOT. What is missing is a live picture: what the interconnection is doing, what the fleet was asked to do, which cabinets answered, and which ones are in trouble.
+
+gridsim is for a VPP operator and the person who has to visit a cabinet. It is a hackathon prototype, not a market award and not a real service territory.
+
+Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of the homes; a strong call reaches almost all of them. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
+
+The impact is that loop in one place: live Texas context, a readable fleet call, a cabinet you can open, and a ticket when something is out of control. The homes are synthetic. The ERCOT snapshot is not.

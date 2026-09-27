@@ -1,6 +1,6 @@
 # gridsim docs
 
-Source of truth for names, shapes, and flows. If code and these pages disagree, fix one of them before shipping.
+Source of truth for names, shapes, and flows. If code and these pages disagree, fix one of them before shipping. The hackathon submission checklist, quick start, and write-up are the root [README.md](../README.md).
 
 | Doc | What it decides |
 | --- | --- |

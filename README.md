@@ -112,9 +112,9 @@ Do not commit `.env` or `data/gridsim.db`.
 
 ## Known limitations and next steps
 
-Prototype policy, not an ERCOT market award. Gaps in [docs/gaps.md](docs/gaps.md): official prices need the subscription key; neighborhood positions and load shape are not metered; 11.5 kW is an assumption; disco hardware is unknown; station coordinates are unpublished; bus-to-home join is not ingested. Data collection is simulated — sample content, rate, and what a PLC-style app could collect are assumptions. Charts are not statistically accurate; sample size was not verified for the hackathon. Architecture is a hackathon setup and needs a production refactor.
-
-Next: keep Render and Supabase healthy; set ERCOT credentials when the key exists; replace assumed kW, load, and territory counts only with real data. [docs/status.md](docs/status.md).
+- Architecture is hackathon grade
+- Assumptions about telemetry data and modeling methods
+- Focus on data capture to create control charts
 
 ## Short write-up
 

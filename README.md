@@ -118,12 +118,8 @@ Do not commit `.env` or `data/gridsim.db`.
 
 ## Short write-up
 
-Texas already has home batteries that can charge and discharge against ERCOT. What is missing is a live picture: what the interconnection is doing, what the fleet was asked to do, which cabinets answered, and which ones are in trouble.
+grid state machine is a data-observability and fleet-management prototype. It organizes telemetry so control can follow the data.
 
-gridsim is for a VPP operator and the person who has to visit a cabinet. It is a hackathon prototype, not a market award and not a real service territory.
+The UI starts at the market, then a service area, then one unit. That unit is a digital twin. Every 10 seconds it records voltage, frequency, temperature, alarms, and control charts.
 
-Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. Adherence to that contract is how ingest keeps data quality. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of each service area, emptiest first on charge and fullest first on discharge. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
-
-Once those rows are stored — SQLite every tick, and hosted Postgres when the keys are set — the same telemetry feeds control charts for automated anomaly detection. Chart flags and posted fleet calls are built in to stress the state machine's rules. When a visit is escalated, an LLM writes a two-sentence summary from that home's contract readings. Without the key, that text is the chart sentence.
-
-The impact is that loop in one place: live Texas context, a readable fleet call, a cabinet you can open, and a ticket when something is out of control. The homes are synthetic. The ERCOT snapshot is not.
+A temperature three standard deviations outside normal fires the state machine. That opens a maintenance alert and a ticket. A reset that does not clear the fault escalates the visit. The same machine dispatches the fleet: push, pull, or hold.

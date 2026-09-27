@@ -2579,7 +2579,6 @@ const ARCH_BOX = {
   map: [752, 48],
   gateway: [20, 214],
   sqlite: [264, 214],
-  model: [508, 214],
   supabase: [264, 372],
 };
 const ARCH_ROLE = {
@@ -2587,10 +2586,9 @@ const ARCH_ROLE = {
   gateway: "On-premises gateway, simulated telemetry collection.",
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
   machine: "The state machine runs on the API server. It tells the fleet to push, pull, or hold. When a chart alarms, it opens a maintenance visit. When a home is set to dispatch, it posts a price call. Those steps show up in the decisions log as [state machine].",
-  model: "Talks only to the API server. On the tick after a visit opens, it reads GET /api/site/{id} there. It does not open Supabase. The API server writes the close, and the API server writes Supabase. With no OpenAI key, the sentence is the chart's action.",
   map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
   sqlite: "The API writes this file every tick. It is data/gridsim.db on the service disk. Identity, ERCOT payloads, logs, dispatch, and the controller tables live here. There is no sites table in Supabase.",
-  supabase: "Hosted Postgres. Only the API talks to it, not the model. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
+  supabase: "Hosted Postgres. Only the API talks to it. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
 };
 let viewName = "fleet";
 let archFocus = "machine";
@@ -2641,22 +2639,6 @@ function archJoin(from, to) {
   return [start, [x, start[1]], [x, end[1]], end];
 }
 
-function archModelNote(data) {
-  const rows = (data.actions || []).filter((action) => {
-    if (action.kind !== "scheduled_service") return false;
-    const payload = action.payload || {};
-    const steps = payload.escalation || [];
-    return action.actor === "llm" || payload.decision || steps.some((step) => step.actor === "llm");
-  });
-  const open = rows.find((action) => (action.status === "active" || action.status === "pending") && !(action.payload || {}).decision);
-  if (open) return `pulling ${open.site_id}`;
-  const latest = rows.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""))[0];
-  const decision = latest && (latest.payload || {}).decision;
-  if (decision && decision.model) return decision.model;
-  if (decision) return "chart sentence";
-  return "site pull";
-}
-
 function archLive(data) {
   const ercot = data.ercot || {};
   const grid = data.grid || {};
@@ -2667,7 +2649,6 @@ function archLive(data) {
   const mw = Math.abs(netKw) / 1000;
   const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
   const demand = grid.demand_mw == null ? "—" : `${fmt(grid.demand_mw, 0)} MW`;
-  const modelNote = archModelNote(data);
   const gate = data.gateway || {};
   const gateWhen = (gate.ts || "").slice(11, 19);
   const gateLine = gate.homes ? `${fmt(gate.homes, 0)} homes · ${gateWhen}` : "generating";
@@ -2679,7 +2660,6 @@ function archLive(data) {
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: ["Tells the fleet to push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
-      model: ["Talks to the API server", modelNote],
       map: ["Map in the browser", `${flow} ${fmt(mw, 2)} MW`],
       sqlite: ["Written every tick", "gridsim.db"],
       supabase: ["Dispatch, market, actions", data.supabase || "—"],
@@ -2727,14 +2707,12 @@ function archSvg(live) {
   const tickEdge = archLeft("tick");
   const streamX = (gateEdge[0] + tickEdge[0]) / 2;
   const streamY = tickEdge[1] + 20;
-  const ask = archTop("model");
   const regions = [
     archRegion(8, 20, 224, 122, "ERCOT"),
     archRegion(8, 186, 224, 122, "on premises"),
     archRegion(248, 20, 476, 122, "Render · gridsim"),
     archRegion(248, 186, 232, 122, ""),
     archRegion(736, 20, 232, 122, "browser"),
-    archRegion(492, 186, 232, 122, "model"),
     archRegion(248, 344, 232, 122, "Supabase"),
   ].join("");
   const links = [
@@ -2744,7 +2722,6 @@ function archSvg(live) {
     archLink(archJoin("machine", "map"), call),
     archLink([archBottom("tick"), archTop("sqlite")], "hold"),
     archLink([archBottom("sqlite"), archTop("supabase")], store),
-    archLink([ask, archBottom("machine")], call),
   ].join("");
   const boxes = [
     ["ercot", "ERCOT"],
@@ -2753,7 +2730,6 @@ function archSvg(live) {
     ["machine", "state machine"],
     ["map", "map"],
     ["sqlite", "SQLite"],
-    ["model", "model"],
     ["supabase", "Supabase"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
   const dumped = archBottom("tick");
@@ -2762,7 +2738,6 @@ function archSvg(live) {
     ${regions}
     ${links}
     <text class="flow-kw hold" x="150" y="176">stream</text>
-    <text class="flow-kw ${call}" x="${ask[0] + 10}" y="${ask[1] - 18}">GET /api/site</text>
     <text class="flow-kw hold" x="${dumped[0] + 10}" y="${dumped[1] + 32}">writes</text>
     <text class="flow-kw ${store}" x="${copied[0] + 10}" y="${copied[1] + 32}">copy</text>
     ${boxes}

@@ -19,7 +19,7 @@ The unit diagram and the state log show the latest tick. They are not averages. 
 | `grid` | `demand_mw`, `storage_gen_mw`, `lmp_usd_mwh`, `signal`, `source` | The ERCOT context and the call for this tick. | Tick. `market_ticks` keeps the fleet row. |
 | `meter` | `in_kw`, `out_kw`, `voltage_v` | Billing-meter power and voltage. | Tick on the diagram. The minute charts that use them average every tick in that clock minute. |
 | `meter` | `energy_in_kwh`, `energy_out_kwh` | Cumulative energy since the home started. | Running total, not an hour mean. |
-| `disco` | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz` | The Pi at the disconnect. | Tick. |
+| `disco` | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz` | Disco power, voltage, and frequency. | Tick. |
 | `disco` | `addons[].kw` | Kilowatts the disco metered for `solar` or `ev_charger`. | Tick. The hour integrals are `solar_kwh` and `ev_kwh`. |
 | `panel` | `load_kw` | House load. | Tick. The hour integral is `load_kwh`. |
 | `base` | `soc_kwh`, `soc_pct`, `charge_kw`, `discharge_kw`, `availability` | Reported charge, what the battery did, and whether it is in service. | Tick. |

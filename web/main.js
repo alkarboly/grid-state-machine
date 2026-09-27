@@ -910,22 +910,6 @@ function renderDay(data) {
   `;
 }
 
-function renderField(data) {
-  const gate = data.gateway || {};
-  const homes = gate.homes ? `${fmt(gate.homes, 0)} homes` : "—";
-  const when = (gate.ts || "").slice(11, 19) || "—";
-  const rows = (gate.stream || []).slice(0, 3).map((row) => {
-    const clock = (row.ts || "").slice(11, 19) || "—";
-    return `<p class="day-row"><span>${clock}</span><b>${fmt(row.samples, 0)} samples</b></p>`;
-  }).join("");
-  document.getElementById("field").innerHTML = `
-    <p class="day-kicker">on-premises gateway</p>
-    <p class="day-row"><span>telemetry</span><b class="ercot">simulated collection</b></p>
-    <p class="day-row"><span>${homes}</span><b>${when}</b></p>
-    ${rows}
-  `;
-}
-
 function renderStats(data) {
   const ercot = data.ercot || {};
   const fleet = data.fleet || {};
@@ -1613,7 +1597,7 @@ function renderPanel(data) {
 
 const COMPONENTS = [
   { id: "grid", name: "Grid", role: "Service entrance. The meter reading and the utility call live on this box." },
-  { id: "disco", name: "Disco", role: "Raspberry Pi at the disconnect." },
+  { id: "disco", name: "Disco", role: "Measures power, voltage, and frequency. Meters add-ons." },
   { id: "panel", name: "Electrical panel", role: "House load downstream of the battery interconnect." },
   { id: "base", name: "Base", role: "Battery cabinet." },
 ];
@@ -2602,11 +2586,11 @@ const ARCH_ROLE = {
   ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
   gateway: "On-premises gateway, simulated telemetry collection.",
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
-  machine: "The state machine, inside the API server. The ladder chooses push, pull, or hold for the fleet. The maintenance manager opens one visit when a chart alarms. The fleet manager posts a price call on a home set to dispatch. The decisions log labels these steps [state machine].",
+  machine: "The state machine runs on the API server. It tells the fleet to push, pull, or hold. When a chart alarms, it opens a maintenance visit. When a home is set to dispatch, it posts a price call. Those steps show up in the decisions log as [state machine].",
   model: "Talks only to the API server. On the tick after a visit opens, it reads GET /api/site/{id} there. It does not open Supabase. The API server writes the close, and the API server writes Supabase. With no OpenAI key, the sentence is the chart's action.",
-  map: "The browser. It polls the Render service every 5 seconds and draws one dot per home. It does not open SQLite or Supabase.",
-  sqlite: "data/gridsim.db on the Render service disk. That disk is ephemeral, and the service has not been created, so the file is on this machine. Identity, raw ERCOT payloads, component logs, and a copy of dispatch_ticks. There is no sites table in Supabase.",
-  supabase: "Hosted Postgres. Only the API server talks to it. The model does not. The server writes market_ticks, unit_latest, usage_hours, dispatch_ticks, and unit_actions, and it reads dispatch_orders, when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set. The line under the box is that scene field. The project has not been created, so it reads disabled.",
+  map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
+  sqlite: "The API writes this file every tick. It is data/gridsim.db on the service disk. Identity, ERCOT payloads, logs, dispatch, and the controller tables live here. There is no sites table in Supabase.",
+  supabase: "Hosted Postgres. Only the API talks to it, not the model. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",
 };
 let viewName = "fleet";
 let archFocus = "machine";
@@ -2694,10 +2678,10 @@ function archLive(data) {
       ercot: ["Demand and short forecast", `${demand} · ${priceWord}`],
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
-      machine: ["Decides push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
+      machine: ["Tells the fleet to push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
       model: ["Talks to the API server", modelNote],
-      map: ["Polls the Render service", `${flow} ${fmt(mw, 2)} MW`],
-      sqlite: ["File on the service disk", "gridsim.db"],
+      map: ["Map in the browser", `${flow} ${fmt(mw, 2)} MW`],
+      sqlite: ["Written every tick", "gridsim.db"],
       supabase: ["Dispatch, market, actions", data.supabase || "—"],
     },
     tone: {
@@ -2772,13 +2756,15 @@ function archSvg(live) {
     ["model", "model"],
     ["supabase", "Supabase"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
-  const wrote = archBottom("sqlite");
+  const dumped = archBottom("tick");
+  const copied = archBottom("sqlite");
   return `<svg viewBox="0 0 980 490" class="diagram arch-svg">
     ${regions}
     ${links}
     <text class="flow-kw hold" x="150" y="176">stream</text>
     <text class="flow-kw ${call}" x="${ask[0] + 10}" y="${ask[1] - 18}">GET /api/site</text>
-    <text class="flow-kw ${store}" x="${wrote[0] + 10}" y="${wrote[1] + 32}">writes</text>
+    <text class="flow-kw hold" x="${dumped[0] + 10}" y="${dumped[1] + 32}">writes</text>
+    <text class="flow-kw ${store}" x="${copied[0] + 10}" y="${copied[1] + 32}">copy</text>
     ${boxes}
   </svg>`;
 }
@@ -2838,7 +2824,6 @@ async function poll() {
     renderScene(payload);
     renderStats(payload);
     renderDay(payload);
-    renderField(payload);
     renderPanel(payload);
     ingestDecisions(payload);
     renderArch(payload);

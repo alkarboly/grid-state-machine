@@ -92,7 +92,7 @@ erDiagram
 
 ## Disco contract
 
-The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample. That sample is generated in this process and presented as an on-premises gateway stream. There is no socket. The sample is not a table in the three SQL files.
+The disco reports one sample each tick. The hardware behind that sample is unknown. The sample is generated in this process and presented as an on-premises gateway stream. There is no socket. The sample is not a table in the three SQL files.
 
 ```json
 {
@@ -110,13 +110,13 @@ The disco is the Raspberry Pi at the disconnect. Each tick it reports one sample
 
 `in_kw` is kilowatts from the utility toward the home. `out_kw` is the other way. A tied home has only one of them above zero. `contactor` is `closed` or `open`. `islanded` is true only while the contactor is open. `addons` is empty when nothing is installed. Order follows the catalog: `solar`, then `ev_charger`.
 
-| Field | What the Pi is reporting | How the sim builds it |
+| Field | What the disco reports | How the sim builds it |
 | --- | --- | --- |
-| `in_kw`, `out_kw` | Power through the disconnect | True net, plus gaussian noise of 0.06 kW. The billing meter uses 0.02 kW on the same net. Both are 0 while the contactor is open. |
-| `voltage_v` | Volts at the disconnect | This service's own center, plus 0.12 V of noise. |
-| `frequency_hz` | Hertz at the disconnect | One draw for the whole interconnection, plus 0.002 Hz at this Pi. |
+| `in_kw`, `out_kw` | Power in and out | True net, plus gaussian noise of 0.06 kW. The billing meter uses 0.02 kW on the same net. Both are 0 while the contactor is open. |
+| `voltage_v` | Volts | This service's own center, plus 0.12 V of noise. |
+| `frequency_hz` | Hertz | One draw for the whole interconnection, plus 0.002 Hz at this disco. |
 | `contactor`, `islanded` | Whether the home is grid-tied | Open and islanded only when the grid is turned off. Scheduled service does not open the contactor. |
-| `addons[].kw` | Add-on power the Pi is metering | `solar` is 5 kW times a daylight fraction, zero at night. `ev_charger` is 7.2 kW times 0.85 from 17:00 through 21:00, and zero otherwise. |
+| `addons[].kw` | Add-on power the disco is metering | `solar` is 5 kW times a daylight fraction, zero at night. `ev_charger` is 7.2 kW times 0.85 from 17:00 through 21:00, and zero otherwise. |
 
 Three charts are computed from that sample. Each point is the mean of the ticks in the minute, and the alarm limit is ±3 times the one-tick standard divided by the square root of that count. The maintenance manager acts on an alarm past those limits. `frequency` is charted and left alone.
 
@@ -138,4 +138,4 @@ Three charts are computed from that sample. Each point is the mean of the ticks 
 | Supabase `unit_latest.addons_json` | The installed ids, not the live kilowatts | Published homes, replaced each tick |
 | Supabase `site_addons` | The same install set, one row per add-on | Homes whose disco list changed |
 
-`load_kwh` on `usage_hours` is the panel, not `disco.in_kw`. Import and export on that row are the grid split, which is the true net, tighter than the Pi. `solar_kwh` and `ev_kwh` are the only hour totals taken straight from `addons[].kw`.
+`load_kwh` on `usage_hours` is the panel, not `disco.in_kw`. Import and export on that row are the grid split, which is the true net, tighter than the disco. `solar_kwh` and `ev_kwh` are the only hour totals taken straight from `addons[].kw`.

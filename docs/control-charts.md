@@ -12,9 +12,9 @@ Every chart also names the `component` it belongs to. In the unit view the meter
 
 | `chart_id` | `component` | `family` | What it catches | `sigma` |
 | --- | --- | --- | --- | --- |
-| `disco_meter_delta` | `meter` | `measurement` | The Pi and the billing meter disagree. CT scale, polarity, or clock skew. | 0.20 kW |
+| `disco_meter_delta` | `meter` | `measurement` | The disco and the billing meter disagree. CT scale, polarity, or clock skew. | 0.20 kW |
 | `base_temp` | `base` | `thermal` | Cabinet temperature leaves the line expected for this unit at this power. Cooling, a hot pack, a stuck sensor. | the unit's `temp_sigma_c` |
-| `disco_voltage` | `disco` | `electrical` | Voltage at the disconnect leaves this service's own center. A sag, a loose connection, a stuck reading. | the unit's `voltage_sigma_v` |
+| `disco_voltage` | `disco` | `electrical` | Disco voltage leaves this service's own center. A sag, a loose connection, a stuck reading. | the unit's `voltage_sigma_v` |
 | `frequency` | `disco` | `electrical` | Frequency leaves 60 Hz. This is a grid event, not a cabinet fault. It is charted so the two are not mixed. | 0.025 Hz |
 | `soc_tracking` | `base` | `energy` | Reported state of charge leaves the coulomb count. Capacity fade or a BMS offset. | 0.45 kWh |
 | `dispatch_response` | `base` | `response` | Achieved kilowatts leave the command. Inverter derate or a battery that ignores dispatch. The residual is 0 while the command is 0. | 0.40 kW |

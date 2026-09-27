@@ -2,7 +2,7 @@
 
 Local development uses SQLite at `data/gridsim.db`. Types below are the SQLite types. On Postgres, integer primary keys become `bigint generated always as identity`, `in_control` and `islanded` become `boolean`, `rules_json` becomes `jsonb`, and timestamp text becomes `timestamptz`.
 
-`sites`, `grid_snapshots`, `raw_records`, `metric_logs`, `observations`, `control_points`, and `fleet_rollups` stay in this file. `dispatch_ticks` is written here and, when Supabase is configured, copied there. `dispatch_orders`, `market_ticks`, `unit_latest`, `usage_hours`, `unit_actions`, `addon_catalog`, and `site_addons` are the Supabase tables a controller uses. Which slice is next is [status.md](status.md).
+`sites`, `grid_snapshots`, `raw_records`, `metric_logs`, `observations`, `control_points`, and `fleet_rollups` stay in this file. `dispatch_ticks`, `market_ticks`, `unit_latest`, `usage_hours`, `unit_actions`, and `site_addons` are written here every tick and, when Supabase is configured, copied there. `dispatch_orders` and `addon_catalog` live only in Supabase. Which slice is next is [status.md](status.md).
 
 The browser does not connect to the database. The FastAPI process writes it and serves `/api/scene`.
 

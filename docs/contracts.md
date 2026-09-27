@@ -23,7 +23,7 @@ The chain is grid → meter → disco → panel → base.
 | --- | --- | --- |
 | `grid` | Utility interchange at the site, plus the ERCOT context that drove dispatch | `in_kw`, `out_kw`, `demand_mw`, `demand_percentile`, `storage_gen_mw`, `lmp_usd_mwh`, `signal`, `source`, `grid_as_of` |
 | `meter` | Service meter | `in_kw`, `out_kw`, `voltage_v`, `energy_in_kwh`, `energy_out_kwh` |
-| `disco` | Raspberry Pi at the disconnect. Measures the same flow as the meter, with more noise, and meters modular add-ons | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz`, `contactor`, `islanded`, `addons` |
+| `disco` | Measures the same flow as the meter, with more noise, and meters modular add-ons | `in_kw`, `out_kw`, `voltage_v`, `frequency_hz`, `contactor`, `islanded`, `addons` |
 | `panel` | House load downstream of the battery interconnect | `load_kw`, `voltage_v` |
 | `base` | Battery cabinet. `charge_kw` and `discharge_kw` are what the battery did. The commanded pair is what dispatch asked for. `soc_kwh` is the reported state of charge. `availability` is `offline` while a scheduled service has the cabinet out. | `capacity_kwh`, `power_limit_kw`, `soc_kwh`, `soc_pct`, `commanded_charge_kw`, `commanded_discharge_kw`, `charge_kw`, `discharge_kw`, `solar_charge_kw`, `availability`, `temp_c` |
 | `maintenance` | Which control charts need attention. The point shape and the severity rules are in [control-charts.md](control-charts.md). | `alarm`, `alarming`, `out_of_control`, `warning` |

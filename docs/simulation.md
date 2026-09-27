@@ -46,11 +46,11 @@ True net kilowatts = panel load + car-charger kilowatts − solar used on site +
 
 Solar and the car charger are optional add-ons. With neither installed, that is panel load + battery charge − battery discharge.
 
-Positive net is grid/meter in. Negative net is grid/meter out. The grid component records that true split. The meter adds a tight error (standard deviation 0.02 kW on the net). The disco adds a wider error (standard deviation 0.06 kW) because it is the Pi measurement, not the billing meter.
+Positive net is grid/meter in. Negative net is grid/meter out. The grid component records that true split. The meter adds a tight error (standard deviation 0.02 kW on the net). The disco adds a wider error (standard deviation 0.06 kW) because it is the disco measurement, not the billing meter.
 
 ## Field stream
 
-There is no device in the field and no socket. Each tick this process generates one disco sample per home, the sample in [data-model.md](data-model.md), and names that batch an on-premises gateway stream. `GET /api/scene` returns `gateway` with `place` `on_prem`, `source` `simulated`, `status` `generating`, the home count, and `stream` (the latest four batches, newest first). The map card and the architecture box both say simulated telemetry collection.
+There is no device in the field and no socket. Each tick this process generates one disco sample per home, the sample in [data-model.md](data-model.md), and names that batch an on-premises gateway stream. `GET /api/scene` returns `gateway` with `place` `on_prem`, `source` `simulated`, `status` `generating`, the home count, and `stream` (the latest four batches, newest first). The architecture box says simulated telemetry collection.
 
 The fleet ledger adds those same quantities across every unit. Pushing, pulling, and holding add up to the fleet. Grid in minus grid out adds up to house load plus car chargers minus solar plus solar that went into the batteries plus battery charge minus battery discharge. Solar used on site is the solar that did not charge the battery.
 

@@ -214,40 +214,69 @@ buildMap();
 
 // One particle draw for the whole fleet. Screen-space size, so a zoom opens
 // the gaps in the station grid instead of enlarging every dot into its neighbour.
+// Each bubble is a ring; the interior fills from the bottom by state of charge.
 const particlePositions = new Float32Array(UNIT_CAP * 3);
 const particleColors = new Float32Array(UNIT_CAP * 3);
+const particleFills = new Float32Array(UNIT_CAP);
 const placed = new Float32Array(UNIT_CAP * 3);
 const shown = new Uint8Array(UNIT_CAP);
 const particleGeo = new THREE.BufferGeometry();
 particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-particleGeo.setAttribute("color", new THREE.BufferAttribute(particleColors, 3));
-function particleTexture() {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const ctx = canvas.getContext("2d");
-  const fill = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
-  fill.addColorStop(0, "rgba(255,255,255,1)");
-  fill.addColorStop(0.65, "rgba(255,255,255,0.95)");
-  fill.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = fill;
-  ctx.beginPath();
-  ctx.arc(32, 32, 30, 0, Math.PI * 2);
-  ctx.fill();
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+particleGeo.setAttribute("aColor", new THREE.BufferAttribute(particleColors, 3));
+particleGeo.setAttribute("fill", new THREE.BufferAttribute(particleFills, 1));
+
+function pixelRatio() {
+  return Math.min(window.devicePixelRatio || 1, 2);
+}
+
+function particlePx() {
+  return particles.material.uniforms.uSize.value;
+}
+
+function setParticlePx(px) {
+  particles.material.uniforms.uSize.value = px;
 }
 
 const particles = new THREE.Points(
   particleGeo,
-  new THREE.PointsMaterial({
-    size: 6,
-    sizeAttenuation: false,
-    map: particleTexture(),
-    vertexColors: true,
+  new THREE.ShaderMaterial({
+    uniforms: {
+      uSize: { value: 6 },
+      uPixelRatio: { value: pixelRatio() },
+    },
+    vertexShader: `
+      attribute float fill;
+      attribute vec3 aColor;
+      varying vec3 vColor;
+      varying float vFill;
+      uniform float uSize;
+      uniform float uPixelRatio;
+      void main() {
+        vColor = aColor;
+        vFill = clamp(fill, 0.0, 1.0);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = max(uSize * uPixelRatio, 2.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vFill;
+      void main() {
+        vec2 p = gl_PointCoord * 2.0 - 1.0;
+        float r = length(p);
+        if (r > 1.0) discard;
+        float alpha = 1.0 - smoothstep(0.96, 1.0, r);
+        float ring = 0.20;
+        vec3 empty = vColor * 0.16 + vec3(0.05);
+        vec3 body = gl_PointCoord.y >= (1.0 - vFill) ? vColor : empty;
+        vec3 rgb = r > (1.0 - ring) ? vColor : body;
+        gl_FragColor = vec4(rgb, alpha);
+      }
+    `,
     transparent: true,
     depthWrite: false,
+    toneMapped: false,
   }),
 );
 particles.frustumCulled = false;
@@ -395,7 +424,7 @@ function signalOverrides(data) {
 // together however the fleet splits.
 function laneShape(counts, rows) {
   const holdCols = counts.hold ? Math.ceil(counts.hold / rows) : 0;
-  const holdReach = holdCols ? Math.ceil((holdCols - 1) / 2) * STACK.holdStep : 0;
+  const holdReach = holdCols ? ((holdCols - 1) / 2) * STACK.holdStep : 0;
   const laneOffset = Math.max(STACK.laneOffset, holdReach + STACK.laneGap);
   const reach = (count) => (count ? laneOffset + (Math.ceil(count / rows) - 1) * STACK.laneStep : 0);
   const pull = reach(counts.pull);
@@ -412,9 +441,10 @@ function laneShape(counts, rows) {
   };
 }
 
-// Lays one group into a column block. `side` is -1 for pull and +1 for push;
-// the hold column takes 0 and grows out from the middle.
+// Lays one group into a column block. `side` is -1 for pull and +1 for push.
+// Hold (side 0) fills left to right so fill climbs across the block.
 function packBlock(indices, base, side, shape, targetX, targetZ) {
+  const holdCols = Math.max(1, Math.ceil(indices.length / shape.rows));
   for (let spot = 0; spot < indices.length; spot += 1) {
     const unit = indices[spot];
     const col = Math.floor(spot / shape.rows);
@@ -422,7 +452,7 @@ function packBlock(indices, base, side, shape, targetX, targetZ) {
     const rowsHere = Math.min(shape.rows, indices.length - col * shape.rows);
     let x = base.x;
     if (side) x += side * (shape.laneOffset + col * STACK.laneStep);
-    else if (col > 0) x += (col % 2 ? -1 : 1) * Math.ceil(col / 2) * STACK.holdStep;
+    else x += (col - (holdCols - 1) / 2) * STACK.holdStep;
     targetX[unit] = x;
     targetZ[unit] = base.z + (row - (rowsHere - 1) * 0.5) * STACK.rowStep;
   }
@@ -436,9 +466,9 @@ function sortLane(indices, sites, flow) {
     const marked = (site) => Boolean(site.alarm) || site.grid === "off";
     const flagged = Number(marked(right)) - Number(marked(left));
     if (flagged) return flagged;
-    // Outer wing is first in line: emptiest on pull, fullest on push.
+    // Smallest fill to largest toward the outer wing: emptiest on the left,
+    // fullest on the right. Hold grows the same way from the middle.
     if (flow === "pull") return soc(right) - soc(left);
-    if (flow === "push") return soc(left) - soc(right);
     return soc(left) - soc(right);
   });
 }
@@ -645,7 +675,8 @@ function laneDrift(flow, index, now, progress, forced) {
 
 function renderUnits(data) {
   const positions = particles.geometry.attributes.position;
-  const colors = particles.geometry.attributes.color;
+  const colors = particles.geometry.attributes.aColor;
+  const fills = particles.geometry.attributes.fill;
   const yard = stackYard(data);
   const area = areaYard(data);
   const spread = stationSpread(data);
@@ -666,10 +697,7 @@ function renderUnits(data) {
     const forcedSignal = lanes ? (lanes.overrides?.get(site.id) || null) : null;
     const flow = flowState(site, Boolean(lanes), forcedSignal);
     TINT.setHex(COLOR[modeOf(site, Boolean(lanes), forcedSignal)]);
-    if (lanes && !site.alarm && site.grid !== "off") {
-      const fill = Math.min(1, Math.max(0, (Number(site.soc_pct) || 0) / 100));
-      TINT.multiplyScalar(0.42 + 0.58 * fill);
-    }
+    const fill = Math.min(1, Math.max(0, (Number(site.soc_pct) || 0) / 100));
     if (yard) {
       const row = yard.stationRows.get(site.station);
       const delay = row ? row.delay : 0;
@@ -709,6 +737,7 @@ function renderUnits(data) {
     shown[index] = 1;
     positions.setXYZ(drawn, x, y, z);
     colors.setXYZ(drawn, TINT.r, TINT.g, TINT.b);
+    fills.setX(drawn, fill);
     drawn += 1;
     if (site.id === selected) {
       marked = true;
@@ -717,7 +746,7 @@ function renderUnits(data) {
       } else {
         const halfWorld = Math.max(viewDistance(), 0.2) * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
         const halfPx = Math.max(canvas.clientHeight, 1) * 0.5;
-        pick.scale.setScalar(Math.max(0.02, (halfWorld * (6 / halfPx)) / 0.056));
+        pick.scale.setScalar(Math.max(0.02, (halfWorld * (particlePx() / halfPx)) / 0.056));
         pick.position.set(x, y, z);
         pick.visible = true;
       }
@@ -726,6 +755,7 @@ function renderUnits(data) {
   particles.geometry.setDrawRange(0, drawn);
   positions.needsUpdate = true;
   colors.needsUpdate = true;
+  fills.needsUpdate = true;
   if (!marked) pick.visible = false;
   screen = null;
 }
@@ -864,7 +894,7 @@ function fmt(value, digits = 0) {
   });
 }
 
-function spark(points, key) {
+function spark(points, key, nowTs) {
   const width = 210;
   const height = 32;
   const values = points.map((point) => Number(point[key]));
@@ -890,8 +920,11 @@ function spark(points, key) {
       .map((index) => `L${xAt(index).toFixed(1)},${yAt(values[index]).toFixed(1)}`)
       .join(" ")}`;
   }
-  const nowX = actual.length ? xAt(actual[actual.length - 1]) : null;
-  return { actual: path(actual), forecast: forecastPath, nowX, width, height };
+  let nowIndex = nowTs ? points.findIndex((point) => point.ts === nowTs) : -1;
+  if (nowIndex < 0 && actual.length) nowIndex = actual[actual.length - 1];
+  const nowX = nowIndex < 0 ? null : xAt(nowIndex);
+  const nowY = nowIndex < 0 ? null : yAt(values[nowIndex]);
+  return { actual: path(actual), forecast: forecastPath, nowX, nowY, width, height };
 }
 
 function renderDay(data) {
@@ -900,14 +933,19 @@ function renderDay(data) {
   const actuals = points.filter((point) => point.kind !== "forecast");
   const latest = actuals[actuals.length - 1];
   const reversed = Boolean(data.demand_reverse);
-  if (!host.dataset.ready) {
+  const peaked = (data.demand_pin || "peak") === "peak";
+  const nowPoint = (data.demand_now_ts && points.find((point) => point.ts === data.demand_now_ts)) || latest;
+  if (!host.dataset.ready || !document.getElementById("day-pin")) {
     host.innerHTML = `
       <p class="day-kicker" id="day-kicker">24h</p>
       <p class="day-row" id="day-demand-row"><span>demand</span><b id="day-demand-val">—</b></p>
       <div id="day-demand-spark"></div>
       <p class="day-row" id="day-price-row"><span>price</span><b id="day-price-val">—</b></p>
       <div id="day-price-spark"></div>
-      <button type="button" class="day-toggle" id="day-reverse" data-demand-reverse="0">Reverse demand</button>
+      <div class="day-actions">
+        <button type="button" class="day-toggle" id="day-pin" data-demand-pin="peak">Live now</button>
+        <button type="button" class="day-toggle" id="day-reverse" data-demand-reverse="0">Reverse demand</button>
+      </div>
     `;
     host.dataset.ready = "1";
   }
@@ -916,28 +954,36 @@ function renderDay(data) {
   const priceVal = document.getElementById("day-price-val");
   const demandSpark = document.getElementById("day-demand-spark");
   const priceSpark = document.getElementById("day-price-spark");
-  const toggle = document.getElementById("day-reverse");
-  kicker.textContent = reversed ? "24h · reversed" : "24h";
-  toggle.classList.toggle("on", reversed);
-  toggle.dataset.demandReverse = reversed ? "1" : "0";
-  toggle.textContent = reversed ? "Use live demand" : "Reverse demand";
-  if (!latest) {
+  const reverse = document.getElementById("day-reverse");
+  const pin = document.getElementById("day-pin");
+  const tags = ["24h"];
+  if (peaked) tags.push("peak");
+  if (reversed) tags.push("reversed");
+  kicker.textContent = tags.join(" · ");
+  reverse.classList.toggle("on", reversed);
+  reverse.dataset.demandReverse = reversed ? "1" : "0";
+  reverse.textContent = reversed ? "Use live demand" : "Reverse demand";
+  pin.classList.toggle("on", peaked);
+  pin.dataset.demandPin = peaked ? "peak" : "live";
+  pin.textContent = peaked ? "Live now" : "Peak now";
+  if (!nowPoint) {
     demandVal.textContent = "—";
     priceVal.textContent = "—";
     demandSpark.innerHTML = "";
     priceSpark.innerHTML = "";
     return;
   }
-  const demand = spark(points, "demand_mw");
-  const price = spark(points, "rate_usd_mwh");
-  const basis = latest.rate_basis === "ercot" ? "" : ` <span class="ercot">simulated</span>`;
+  const demand = spark(points, "demand_mw", data.demand_now_ts);
+  const price = spark(points, "rate_usd_mwh", data.demand_now_ts);
+  const basis = nowPoint.rate_basis === "ercot" ? "" : ` <span class="ercot">simulated</span>`;
   const line = (drawn, tone) => `<svg class="day-svg" viewBox="0 0 ${drawn.width} ${drawn.height}" aria-hidden="true">
       ${drawn.nowX === null ? "" : `<line class="day-now" x1="${drawn.nowX.toFixed(1)}" y1="0" x2="${drawn.nowX.toFixed(1)}" y2="${drawn.height}" />`}
       <path class="${tone}" d="${drawn.actual}" />
       ${drawn.forecast ? `<path class="day-forecast" d="${drawn.forecast}" />` : ""}
+      ${drawn.nowX === null ? "" : `<circle class="day-now-dot" cx="${drawn.nowX.toFixed(1)}" cy="${drawn.nowY.toFixed(1)}" r="2.2" />`}
     </svg>`;
-  demandVal.textContent = `${fmt(latest.demand_mw)} MW`;
-  priceVal.innerHTML = `${fmt(latest.rate_usd_mwh, 0)} $/MWh${basis}`;
+  demandVal.textContent = `${fmt(nowPoint.demand_mw)} MW`;
+  priceVal.innerHTML = `${fmt(nowPoint.rate_usd_mwh, 0)} $/MWh${basis}`;
   demandSpark.innerHTML = line(demand, "day-demand");
   priceSpark.innerHTML = line(price, "day-price");
 }
@@ -2555,6 +2601,7 @@ function resize() {
     renderer.setSize(width, height, false);
     camera.aspect = width / Math.max(height, 1);
     camera.updateProjectionMatrix();
+    particles.material.uniforms.uPixelRatio.value = pixelRatio();
     screen = null;
   }
 }
@@ -2734,7 +2781,7 @@ function archLive(data) {
   return {
     signal,
     notes: {
-      ercot: ["Demand and short forecast", `${demand} · ${priceWord}${data.demand_reverse ? " · reversed" : ""}`],
+      ercot: ["Demand and short forecast", `${demand} · ${priceWord}${data.demand_pin === "peak" ? " · peak" : ""}${data.demand_reverse ? " · reversed" : ""}`],
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: [callVerb(signal), `${callDepth(signal, dispatch.intensity) || "idle"} · ${callWho(dispatch.source || "rules")}`],
@@ -2836,6 +2883,7 @@ function renderArch(data) {
     live.state.supabase || "",
     live.state.model || "",
     data.demand_reverse ? "rev" : "",
+    data.demand_pin === "peak" ? "peak" : "",
   ].join("|");
   const holder = document.getElementById("arch-diagram");
   const role = document.getElementById("arch-role");
@@ -2888,18 +2936,32 @@ function renderProtocols(data) {
   });
 }
 
+function renderApi(data) {
+  if (!data || viewName !== "api") return;
+  const dispatch = data.dispatch || {};
+  const clause = (dispatch.because || [])[0] || {};
+  const live = document.getElementById("api-live");
+  const reason = describeBecause(clause);
+  live.textContent = reason
+    ? `This tick: GET /api/scene · ${describeCall(dispatch)}. ${reason}.`
+    : `This tick: GET /api/scene · ${describeCall(dispatch)}.`;
+}
+
 function fleetHash() {
   if (focusedStation) return `#station/${focusedStation}`;
   if (focusedMetro) return `#metro/${focusedMetro}`;
   return "";
 }
 
+const DOC_VIEWS = new Set(["architecture", "protocols", "api"]);
+
 function showView(name) {
-  viewName = name === "architecture" || name === "protocols" ? name : "fleet";
+  viewName = DOC_VIEWS.has(name) ? name : "fleet";
   document.body.dataset.view = viewName;
   document.getElementById("tab-fleet").classList.toggle("on", viewName === "fleet");
   document.getElementById("tab-arch").classList.toggle("on", viewName === "architecture");
   document.getElementById("tab-protocols").classList.toggle("on", viewName === "protocols");
+  document.getElementById("tab-api").classList.toggle("on", viewName === "api");
   if (viewName === "architecture") {
     if (modal.open) modal.close();
     placeHash("#architecture");
@@ -2912,7 +2974,13 @@ function showView(name) {
     renderProtocols(payload);
     return;
   }
-  if (location.hash === "#architecture" || location.hash === "#protocols") placeHash(fleetHash());
+  if (viewName === "api") {
+    if (modal.open) modal.close();
+    placeHash("#api");
+    renderApi(payload);
+    return;
+  }
+  if (DOC_VIEWS.has(location.hash.slice(1))) placeHash(fleetHash());
 }
 
 async function poll() {
@@ -2926,6 +2994,7 @@ async function poll() {
     ingestDecisions(payload);
     renderArch(payload);
     renderProtocols(payload);
+    renderApi(payload);
     if (modal.open && selected) {
       unitDetail = (await loadUnit(selected)) || unitDetail;
       renderUnit();
@@ -3095,15 +3164,15 @@ function present() {
       }
     }
     stageT = 1;
-    if (particles.material.size !== 6) particles.material.size = 6;
+    if (particlePx() !== 6) setParticlePx(6);
     if (payload) renderStage(payload);
     return;
   }
   if (!station) {
     stageT = 1;
     cityT = 1;
-    const changed = particles.material.size !== 6;
-    if (changed) particles.material.size = 6;
+    const changed = particlePx() !== 6;
+    if (changed) setParticlePx(6);
     if (changed && payload) renderUnits(payload);
     if (payload) renderStage(payload);
     return;
@@ -3114,7 +3183,7 @@ function present() {
     stageT = 0;
   }
   if (!fillHold) stageT = Math.min(1, (performance.now() - stageStarted) / 1100);
-  particles.material.size = 6 + 4 * easeOut(stageT);
+  setParticlePx(6 + 4 * easeOut(stageT));
   renderUnits(payload);
   renderStations(payload);
   renderStage(payload);
@@ -3151,16 +3220,21 @@ function frame() {
 // #metro/austin flies the camera to that city, close enough to see the substations.
 let reverseBusy = false;
 document.getElementById("day").addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-demand-reverse]");
-  if (!button || reverseBusy) return;
+  const reverse = event.target.closest("[data-demand-reverse]");
+  const pin = event.target.closest("[data-demand-pin]");
+  if ((!reverse && !pin) || reverseBusy) return;
   event.stopPropagation();
   reverseBusy = true;
+  const button = reverse || pin;
   button.disabled = true;
   try {
+    const body = reverse
+      ? { demand_reverse: reverse.dataset.demandReverse !== "1" }
+      : { demand_pin: pin.dataset.demandPin === "peak" ? "live" : "peak" };
     await fetch(api("/api/agent"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ demand_reverse: button.dataset.demandReverse !== "1" }),
+      body: JSON.stringify(body),
     });
     await poll();
   } finally {
@@ -3192,6 +3266,10 @@ poll().then(() => {
   }
   if (wanted === "protocols") {
     showView("protocols");
+    return;
+  }
+  if (wanted === "api") {
+    showView("api");
     return;
   }
   if (wanted === "metro" && block) {

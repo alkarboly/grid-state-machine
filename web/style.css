@@ -131,21 +131,28 @@ main {
 .day-price { fill: none; stroke: var(--watch); stroke-width: 1.25; }
 .day-forecast { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-dasharray: 3 3; }
 .day-now { stroke: var(--line); stroke-width: 1; }
+.day-now-dot { fill: var(--ink); }
+.day-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
 .day-toggle {
   pointer-events: auto;
   display: block;
   width: 100%;
   margin-top: 8px;
-  padding: 5px 8px;
+  padding: 5px 6px;
   background: transparent;
   border: 1px solid var(--line);
   color: var(--muted);
   font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 9px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
 }
+.day-actions .day-toggle { margin-top: 0; flex: 1; }
 .day-toggle:hover { color: var(--ink); border-color: var(--ink); }
 .day-toggle.on { color: var(--watch); border-color: var(--watch); }
 
@@ -171,9 +178,9 @@ main {
   position: absolute;
   z-index: 3;
   left: 14px;
-  bottom: 16px;
-  width: min(340px, 46vw);
-  padding: 14px 16px 12px;
+  bottom: 14px;
+  width: min(228px, 42vw);
+  padding: 8px 10px 8px;
   background: rgba(16, 17, 20, 0.9);
   border: 1px solid #5d584e;
   pointer-events: none;
@@ -194,21 +201,24 @@ main {
   text-transform: uppercase;
 }
 
+#stage .stage-kicker { font-size: 10px; }
+
 #stage-title {
-  margin: 2px 0 0;
-  font-size: 22px;
+  margin: 1px 0 0;
+  font-size: 15px;
   font-weight: 550;
   letter-spacing: 0.02em;
 }
 
-#stage-sub { margin: 2px 0 8px; color: var(--muted); }
+#stage-sub { margin: 1px 0 6px; color: var(--muted); font-size: 11px; line-height: 1.35; }
 
 #stage-counts {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: 4px 10px;
   margin: 0;
   color: var(--muted);
+  font-size: 11px;
 }
 
 #decisions {
@@ -297,7 +307,8 @@ main.collapsed #panel-toggle {
 
 canvas { width: 100%; height: 100%; display: block; cursor: grab; }
 #arch,
-#protocols {
+#protocols,
+#api {
   display: none;
   position: absolute;
   inset: 0;
@@ -307,9 +318,11 @@ canvas { width: 100%; height: 100%; display: block; cursor: grab; }
   background: var(--bg);
 }
 body[data-view="architecture"] main,
-body[data-view="protocols"] main { grid-template-columns: 1fr; }
+body[data-view="protocols"] main,
+body[data-view="api"] main { grid-template-columns: 1fr; }
 body[data-view="architecture"] #arch { display: flex; }
 body[data-view="protocols"] #protocols { display: flex; }
+body[data-view="api"] #api { display: flex; }
 body[data-view="architecture"] #panel,
 body[data-view="architecture"] #day,
 body[data-view="architecture"] #stage,
@@ -317,9 +330,14 @@ body[data-view="architecture"] #back,
 body[data-view="protocols"] #panel,
 body[data-view="protocols"] #day,
 body[data-view="protocols"] #stage,
-body[data-view="protocols"] #back { display: none; }
+body[data-view="protocols"] #back,
+body[data-view="api"] #panel,
+body[data-view="api"] #day,
+body[data-view="api"] #stage,
+body[data-view="api"] #back { display: none; }
 body[data-view="architecture"] canvas,
-body[data-view="protocols"] canvas { visibility: hidden; }
+body[data-view="protocols"] canvas,
+body[data-view="api"] canvas { visibility: hidden; }
 #arch-role {
   margin: 8px 0 12px;
   min-height: 2.8em;
@@ -337,7 +355,8 @@ body[data-view="protocols"] canvas { visibility: hidden; }
   text-transform: uppercase;
   fill: #5a5f68;
 }
-#proto-live {
+#proto-live,
+#api-live {
   margin: 6px 0 14px;
   max-width: 68em;
   color: var(--ink);
@@ -399,6 +418,37 @@ body[data-view="protocols"] canvas { visibility: hidden; }
 .proto-card ul:not(.proto-words) li.on {
   color: var(--ink);
 }
+.proto-card code { color: var(--ink); font-size: 12px; }
+.proto-card pre {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: #0c0d10;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.api-routes {
+  width: 100%;
+  border-collapse: collapse;
+}
+.api-routes th,
+.api-routes td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.api-routes th {
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.api-routes td:first-child,
+.api-routes th:first-child { white-space: nowrap; }
 
 #tip {
   position: fixed;
@@ -436,8 +486,8 @@ h2 {
 
 .sub, .muted { color: var(--muted); }
 .sub { font-size: 12px; margin-top: 3px; }
-.key { display: inline-flex; align-items: center; gap: 6px; }
-.key i { width: 7px; height: 7px; border-radius: 50%; }
+.key { display: inline-flex; align-items: center; gap: 5px; }
+.key i { width: 6px; height: 6px; border-radius: 50%; }
 .key.push i { background: var(--push); }
 .key.pull i { background: var(--pull); }
 .key.hold i { background: var(--hold); }

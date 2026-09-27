@@ -12,6 +12,7 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
     reverse_demand,
+    pin_demand,
 )
 from gridsim.fleet.charts import (
     CHART_HOURS,
@@ -144,6 +145,33 @@ class NormalizeTests(unittest.TestCase):
             choose_signal(flipped["demand_percentile"], 1400, None, None, demand_only=True),
             "pull",
         )
+
+    def test_peak_pin_uses_today_high_as_now(self):
+        day = [
+            {"ts": "2026-09-25T01:00:00-05:00", "demand_mw": 40000, "kind": "actual"},
+            {"ts": "2026-09-25T12:00:00-05:00", "demand_mw": 50000, "kind": "actual"},
+            {"ts": "2026-09-25T19:00:00-05:00", "demand_mw": 60000, "kind": "actual"},
+            {"ts": "2026-09-25T23:00:00-05:00", "demand_mw": 48000, "kind": "actual"},
+        ]
+        grid = {"demand_mw": 48000, "demand_percentile": 0.25, "prices": []}
+        pinned, series, now_ts = pin_demand(grid, day, "peak")
+        self.assertEqual(pinned["demand_mw"], 60000)
+        self.assertEqual(pinned["demand_percentile"], 1.0)
+        self.assertEqual(now_ts, "2026-09-25T19:00:00-05:00")
+        self.assertEqual(series[3]["demand_mw"], 48000)
+        self.assertEqual(choose_signal(pinned["demand_percentile"], 0, None, None), "push")
+        live, _, live_ts = pin_demand(grid, day, "live")
+        self.assertEqual(live["demand_mw"], 48000)
+        self.assertEqual(live_ts, "2026-09-25T23:00:00-05:00")
+        empty, empty_day, empty_ts = pin_demand(grid, [], "peak")
+        self.assertEqual(empty["demand_mw"], 48000)
+        self.assertEqual(empty_day, [])
+        self.assertIsNone(empty_ts)
+        flipped, flipped_day = reverse_demand(pinned, series)
+        self.assertEqual(flipped["demand_mw"], 40000)
+        self.assertLessEqual(flipped["demand_percentile"], 0.35)
+        self.assertEqual(flipped_day[2]["demand_mw"], 40000)
+        self.assertEqual(choose_signal(flipped["demand_percentile"], 0, None, None, demand_only=True), "pull")
 
     def test_reverse_demand_charges_when_today_is_mid(self):
         day = [

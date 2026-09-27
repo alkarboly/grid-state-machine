@@ -336,3 +336,37 @@ def reverse_demand(grid: dict, day: list[dict]) -> tuple[dict, list[dict]]:
         flipped.append(row)
     rate = simulated_rate(percentile)
     return out_grid, price_day(flipped, (rate, "simulated"))
+
+
+def pin_demand(grid: dict, day: list[dict], pin: str) -> tuple[dict, list[dict], str | None]:
+    """Use one actual on today's curve as the live demand. The series is unchanged.
+
+    `peak` is the highest actual in the window. `live` is the newest actual.
+    The returned timestamp is where the 24h card draws now.
+    """
+    actuals = [
+        point
+        for point in day
+        if point.get("kind") == "actual" and point.get("demand_mw") is not None
+    ]
+    mode = "peak" if pin == "peak" else "live"
+    if not actuals:
+        out = dict(grid)
+        out["demand_pin"] = mode
+        return out, list(day), None
+    ordered = sorted(actuals, key=lambda point: point.get("ts") or "")
+    if mode != "peak":
+        out = dict(grid)
+        out["demand_pin"] = "live"
+        return out, list(day), ordered[-1].get("ts")
+    chosen = max(actuals, key=lambda point: (float(point["demand_mw"]), point.get("ts") or ""))
+    demand = float(chosen["demand_mw"])
+    pool = [float(point["demand_mw"]) for point in actuals]
+    percentile = sum(value <= demand for value in pool) / len(pool)
+    out = dict(grid)
+    out["demand_mw"] = demand
+    out["demand_percentile"] = round(percentile, 4)
+    out["demand_pin"] = "peak"
+    if chosen.get("ts"):
+        out["as_of"] = chosen["ts"]
+    return out, list(day), chosen.get("ts")

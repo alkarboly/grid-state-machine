@@ -1,6 +1,6 @@
 # Deploy
 
-One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table the API server reads and writes. The model talks to the API server, not to Supabase. The browser talks only to that service. The service-role key stays in the service environment.
+The live origin is https://gridstatemachine.com/. One Render web service and one Supabase project. The service runs the simulation and serves the map on the same origin. Supabase is the table the API server reads and writes. The model talks to the API server, not to Supabase. The browser talks only to that service. The service-role key stays in the service environment.
 
 Do not paste the service-role key, the OpenAI key, the ERCOT password, or the subscription key into chat. Set them in the Render dashboard.
 
@@ -34,6 +34,7 @@ Copy the project URL and the service-role key into the bot's environment only. R
   - `LLM_URL` if a model endpoint is ready. Leave it empty until then.
   - `OPENAI_API_KEY` and `OPENAI_MODEL` if an escalated ticket should ask OpenAI for a two-sentence summary. `OPENAI_MODEL` defaults to `gpt-4o-mini`. Leave the key empty until then. Do not paste the key into chat.
   - `ERCOT_USERNAME`, `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY` if you want official prices. The public dashboard works without them.
+  - `GRIDSIM_ORIGIN` only if the ticket pull must use the public name. Default is this process on `PORT`. The public name is https://gridstatemachine.com/.
 
 Leave `SERVE_STATIC` unset. The default serves `web/` from this same process, and `API_BASE` in `web/config.js` stays empty so the page calls its own origin. Set `SERVE_STATIC=0` and `WEB_ORIGIN` only if a different origin must host the map.
 
@@ -43,7 +44,7 @@ The free instance has 512 MB. Startup builds all 3000 homes, including the 30-ho
 
 That same startup line stays up while the history is filled. On a laptop that takes about two minutes. The free CPU is slower, so leave the deploy on that line until the port opens.
 
-The map polls `/api/scene` on that same origin. The public name is https://gridstatemachine.com/, a custom domain on this Render service. The header brand is **grid state machine**. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
+The map polls `/api/scene` on that same origin. https://gridstatemachine.com/ is the custom domain on this Render service. The header brand is **grid state machine**. `/#api` is the HTTP catalog. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
 
 ## 3. Check
 

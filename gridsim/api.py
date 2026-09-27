@@ -15,7 +15,11 @@ async def lifespan(_app: FastAPI):
     fleet.stop()
 
 
-app = FastAPI(title="gridsim", lifespan=lifespan)
+app = FastAPI(
+    title="grid state machine",
+    description="Public JSON for the simulated Base fleet. No login. Human docs: /#api and docs/api.md.",
+    lifespan=lifespan,
+)
 
 _origins = [item.strip() for item in config.WEB_ORIGIN.split(",") if item.strip()]
 if _origins:
@@ -27,17 +31,17 @@ if _origins:
     )
 
 
-@app.get("/api/scene")
+@app.get("/api/scene", summary="Map payload")
 def scene():
     return fleet.scene()
 
 
-@app.get("/api/dispatch")
+@app.get("/api/dispatch", summary="Applied call and pending order")
 def dispatch():
     return fleet.dispatch_view()
 
 
-@app.post("/api/dispatch")
+@app.post("/api/dispatch", summary="Post a fleet call, or auto for the ladder")
 def post_dispatch(body: dict):
     signal = body.get("signal")
     if signal not in ("push", "pull", "hold", "auto"):
@@ -54,17 +58,25 @@ def post_dispatch(body: dict):
     return fleet.dispatch_view()
 
 
-@app.get("/api/agent")
+@app.get("/api/agent", summary="Armed, dispatch, grid-off homes")
 def agent():
     return fleet.agent_view()
 
 
-@app.post("/api/agent")
+@app.post("/api/agent", summary="Arm a chart, set dispatch, grid, demand pin, or reverse demand")
 def post_agent(body: dict):
-    if "demand_reverse" in body:
-        if not isinstance(body.get("demand_reverse"), bool):
-            raise HTTPException(status_code=400, detail="demand_reverse must be true or false")
-        return fleet.set_demand_reverse(body["demand_reverse"])
+    if "demand_reverse" in body or "demand_pin" in body:
+        result = {}
+        if "demand_reverse" in body:
+            if not isinstance(body.get("demand_reverse"), bool):
+                raise HTTPException(status_code=400, detail="demand_reverse must be true or false")
+            result.update(fleet.set_demand_reverse(body["demand_reverse"]))
+        if "demand_pin" in body:
+            pin = body.get("demand_pin")
+            if pin not in ("live", "peak"):
+                raise HTTPException(status_code=400, detail="demand_pin must be live or peak")
+            result.update(fleet.set_demand_pin(pin))
+        return result
     site_id = body.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=400, detail="site_id is required")
@@ -88,7 +100,7 @@ def post_agent(body: dict):
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
-@app.post("/api/actions")
+@app.post("/api/actions", summary="Queue one unit action")
 def post_action(body: dict):
     site_id = body.get("site_id")
     kind = body.get("kind")
@@ -106,7 +118,7 @@ def post_action(body: dict):
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
-@app.get("/api/site/{site_id}")
+@app.get("/api/site/{site_id}", summary="One home in full")
 def site(site_id: str):
     detail = fleet.site_detail(site_id)
     if detail is None:

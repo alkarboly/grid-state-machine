@@ -55,6 +55,7 @@ from gridsim.ercot.normalize import (
     price_day,
     prices_from_rows,
     reverse_demand,
+    pin_demand,
 )
 from gridsim.fleet.agent import audit, close_model_ticket, day_shape, open_model_tickets, record_toggle
 from gridsim.fleet.charts import CHARTS, series_seconds, trace_values
@@ -352,6 +353,7 @@ class Fleet:
         self.edges: list[dict] = []
         self.day: list[dict] = []
         self.demand_reverse = False
+        self.demand_pin = "peak"
         self.status = {
             "dashboard": "unavailable",
             "dashboard_error": None,
@@ -490,7 +492,21 @@ class Fleet:
             self.demand_reverse = bool(on)
             self._pending = None
         push_order("auto", None)
-        return {"demand_reverse": self.demand_reverse}
+        return {"demand_reverse": self.demand_reverse, "demand_pin": self.demand_pin}
+
+    def set_demand_pin(self, pin: str) -> dict:
+        """Use today's peak actual as now, or the newest actual. A restart returns to peak.
+
+        A posted order is cleared so the ladder can follow that sample.
+        That clear is written to Supabase `dispatch_orders` when the keys are set.
+        """
+        if pin not in ("live", "peak"):
+            raise ValueError("demand_pin must be live or peak")
+        with self._lock:
+            self.demand_pin = pin
+            self._pending = None
+        push_order("auto", None)
+        return {"demand_pin": self.demand_pin, "demand_reverse": self.demand_reverse}
 
     def dispatch_view(self) -> dict:
         with self._lock:
@@ -577,13 +593,18 @@ class Fleet:
                         "dispatch": dispatch,
                         "grid": "off" if grid_off else "on",
                     })
-            return {"sites": rows, "demand_reverse": self.demand_reverse}
+            return {
+                "sites": rows,
+                "demand_reverse": self.demand_reverse,
+                "demand_pin": self.demand_pin,
+            }
 
-    def _demand_view(self) -> tuple[dict, list[dict]]:
-        """Live ERCOT, or that series flipped around today's min and max."""
-        if not self.demand_reverse:
-            return self.grid, self.day
-        return reverse_demand(self.grid, self.day)
+    def _demand_view(self) -> tuple[dict, list[dict], str | None]:
+        """Pinned sample on today's curve, then optional reverse around min and max."""
+        grid, day, now_ts = pin_demand(self.grid, self.day, self.demand_pin)
+        if self.demand_reverse:
+            grid, day = reverse_demand(grid, day)
+        return grid, day, now_ts
 
     def tick(self) -> None:
         remote, remote_error = pull_order()
@@ -636,7 +657,7 @@ class Fleet:
             elapsed = (now - self._last_tick).total_seconds()
             elapsed = min(max(elapsed, 0.0), 30.0)
             dt_hours = elapsed * config.SIM_TIME_SCALE / 3600.0
-            view_grid, view_day = self._demand_view()
+            view_grid, view_day, now_ts = self._demand_view()
             sites, logs, observations, points = tick_sites(
                 self.sites,
                 view_grid,
@@ -664,6 +685,7 @@ class Fleet:
             self._keep_usage(note.get("usage") or [])
             grid = dict(view_grid)
             grid["day"] = view_day
+            grid["demand_now_ts"] = now_ts
             fresh = audit(self.sites, self.actions, grid, self.usage, now)
             if fresh:
                 self.actions.extend(fresh)
@@ -781,7 +803,7 @@ class Fleet:
     def scene(self) -> dict:
         """Map payload. One row per battery, small enough to poll at fleet scale."""
         with self._lock:
-            view_grid, view_day = self._demand_view()
+            view_grid, view_day, now_ts = self._demand_view()
             sites = []
             for site in self.sites:
                 metrics = site.get("metrics") or {}
@@ -847,8 +869,10 @@ class Fleet:
                 "llm": self.llm,
                 "openai": "live" if config.OPENAI_API_KEY else "disabled",
                 "day": list(view_day),
-                "shape": day_shape(view_day),
+                "shape": day_shape(view_day, now_ts),
                 "demand_reverse": self.demand_reverse,
+                "demand_pin": self.demand_pin,
+                "demand_now_ts": now_ts,
                 "tick_seconds": config.TICK_SECONDS,
             }
 

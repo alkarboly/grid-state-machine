@@ -1,6 +1,6 @@
 # State machine protocols
 
-These are the rules the sim uses. They are a prototype policy, not an ERCOT market award. The same page is the **Protocols** tab (`/#protocols`). The code is `gridsim/fleet/policy.py` and the SOC queue in [simulation.md](simulation.md).
+These are the rules the sim uses. They are a prototype policy, not an ERCOT market award. The same page is the **Protocols** tab (https://gridstatemachine.com/#protocols). The HTTP catalog is [api.md](api.md). The code is `gridsim/fleet/policy.py` and the SOC queue in [simulation.md](simulation.md).
 
 ## Words
 
@@ -27,6 +27,8 @@ The call is what the fleet was asked to do. Colour on the map is what the cabine
 6. Hold.
 
 **Reverse demand** skips prices and takes the opposite of that live call: a discharge becomes a charging window.
+
+**Peak now** is not a posted order. It only moves the operating point the ladder reads to today's highest actual. **Live now** is the newest actual.
 
 ## Who answers
 

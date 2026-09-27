@@ -62,17 +62,23 @@ def expected_kw(site: dict, hour: int, usage_rows: list[dict]) -> tuple[float, s
     return panel_kw(site, hour), "profile"
 
 
-def day_shape(points: list[dict] | None) -> dict | None:
-    """Where the newest actual sits on the 24h demand trace the overlay draws."""
+def day_shape(points: list[dict] | None, now_ts: str | None = None) -> dict | None:
+    """Where the operating point sits on the 24h demand trace the overlay draws."""
     actuals = [
-        float(point["demand_mw"])
+        point
         for point in points or []
         if point.get("kind") == "actual" and point.get("demand_mw") is not None
     ]
     if not actuals:
         return None
-    current = actuals[-1]
-    rank = sum(value <= current for value in actuals) / len(actuals)
+    chosen = actuals[-1]
+    if now_ts:
+        match = next((point for point in actuals if point.get("ts") == now_ts), None)
+        if match is not None:
+            chosen = match
+    values = [float(point["demand_mw"]) for point in actuals]
+    current = float(chosen["demand_mw"])
+    rank = sum(value <= current for value in values) / len(values)
     forecast = [
         float(point["demand_mw"])
         for point in points or []
@@ -581,7 +587,7 @@ def fleet_manager(
             site.pop("agent_call", None)
             continue
         expected, source = expected_kw(site, now.hour, usage_by_site.get(site["id"]) or [])
-        shape = day_shape(grid.get("day"))
+        shape = day_shape(grid.get("day"), grid.get("demand_now_ts"))
         typical = typical_kw(float(site.get("load_scale") or 1.0), site.get("hour_kw"))
         signal, because = price_call(rate, expected, typical, shape)
         site["agent_call"] = {

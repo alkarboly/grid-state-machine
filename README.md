@@ -1,6 +1,6 @@
 # grid state machine
 
-Live ERCOT demand and storage, joined to a simulated fleet of Base-style home batteries. The map is a minimal Three.js view of those homes.
+Live at https://gridstatemachine.com/. ERCOT demand and storage, joined to a simulated fleet of Base-style home batteries. The map is a minimal Three.js view of those homes.
 
 Demand, the short forecast, and fuel mix (including power-storage megawatts) come from ERCOT's public dashboard feeds and need no key. Binding constraints, settlement-point prices, and electrical-bus prices turn on when the official Public API credentials are in `.env`.
 
@@ -59,6 +59,7 @@ python -m unittest discover -s tests -t .
 4. Click a city, then a home. Flag a chart on Disco or Base. The maintenance manager opens a ticket. The decisions log labels ladder and manager steps `[state machine]`.
 5. Open **Architecture** (`/#architecture`).
 6. Open **Protocols** (`/#protocols`) for when the state machine pushes, pulls, or holds.
+7. Open **API** (`/#api`) for the public JSON routes.
 
 Optional keys (never commit `.env`, never paste secrets into chat):
 

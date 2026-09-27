@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>grid state machine</title>
-  <link rel="stylesheet" href="/style.css?v=23">
+  <link rel="stylesheet" href="/style.css?v=26">
 </head>
 <body>
   <header>
@@ -14,6 +14,7 @@
         <button type="button" id="tab-fleet" class="on" data-view="fleet">fleet</button>
         <button type="button" id="tab-arch" data-view="architecture">architecture</button>
         <button type="button" id="tab-protocols" data-view="protocols">protocols</button>
+        <button type="button" id="tab-api" data-view="api">api</button>
       </nav>
     </div>
     <div class="stats" id="stats"></div>
@@ -76,6 +77,54 @@
         </article>
       </div>
     </section>
+    <section id="api">
+      <p class="stage-kicker">public api</p>
+      <p id="api-live">This tick: —</p>
+      <div class="proto-grid">
+        <article class="proto-card">
+          <h2>Origin</h2>
+          <p>JSON. No login. Same origin as this page: <code>https://gridstatemachine.com/</code> live, <code>http://127.0.0.1:8000</code> locally.</p>
+          <p>Secrets stay in the environment. They are never in a response. A post changes this live prototype until restart.</p>
+          <p>OpenAPI <code>/openapi.json</code>. Swagger <code>/docs</code>.</p>
+        </article>
+        <article class="proto-card">
+          <h2>Tick</h2>
+          <p>A tick is 10 seconds. <code>GET</code> is current memory. Dispatch and actions apply on the <b>next</b> tick. Agent flags update in memory now and show on the next scene poll.</p>
+          <p><code>400</code> is a bad body. <code>404</code> is an unknown home. Errors are <code>{"detail": "…"}</code>.</p>
+        </article>
+        <article class="proto-card proto-ladder">
+          <h2>Reads</h2>
+          <table class="api-routes">
+            <thead>
+              <tr><th>Method</th><th>Path</th><th>What you get</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GET</code></td><td><code>/api/scene</code></td><td>The map. One small row per home. The page polls this every 5 seconds.</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/site/{id}</code></td><td>One home in full: metrics, charts, snapshot, log, actions.</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/dispatch</code></td><td>Applied call, pending order, controller snapshot.</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/agent</code></td><td>Homes that are armed, set to dispatch, or grid-off, and whether reverse demand or peak now is on.</td></tr>
+            </tbody>
+          </table>
+          <pre>curl https://gridstatemachine.com/api/scene
+curl https://gridstatemachine.com/api/site/aus-0004</pre>
+        </article>
+        <article class="proto-card proto-ladder">
+          <h2>Writes</h2>
+          <table class="api-routes">
+            <thead>
+              <tr><th>Method</th><th>Path</th><th>Body</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>POST</code></td><td><code>/api/dispatch</code></td><td><code>{"signal":"push","intensity":0.8}</code> — one call for every home. <code>auto</code> returns the ladder.</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/actions</code></td><td><code>{"site_id","kind","payload"}</code> — <code>scheduled_service</code>, <code>set_signal</code>, <code>install_addon</code>, <code>remove_addon</code>.</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/agent</code></td><td><code>{"site_id","chart_id","armed"}</code>, or <code>dispatch</code>, or <code>grid</code>, or <code>{"demand_pin":"peak"}</code>, or <code>{"demand_reverse":true}</code>.</td></tr>
+            </tbody>
+          </table>
+          <pre>curl -X POST https://gridstatemachine.com/api/dispatch -H "Content-Type: application/json" -d "{\"signal\":\"auto\"}"</pre>
+          <p class="muted">Chart ids: disco_meter_delta, base_temp, disco_voltage, frequency, soc_tracking, dispatch_response. Add-ons: solar, ev_charger.</p>
+        </article>
+      </div>
+    </section>
     <aside id="panel">
       <button type="button" id="panel-toggle" aria-expanded="true" aria-controls="panel-body">hide</button>
       <div id="panel-body">
@@ -118,6 +167,6 @@
       }
     }
   </script>
-  <script type="module" src="/main.js?v=38"></script>
+  <script type="module" src="/main.js?v=43"></script>
 </body>
 </html>

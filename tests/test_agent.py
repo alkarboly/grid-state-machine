@@ -321,6 +321,11 @@ class AgentTests(unittest.TestCase):
             {"kind": "actual", "demand_mw": 52},
             {"kind": "forecast", "demand_mw": 70},
         ])["shape"], "ramp")
+        self.assertEqual(day_shape([
+            {"kind": "actual", "ts": "a", "demand_mw": 40},
+            {"kind": "actual", "ts": "b", "demand_mw": 70},
+            {"kind": "actual", "ts": "c", "demand_mw": 50},
+        ], "b")["shape"], "peak")
 
         now = datetime(2026, 9, 25, 3, 0, tzinfo=CENTRAL)
         site = _bare(set())

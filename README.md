@@ -29,7 +29,7 @@ Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch 
 
 | Name | Role | Contact |
 | --- | --- | --- |
-| Ahmed Alkarboly | Data Engineer | |
+| Ahmed Alkarboly | Data Engineer | [ahmed.alkarboly@gmail.com](mailto:ahmed.alkarboly@gmail.com) |
 
 ## Quick start
 

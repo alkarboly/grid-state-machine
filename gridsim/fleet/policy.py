@@ -116,6 +116,21 @@ def intensity(signal: str, demand_percentile: float) -> float:
     return 0.0
 
 
+def soc_queue(members: list[tuple[str, float]], signal: str) -> dict[str, float]:
+    """Place in a service-area queue. 0 answers first.
+
+    `members` is `(site_id, stored_kwh)`. Push ranks fullest first. Pull ranks
+    emptiest first. Ties break on site id. Intensity still gates how many
+    answer: a mild call takes the front of this queue.
+    """
+    if signal not in ("push", "pull") or not members:
+        return {}
+    reverse = signal == "push"
+    ordered = sorted(members, key=lambda row: (row[1], row[0]), reverse=reverse)
+    size = len(ordered)
+    return {site_id: rank / size for rank, (site_id, _stored) in enumerate(ordered)}
+
+
 def resolve_order(order: dict | None, demand_percentile: float) -> tuple[str, float, str] | None:
     """A fleet-wide call from outside the ladder.
 

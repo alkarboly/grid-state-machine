@@ -24,7 +24,7 @@ from gridsim.fleet.charts import (
     subgroup_size,
 )
 from gridsim.fleet.actions import addon_power
-from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order
+from gridsim.fleet.policy import choose_signal, explain_signal, intensity, resolve_order, soc_queue
 from gridsim.timeutil import CENTRAL, iso
 
 # Late-summer central-air hour means, kW. Daily sum is about 54 kWh before load_scale.
@@ -361,8 +361,9 @@ def build_sites(anchors: list[dict] | None = None, fleet_size: int | None = None
                     "voltage_center_v": voltage_center,
                     "voltage_sigma_v": round(1.1 + profile.random() * 0.6, 3),
                     "eta": round(0.94 + profile.random() * 0.035, 4),
-                    # The customer's own backup floor, and where this unit sits in
-                    # the dispatch queue. Together they decide who answers a call.
+                    # Customer's backup floor. Duty is rewritten each tick from
+                    # this station's SOC queue (fullest first on push, emptiest
+                    # first on pull).
                     "reserve_frac": round(config.SOC_RESERVE + profile.random() * 0.25, 3),
                     "duty": round(profile.random(), 3),
                     "fault": {},
@@ -932,6 +933,68 @@ def _approach(previous: float, target: float, dt_hours: float, tau_hours: float,
     return previous + alpha * (target - previous) + noise
 
 
+def _preview_call(
+    site: dict,
+    fleet_call: tuple[str, float, str] | None,
+    percentile: float,
+    storage,
+    by_location: dict,
+    lmp_mean: float | None,
+    demand_only: bool,
+) -> tuple[str, float, str, bool]:
+    lmp = by_location.get(site["load_zone"])
+    if fleet_call:
+        signal, level, source = fleet_call
+    else:
+        signal = choose_signal(percentile, storage, lmp, lmp_mean, demand_only=demand_only)
+        level = intensity(signal, percentile)
+        source = "rules"
+    override = False
+    if site.get("offline"):
+        level = 0.0
+    elif site.get("signal_override"):
+        signal, level = site["signal_override"]
+        source = "action"
+        override = True
+    return signal, level, source, override
+
+
+def _station_duty(
+    sites: list[dict],
+    fleet_call: tuple[str, float, str] | None,
+    percentile: float,
+    storage,
+    by_location: dict,
+    lmp_mean: float | None,
+    demand_only: bool,
+) -> tuple[dict[str, tuple[str, float, str, bool]], dict[str, float]]:
+    """Rank each service area by stored energy, then map that rank to duty."""
+    previews = {}
+    groups: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for site in sites:
+        preview = _preview_call(
+            site, fleet_call, percentile, storage, by_location, lmp_mean, demand_only
+        )
+        previews[site["id"]] = preview
+        signal, _level, _source, override = preview
+        if override or site.get("offline") or site.get("grid_off"):
+            continue
+        if signal not in ("push", "pull"):
+            continue
+        floor = site["capacity_kwh"] * site["reserve_frac"]
+        ceiling = site["capacity_kwh"] * config.SOC_CEILING
+        stored = site["physical_soc_kwh"]
+        if signal == "push" and stored <= floor:
+            continue
+        if signal == "pull" and stored >= ceiling:
+            continue
+        groups.setdefault((site["station"], signal), []).append((site["id"], stored))
+    queue: dict[str, float] = {}
+    for (_station, signal), members in groups.items():
+        queue.update(soc_queue(members, signal))
+    return previews, queue
+
+
 def tick_sites(
     sites: list[dict],
     grid: dict,
@@ -969,6 +1032,9 @@ def tick_sites(
     scale = 0.85 + 0.30 * percentile
     dt = max(dt_hours, 0.0)
     fleet_call = resolve_order(order, percentile)
+    previews, queue = _station_duty(
+        sites, fleet_call, percentile, storage, by_location, lmp_mean, demand_only
+    )
     # One frequency for the interconnection. Homes only add a local measurement error.
     frequency_hz = 60.0 + rng.gauss(0, 0.006)
     zone_signals: dict[str, str] = {}
@@ -982,19 +1048,11 @@ def tick_sites(
         fault = site["fault"]
         eta = site["eta"]
         lmp = by_location.get(site["load_zone"])
-        if fleet_call:
-            signal, level, source = fleet_call
-        else:
-            signal = choose_signal(percentile, storage, lmp, lmp_mean, demand_only=demand_only)
-            level = intensity(signal, percentile)
-            source = "rules"
+        signal, level, source, override = previews[site["id"]]
         zone_signals[site["load_zone"]] = signal
-        # A unit action outranks the fleet call. Service takes the base offline.
-        if site.get("offline"):
-            level = 0.0
-        elif site.get("signal_override"):
-            signal, level = site["signal_override"]
-            source = "action"
+        # A set_signal sits at the front of the queue. Everyone else takes the
+        # SOC rank for this service area. Missing from the queue means hold.
+        site["duty"] = 0.0 if override and level > 0 else queue.get(site["id"], 1.0)
         # Kept for the unit view. Offline zeros it; a set_signal replaces it.
         site["level"] = level
         target_kw = max(0.3, panel_kw(site, hour) * scale)
@@ -1015,8 +1073,8 @@ def tick_sites(
         ceiling = site["capacity_kwh"] * config.SOC_CEILING
         commanded_charge = 0.0
         commanded_discharge = 0.0
-        # A call only reaches units whose place in the queue the call is deep enough to
-        # reach, and only as far as the customer's own reserve allows.
+        # A call only reaches the front of this station's SOC queue, as far as
+        # intensity and the customer's reserve allow.
         on_call = level >= site["duty"]
         if on_call and signal == "push":
             headroom_kw = (site["physical_soc_kwh"] - floor) * eta

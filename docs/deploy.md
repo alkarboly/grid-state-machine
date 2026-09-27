@@ -43,11 +43,11 @@ The free instance has 512 MB. Startup builds all 3000 homes, including the 30-ho
 
 That same startup line stays up while the history is filled. On a laptop that takes about two minutes. The free CPU is slower, so leave the deploy on that line until the port opens.
 
-The map polls `/api/scene` on that same origin. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
+The map polls `/api/scene` on that same origin. The public name is https://gridstatemachine.com/, a custom domain on this Render service. The header brand is **grid state machine**. The side panel starts open. It shows the price and day shape, Fleet manager, Maintenance manager with each ticket's escalation steps, and Maintenance alerts for homes past a limit.
 
 ## 3. Check
 
-Open the service URL. The fleet should appear, and the Now block should show a rate. Insert a service from the Supabase SQL editor:
+Open the service URL (https://gridstatemachine.com/). The fleet should appear, and the Now block should show a rate. Insert a service from the Supabase SQL editor:
 
 ```sql
 insert into unit_actions (id, site_id, kind, status, actor, note)

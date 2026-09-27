@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>gridsim</title>
-  <link rel="stylesheet" href="/style.css?v=20">
+  <title>grid state machine</title>
+  <link rel="stylesheet" href="/style.css?v=23">
 </head>
 <body>
   <header>
     <div class="brand-row">
-      <div class="brand">gridsim</div>
+      <div class="brand">grid state machine</div>
       <nav class="nav" aria-label="Views">
         <button type="button" id="tab-fleet" class="on" data-view="fleet">fleet</button>
         <button type="button" id="tab-arch" data-view="architecture">architecture</button>
+        <button type="button" id="tab-protocols" data-view="protocols">protocols</button>
       </nav>
     </div>
     <div class="stats" id="stats"></div>
@@ -32,6 +33,48 @@
       <p class="stage-kicker">architecture</p>
       <p id="arch-role"></p>
       <div id="arch-diagram"></div>
+    </section>
+    <section id="protocols">
+      <p class="stage-kicker">state machine protocols</p>
+      <p id="proto-live">This tick: —</p>
+      <div class="proto-grid">
+        <article class="proto-card">
+          <h2>Words</h2>
+          <ul class="proto-words">
+            <li data-signal="push"><b class="push">push</b> discharge to the grid</li>
+            <li data-signal="pull"><b class="pull">pull</b> charge from the grid</li>
+            <li data-signal="hold"><b class="hold">hold</b> neither</li>
+          </ul>
+          <p>The call is the ask. Colour on the map is what the cabinet did.</p>
+        </article>
+        <article class="proto-card proto-ladder">
+          <h2>When to push or pull</h2>
+          <p>First match wins. No posted order.</p>
+          <ol>
+            <li data-proto="price">Official load-zone price, only with the ERCOT key. High → push. Low → pull. Until the key is set, skip this and use simulated price.</li>
+            <li data-proto="demand-push">Texas demand at or above today's 75th percentile → push.</li>
+            <li data-proto="demand-pull">Texas demand at or below today's 35th percentile → pull.</li>
+            <li data-proto="storage-push">ERCOT storage discharging ≥ 200 MW → push. The Base fleet discharges with it.</li>
+            <li data-proto="storage-pull">ERCOT storage charging (≤ −200 MW) → pull. The Base fleet charges with it.</li>
+            <li data-proto="hold">Otherwise hold.</li>
+          </ol>
+        </article>
+        <article class="proto-card">
+          <h2>Who answers</h2>
+          <p>A live call reaches at least about a third of each service area, more as the peak or trough deepens. Hold reaches none.</p>
+          <p>Charge takes the emptiest cabinets first. Discharge takes the fullest first. Discharge stops at the customer's reserve. Charge stops at 95% full.</p>
+        </article>
+        <article class="proto-card">
+          <h2>What outranks the ladder</h2>
+          <ul>
+            <li data-proto="order">A posted fleet order is one call for every home. The ladder is off.</li>
+            <li data-proto="reverse">Reverse demand skips prices and takes the opposite of the live call. A discharge becomes a charging window.</li>
+            <li>A set-signal on one home outranks the fleet call for that home.</li>
+            <li>An open maintenance ticket keeps the fleet manager off that home.</li>
+          </ul>
+          <p class="muted">Prototype policy, not an ERCOT market award.</p>
+        </article>
+      </div>
     </section>
     <aside id="panel">
       <button type="button" id="panel-toggle" aria-expanded="true" aria-controls="panel-body">hide</button>
@@ -75,6 +118,6 @@
       }
     }
   </script>
-  <script type="module" src="/main.js?v=36"></script>
+  <script type="module" src="/main.js?v=38"></script>
 </body>
 </html>

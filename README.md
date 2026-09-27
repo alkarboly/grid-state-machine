@@ -1,4 +1,4 @@
-# gridsim
+# grid state machine
 
 Live ERCOT demand and storage, joined to a simulated fleet of Base-style home batteries. The map is a minimal Three.js view of those homes.
 
@@ -10,7 +10,7 @@ Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch 
 
 ## Submission
 
-- [x] **Project title** — gridsim
+- [x] **Project title** — grid state machine
 - [ ] **2–5 min demo video** (Loom). Show the core loop live.
 
     Record the running app, not slides. Open the fleet map, wait for a tick, read **Now** (the fleet call in words and why it fired). Open **Architecture**. Click one home, flag a chart, and show the maintenance ticket and the decisions log. Keep it under five minutes.
@@ -21,7 +21,7 @@ Where the build stands is [docs/status.md](docs/status.md). Contracts, dispatch 
     - [x] How to reproduce the demo (env vars, sample `.env`)
     - [x] Datasets / synthetic data and provenance
     - [x] Known limitations and next steps
-- [x] **Deployed URL** — https://gridsim-gvc5.onrender.com/
+- [x] **Deployed URL** — https://gridstatemachine.com/
 - [x] **Team roster** (names, roles, contacts)
 - [x] **Short write-up** (below)
 
@@ -54,10 +54,11 @@ python -m unittest discover -s tests -t .
 ## Reproduce the demo
 
 1. Copy `.env.example` to `.env`. Empty values are enough for the live dashboard, the map, the ladder, and the architecture tab.
-2. Start the server as above and open http://127.0.0.1:8000 (or the deployed URL).
+2. Start the server as above and open http://127.0.0.1:8000 (or https://gridstatemachine.com/).
 3. Fleet view: 24h demand and price, the Texas map, **Now** (price, day shape, fleet call, why it fired).
 4. Click a city, then a home. Flag a chart on Disco or Base. The maintenance manager opens a ticket. The decisions log labels ladder and manager steps `[state machine]`.
 5. Open **Architecture** (`/#architecture`).
+6. Open **Protocols** (`/#protocols`) for when the state machine pushes, pulls, or holds.
 
 Optional keys (never commit `.env`, never paste secrets into chat):
 
@@ -120,7 +121,7 @@ Texas already has home batteries that can charge and discharge against ERCOT. Wh
 
 gridsim is for a VPP operator and the person who has to visit a cabinet. It is a hackathon prototype, not a market award and not a real service territory.
 
-Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. Adherence to that contract is how ingest keeps data quality. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of the homes; a strong call reaches almost all of them. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
+Each tick pulls ERCOT's public dashboard (demand, the short forecast, and whether Texas-wide storage is charging or discharging). A simulated on-premises gateway contributes one sample per home. Data-contract ingest runs load, dispatch, noise, and control charts, then writes SQLite. Adherence to that contract is how ingest keeps data quality. A state machine on the API server chooses discharge, charge, or hold from those ERCOT numbers. A light call reaches about a third of each service area, emptiest first on charge and fullest first on discharge. A chart past its limits opens a maintenance visit. The browser is a Three.js map of 3,000 Base-style homes. Official prices and hosted Postgres turn on only when those keys are set.
 
 Once those rows are stored — SQLite every tick, and hosted Postgres when the keys are set — the same telemetry feeds control charts for automated anomaly detection. Reverse demand, chart flags, and posted fleet calls are built in to stress the state machine's rules. When a visit is escalated, an LLM writes a two-sentence summary from that home's contract readings. Without the key, that text is the chart sentence.
 

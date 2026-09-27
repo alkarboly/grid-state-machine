@@ -10,7 +10,7 @@ Live ERCOT demand, the short forecast, and fuel mix, including storage megawatts
 
 A simulated fleet of 3000 Base-style homes. Default energy is the published 39.2 kWh. Continuous power defaults to 11.5 kW, which is an assumption. Each home is grid → meter → disco → panel → base. Every home starts healthy. Arming a chart is the only fault. That opens one ticket, the maintenance manager tries a system reset when that fault allows it, and escalates the same row to an agent visit when the reset does not clear it. The ticket keeps every step. Physics and the dispatch ladder are [simulation.md](simulation.md). Six chart families and the machine-learning row are [control-charts.md](control-charts.md) and [database.md](database.md).
 
-The map is one particle draw. Homes sit on a hex around a modeled distribution substation, not around the downtown dot and not on an ERCOT station code. Clicking a city unfolds each neighborhood from its substation. Clicking a neighborhood opens only that substation, and its homes gather into the same pull, hold, and push groups. Clicks land on the drawn dots. `/#metro/austin` and `/#station/aus-s03` open those views. City labels are sized to the measured name. Only metros holding at least 3% of the fleet are labelled. San Antonio’s label grows west so the name stays on the map.
+The map is one particle draw. Homes sit on a hex around a modeled distribution substation, not around the downtown dot and not on an ERCOT station code. Clicking a city unfolds each neighborhood from its substation. Clicking a neighborhood opens only that substation, and its homes gather into the same pull, hold, and push groups: emptiest charge on the left, fullest discharge on the right. Clicks land on the drawn dots. `/#metro/austin` and `/#station/aus-s03` open those views. City labels are sized to the measured name. Only metros holding at least 3% of the fleet are labelled. San Antonio’s label grows west so the name stays on the map.
 
 One fleet call per tick. `POST /api/dispatch` or the newest Supabase `dispatch_orders` row is applied on the next tick. The tick does not wait on a model.
 
@@ -32,7 +32,7 @@ An agent case shows a status pill and, while it is open, a timer to `ends_at`. T
 
 ## Not standing yet
 
-The web service is described in `render.yaml` and [deploy.md](deploy.md). It serves the map and the API from one process. The Supabase project and that Render service have not been created from this repo. Until they are, the map people open is the local process, and the model talks to that API and writes with `POST /api/actions`. The API server is what talks to Supabase.
+The web service is live at https://gridstatemachine.com/. It serves the map and the API from one process. The header brand is **grid state machine**. The API server is what talks to Supabase.
 
 `LLM_URL` is unset, so the fleet read-model POST is not called. An escalated maintenance ticket is still resolved on this API server after `ends_at`: the tick pulls `GET /api/site/{id}`, stores that payload and the chart evidence, and OpenAI writes a two-sentence summary when `OPENAI_API_KEY` is set. A missing key keeps the chart sentence. The state machine then closes the ticket. The Maintenance manager shows the row as a done case. The decisions log shows that step. The contract is in [llm.md](llm.md). The fleet manager still resolves a home set to dispatch.
 

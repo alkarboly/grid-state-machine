@@ -6,7 +6,7 @@ Homes are synthetic. ERCOT demand, storage, and prices are not.
 
 `FLEET_SIZE` batteries, **3000** by default, spread across the 21 ERCOT metros in `data/anchors.json`.
 
-Every battery draws its own `load_scale`, temperature center and sigma, voltage center and sigma, one-way efficiency, customer reserve, and dispatch duty. Those values are the `sites` row and they do not change when a fault is applied. The draw is seeded on the site id, so a restart puts every battery back on the same roof with the same personality.
+Every battery draws its own `load_scale`, temperature center and sigma, voltage center and sigma, one-way efficiency, and customer reserve. Those values are the `sites` row and they do not change when a fault is applied. The draw is seeded on the site id, so a restart puts every battery back on the same roof with the same personality. `duty` is not a personality. Each tick rewrites it from this service area's stored-energy queue.
 
 Each cabinet uses the published Base Core energy, **39.2 kWh**. Continuous power defaults to **11.5 kW**. That power rating is an assumption, not a published Core figure. Override it with `BASE_POWER_KW`. State of charge starts spread between 22% and 92%, so some units begin with no room to discharge and some with none to charge.
 
@@ -66,7 +66,7 @@ An external order is `{signal, intensity}` with `signal` of `push`, `pull`, or `
 
 `source` on the grid component is `external` for an order, `rules` for the ladder, and `action` while a `set_signal` row is in force on that home. The values the controller sees are one `dispatch_ticks` row per tick: demand, storage, frequency, the call that was applied, and what the fleet then did. `GET /api/dispatch` returns that row, the order waiting for the next tick, and whether the Supabase write succeeded. The browser does not receive the service-role key.
 
-The ladder, used whenever no order is set, is evaluated in this order:
+The ladder, used whenever no order is set, is the protocol in [protocols.md](protocols.md) and on the **Protocols** tab. It is evaluated in this order:
 
 1. If the home's load-zone LMP is present and outside the middle band, it decides: `push` when LMP is at least the greater of 40 $/MWh and 1.1× the mean LMP of that interval; `pull` when LMP is at most the lesser of 25 $/MWh and 0.9× that mean. The mean is load zones and hubs only (`LZ_*`, `HB_*`).
 2. Otherwise `push` when `demand_percentile` ≥ 0.75.
@@ -83,7 +83,7 @@ The fleet call keeps the clause that fired as `because`: `{line, threshold}`. `l
 
 The signal is a call, not a command, and two per-unit values decide whether it lands:
 
-- **`duty`**, a draw in [0, 1], is the unit's place in the dispatch queue. The call reaches it only when intensity is at least its duty, so a mild call moves a third of the fleet and a peak call moves nearly all of it.
+- **`duty`**, from 0 to 1, is this home's place in its service area's stored-energy queue this tick. 0 answers first. A pull ranks the emptiest homes first (lowest `physical_soc_kwh`). A push ranks the fullest first. Intensity still gates depth, so a mild call moves about a third of that station and a peak call moves nearly all of it. A `set_signal` sits at the front of the queue. Offline, grid-off, and homes already at reserve (push) or the 95% ceiling (pull) stay out of the ranking.
 - **`reserve_frac`**, between `SOC_RESERVE` and `SOC_RESERVE + 0.25`, is the customer's own backup floor. Discharge stops there, so a unit sitting near its reserve holds through a push no matter how deep the call.
 
 Commanded kilowatts are then `power_limit_kw` × intensity, clipped by the energy actually available above that reserve or below the 95% ceiling. Achieved kilowatts equal the command unless the unit carries a response fault.

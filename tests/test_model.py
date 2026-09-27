@@ -21,7 +21,7 @@ from gridsim.fleet.charts import (
     HISTORY,
     evaluate,
 )
-from gridsim.fleet.policy import choose_signal, explain_signal, resolve_order
+from gridsim.fleet.policy import choose_signal, explain_signal, resolve_order, soc_queue
 from gridsim.fleet.simulate import (
     COMPONENTS,
     DEMO_FAULTS,
@@ -243,6 +243,12 @@ class FleetTests(unittest.TestCase):
         signal, level, source = resolve_order({"signal": "push", "intensity": 0.4}, 0.2)
         self.assertEqual((signal, source), ("push", "external"))
         self.assertEqual(level, 0.4)
+        pull = soc_queue([("a", 10.0), ("b", 30.0), ("c", 20.0)], "pull")
+        self.assertLess(pull["a"], pull["c"])
+        self.assertLess(pull["c"], pull["b"])
+        push = soc_queue([("a", 10.0), ("b", 30.0), ("c", 20.0)], "push")
+        self.assertLess(push["b"], push["c"])
+        self.assertLess(push["c"], push["a"])
 
     def test_external_call_overrides_the_ladder(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
@@ -596,6 +602,58 @@ class ScaleTests(unittest.TestCase):
 
         self.assertGreater(pushing(0.95), pushing(0.78))
         self.assertGreater(pushing(0.78), 0)
+
+    def test_a_station_charges_emptiest_and_discharges_fullest(self):
+        now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)
+
+        def biggest(sites):
+            by_station = {}
+            for site in sites:
+                by_station.setdefault(site["station"], []).append(site)
+            return max(by_station.values(), key=len)
+
+        def mean_soc(rows):
+            return sum(site["physical_soc_kwh"] for site in rows) / len(rows)
+
+        pulling, *_ = tick_sites(
+            build_sites(fleet_size=800),
+            _grid(0.2),
+            now,
+            0.0028,
+            random.Random(8),
+            order={"signal": "pull", "intensity": 0.35},
+        )
+        station = biggest(pulling)
+        charging = [site for site in station if site["metrics"]["base"]["commanded_charge_kw"] > 0.01]
+        waiting = [
+            site
+            for site in station
+            if site["metrics"]["base"]["commanded_charge_kw"] <= 0.01 and not site.get("offline")
+        ]
+        self.assertGreater(len(charging), 3)
+        self.assertGreater(len(waiting), 3)
+        self.assertLess(mean_soc(charging), mean_soc(waiting))
+
+        pushing, *_ = tick_sites(
+            build_sites(fleet_size=800),
+            _grid(0.9),
+            now,
+            0.0028,
+            random.Random(8),
+            order={"signal": "push", "intensity": 0.35},
+        )
+        station = biggest(pushing)
+        discharging = [
+            site for site in station if site["metrics"]["base"]["commanded_discharge_kw"] > 0.01
+        ]
+        waiting = [
+            site
+            for site in station
+            if site["metrics"]["base"]["commanded_discharge_kw"] <= 0.01 and not site.get("offline")
+        ]
+        self.assertGreater(len(discharging), 3)
+        self.assertGreater(len(waiting), 3)
+        self.assertGreater(mean_soc(discharging), mean_soc(waiting))
 
     def test_rollup_totals_match_the_fleet(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)

@@ -428,12 +428,18 @@ function packBlock(indices, base, side, shape, targetX, targetZ) {
   }
 }
 
-function sortLane(indices, sites) {
+function sortLane(indices, sites, flow) {
+  const soc = (site) => Number(site.soc_pct) || 0;
   indices.sort((a, b) => {
+    const left = sites[a];
+    const right = sites[b];
     const marked = (site) => Boolean(site.alarm) || site.grid === "off";
-    const flagged = Number(marked(sites[b])) - Number(marked(sites[a]));
+    const flagged = Number(marked(right)) - Number(marked(left));
     if (flagged) return flagged;
-    return sites[a].id.localeCompare(sites[b].id);
+    // Outer wing is first in line: emptiest on pull, fullest on push.
+    if (flow === "pull") return soc(right) - soc(left);
+    if (flow === "push") return soc(left) - soc(right);
+    return soc(left) - soc(right);
   });
 }
 
@@ -499,9 +505,9 @@ function stackYard(data) {
   for (const [stationId, bucket] of lanes.entries()) {
     const row = stationRows.get(stationId);
     if (!row) continue;
-    sortLane(bucket.pull, data.sites);
-    sortLane(bucket.push, data.sites);
-    sortLane(bucket.hold, data.sites);
+    sortLane(bucket.pull, data.sites, "pull");
+    sortLane(bucket.push, data.sites, "push");
+    sortLane(bucket.hold, data.sites, "hold");
     packBlock(bucket.pull, row.row, -1, shape, targetX, targetZ);
     packBlock(bucket.push, row.row, 1, shape, targetX, targetZ);
     packBlock(bucket.hold, row.row, 0, shape, targetX, targetZ);
@@ -569,9 +575,9 @@ function areaYard(data) {
       shape = option;
     }
   }
-  sortLane(bucket.pull, data.sites);
-  sortLane(bucket.push, data.sites);
-  sortLane(bucket.hold, data.sites);
+  sortLane(bucket.pull, data.sites, "pull");
+  sortLane(bucket.push, data.sites, "push");
+  sortLane(bucket.hold, data.sites, "hold");
   packBlock(bucket.pull, center, -1, shape, targetX, targetZ);
   packBlock(bucket.push, center, 1, shape, targetX, targetZ);
   packBlock(bucket.hold, center, 0, shape, targetX, targetZ);
@@ -660,6 +666,10 @@ function renderUnits(data) {
     const forcedSignal = lanes ? (lanes.overrides?.get(site.id) || null) : null;
     const flow = flowState(site, Boolean(lanes), forcedSignal);
     TINT.setHex(COLOR[modeOf(site, Boolean(lanes), forcedSignal)]);
+    if (lanes && !site.alarm && site.grid !== "off") {
+      const fill = Math.min(1, Math.max(0, (Number(site.soc_pct) || 0) / 100));
+      TINT.multiplyScalar(0.42 + 0.58 * fill);
+    }
     if (yard) {
       const row = yard.stationRows.get(site.station);
       const delay = row ? row.delay : 0;
@@ -1558,7 +1568,7 @@ const DICTIONARY = [
     ["chart_history", "Completed bucket residuals the run rules just used, one list per chart_id, oldest first, at most 24."],
   ]],
   ["site", [
-    ["duty", "A draw in [0, 1]. The call reaches this home only when intensity is at least its duty."],
+    ["duty", "Place in this service area's SOC queue this tick, 0 first. A pull ranks emptiest first; a push ranks fullest first. The call reaches this home when intensity is at least its duty."],
     ["intensity", "Depth of the call on this home this tick, from 0 to 1. A set_signal replaces it. Service zeros it."],
     ["reserve_frac", "Between SOC_RESERVE and SOC_RESERVE + 0.25. The customer's backup floor. Discharge stops there."],
   ]],
@@ -2844,6 +2854,40 @@ function renderArch(data) {
   }
 }
 
+function protoStep(data) {
+  const dispatch = data.dispatch || {};
+  if (dispatch.source === "external") return "order";
+  if (data.demand_reverse) return "reverse";
+  const clause = (dispatch.because || [])[0] || {};
+  const bar = clause.threshold || "";
+  const line = clause.line || "";
+  if (bar.includes("$/MWh")) return "price";
+  if (bar === "0.75") return "demand-push";
+  if (bar === "0.35") return "demand-pull";
+  if (line.includes("storage") && line.includes("≥")) return "storage-push";
+  if (line.includes("storage") && line.includes("≤") && !line.includes("inside")) return "storage-pull";
+  return "hold";
+}
+
+function renderProtocols(data) {
+  if (!data || viewName !== "protocols") return;
+  const dispatch = data.dispatch || {};
+  const clause = (dispatch.because || [])[0] || {};
+  const live = document.getElementById("proto-live");
+  const reason = describeBecause(clause);
+  live.textContent = reason
+    ? `This tick: ${describeCall(dispatch)}. ${reason}.`
+    : `This tick: ${describeCall(dispatch)}.`;
+  const step = protoStep(data);
+  const signal = dispatch.signal || "hold";
+  document.querySelectorAll("#protocols [data-signal]").forEach((node) => {
+    node.classList.toggle("on", node.dataset.signal === signal);
+  });
+  document.querySelectorAll("#protocols [data-proto]").forEach((node) => {
+    node.classList.toggle("on", node.dataset.proto === step);
+  });
+}
+
 function fleetHash() {
   if (focusedStation) return `#station/${focusedStation}`;
   if (focusedMetro) return `#metro/${focusedMetro}`;
@@ -2851,17 +2895,24 @@ function fleetHash() {
 }
 
 function showView(name) {
-  viewName = name === "architecture" ? "architecture" : "fleet";
+  viewName = name === "architecture" || name === "protocols" ? name : "fleet";
   document.body.dataset.view = viewName;
   document.getElementById("tab-fleet").classList.toggle("on", viewName === "fleet");
   document.getElementById("tab-arch").classList.toggle("on", viewName === "architecture");
+  document.getElementById("tab-protocols").classList.toggle("on", viewName === "protocols");
   if (viewName === "architecture") {
     if (modal.open) modal.close();
     placeHash("#architecture");
     renderArch(payload);
     return;
   }
-  if (location.hash === "#architecture") placeHash(fleetHash());
+  if (viewName === "protocols") {
+    if (modal.open) modal.close();
+    placeHash("#protocols");
+    renderProtocols(payload);
+    return;
+  }
+  if (location.hash === "#architecture" || location.hash === "#protocols") placeHash(fleetHash());
 }
 
 async function poll() {
@@ -2874,6 +2925,7 @@ async function poll() {
     renderPanel(payload);
     ingestDecisions(payload);
     renderArch(payload);
+    renderProtocols(payload);
     if (modal.open && selected) {
       unitDetail = (await loadUnit(selected)) || unitDetail;
       renderUnit();
@@ -2987,7 +3039,7 @@ function renderStage(data) {
     stageCard.classList.add("in");
   }
   const stamp = (data.fleet || {}).ts || "";
-  const signature = `${view.key}|${stamp}|${gridStamp(view.sites)}`;
+  const signature = `${view.key}|${stamp}|${gridStamp(view.sites)}|${(data.dispatch || {}).signal || ""}`;
   if (signature === stageSignature) return;
   stageSignature = signature;
 
@@ -3003,8 +3055,14 @@ function renderStage(data) {
     else if (site.state === "pull") pulling += 1;
     else holding += 1;
   }
+  let sub = view.sub;
+  if (view.kicker === "service area") {
+    const signal = (data.dispatch || {}).signal;
+    if (signal === "pull") sub = `${view.sub} · charge emptiest first`;
+    else if (signal === "push") sub = `${view.sub} · discharge fullest first`;
+  }
   stageTitle.textContent = view.title;
-  stageSub.textContent = view.sub;
+  stageSub.textContent = sub;
   // Same left-to-right order as the lanes: pull, hold, push. Flagged is a
   // colour on a home, not a lane, so it stays last.
   stageCounts.innerHTML = `
@@ -3130,6 +3188,10 @@ poll().then(() => {
   const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
   if (wanted === "architecture") {
     showView("architecture");
+    return;
+  }
+  if (wanted === "protocols") {
+    showView("protocols");
     return;
   }
   if (wanted === "metro" && block) {

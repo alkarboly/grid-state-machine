@@ -350,6 +350,7 @@ def _open_case(site, spec, chart, policy, now, pending) -> dict:
             actor="llm",
             ends_at=now + timedelta(minutes=policy["service_min"]),
         )
+    site["offline"] = True
     pending.append(row)
     return row
 
@@ -393,6 +394,7 @@ def _ticket_payload(spec, policy, gathered, because, reset_min, now: datetime) -
 def _clear_reset(site, ticket, now, created) -> None:
     chart_id = ticket["payload"]["chart_id"]
     site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
+    site["offline"] = False
     ticket["status"] = "done"
     ticket["note"] = f"System reset cleared {chart_id}."
     steps = ticket["payload"].get("escalation") or []
@@ -425,10 +427,16 @@ def _escalate(site, ticket, chart, spec, policy, now) -> None:
     ticket["status"] = "active"
     ticket["ends_at"] = iso(now + timedelta(minutes=policy["service_min"]))
     ticket["note"] = _agent_note(site, spec["chart_id"], gathered, reset_min)
+    site["offline"] = True
 
 
-def open_model_tickets(actions: list[dict]) -> list[dict]:
-    """Escalated visits the model still has to close from a site pull."""
+def open_model_tickets(actions: list[dict], now: datetime | None = None) -> list[dict]:
+    """Escalated visits the model still has to close from a site pull.
+
+    A visit opened on this tick stays active so the case is visible. The pull
+    runs on a later tick.
+    """
+    stamp = iso(now) if now is not None else ""
     found = []
     for action in actions:
         if action.get("kind") != "scheduled_service" or action.get("actor") != "llm":
@@ -439,6 +447,10 @@ def open_model_tickets(actions: list[dict]) -> list[dict]:
         if not isinstance(payload, dict):
             continue
         if payload.get("stage") != "ticket" or payload.get("decision") or not payload.get("chart_id"):
+            continue
+        steps = payload.get("escalation") or []
+        opened = steps[-1].get("ts") if steps and isinstance(steps[-1], dict) else ""
+        if stamp and opened == stamp:
             continue
         found.append(action)
     return found
@@ -476,6 +488,7 @@ def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) ->
     ticket["actor"] = "llm"
     ticket["note"] = payload["decision"]["action"]
     site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
+    site["offline"] = False
     return _return_online(
         site["id"],
         now,

@@ -636,7 +636,7 @@ class Fleet:
             dirty_actions = [
                 action for action in self.actions if before_stamp.get(action["id"]) != _action_stamp(action)
             ]
-            model_ids = [action["id"] for action in open_model_tickets(self.actions)]
+            model_ids = [action["id"] for action in open_model_tickets(self.actions, now)]
             addon_sites = [
                 site for site in sites if tuple(site.get("addons") or []) != before_addons.get(site["id"], ())
             ]
@@ -842,6 +842,7 @@ class Fleet:
                 "state_log": [dict(row) for row in reversed(site.get("state_log") or [])],
                 "snapshot": machine_snapshot(site),
                 "actions": _site_actions(self.actions, site_id),
+                "offline": bool(site.get("offline")),
                 "armed": list(site.get("armed") or []),
                 "dispatch": bool(site.get("agent_dispatch")),
                 "agent_call": site.get("agent_call"),

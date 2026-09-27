@@ -59,6 +59,17 @@ let payload = null;
 let selected = null;
 let unitDetail = null;
 const folds = { now: true, fleet: false, maintenance: false, attention: false };
+const seenVisits = new Set();
+
+function revealVisits(data) {
+  for (const action of data.actions || []) {
+    if (action.kind !== "scheduled_service") continue;
+    if (action.status !== "active" && action.status !== "pending") continue;
+    if (!action.id || seenVisits.has(action.id)) continue;
+    seenVisits.add(action.id);
+    folds.maintenance = true;
+  }
+}
 let screen = null;
 let focusPoint = null;
 let focusedStation = null;
@@ -1052,12 +1063,43 @@ function nowBlock(data) {
     ? `${data.dispatch.signal} ${fmt(data.dispatch.intensity, 2)} · ${data.dispatch.source}`
     : "—";
   const because = (data.dispatch && data.dispatch.because) || [];
+  const visit = modelVisit(data);
+  const model = visit
+    ? `<p class="model-now"><span>model</span><b>${escapeHtml(modelLine(visit))}</b></p>`
+    : "";
   return `<div class="stack ledger">
       ${row("price", `${fmt(market.rate_usd_mwh, 1)} $/MWh · ${basis}`)}
       ${row("day", shape)}
       ${row("fleet call", call)}
+      ${model}
     </div>
     ${because.map(markLine).join("")}`;
+}
+
+function modelVisit(data) {
+  const rows = (data.actions || []).filter((action) => {
+    if (action.kind !== "scheduled_service") return false;
+    const payload = action.payload || {};
+    const steps = payload.escalation || [];
+    return action.actor === "llm" || payload.decision || steps.some((step) => step.actor === "llm");
+  });
+  const open = rows.find((action) => action.status === "active" || action.status === "pending");
+  if (open) return open;
+  return rows.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""))[0] || null;
+}
+
+function modelLine(action) {
+  const payload = action.payload || {};
+  const site = action.site_id || "";
+  const decision = payload.decision || {};
+  if (decision.action) {
+    const who = decision.model ? `${decision.model} · ` : "";
+    return `${site} · ${who}${decision.action}`;
+  }
+  if (payload.stage === "ticket") return `${site} · pulling GET /api/site/${site}`;
+  const steps = payload.escalation || [];
+  const last = steps[steps.length - 1];
+  return `${site} · ${last ? stepText(last) : "scheduled service"}`;
 }
 
 const WHO = { fleet: "fleet", maintenance: "maintenance", sim: "agent", api: "user", llm: "model" };
@@ -1229,6 +1271,9 @@ function caseCard(entry, opts = {}) {
     const steps = stepList(payload);
     const evidence = evidenceText((payload.pull && payload.pull.evidence) || payload.evidence);
     const evidenceLine = evidence ? `<span class="case-evidence">${escapeHtml(evidence)}</span>` : "";
+    const pulling = !payload.decision && payload.stage === "ticket" && entry.actor === "llm"
+      ? `<span class="case-evidence">pulling GET /api/site/${escapeHtml(entry.site)}</span>`
+      : "";
     const decided = (payload.decision && payload.decision.action) || "";
     const modelName = (payload.decision && payload.decision.model) || "";
     const decisionLine = decided
@@ -1243,6 +1288,7 @@ function caseCard(entry, opts = {}) {
       ${estimate}
       ${whoLine}
       ${steps}
+      ${pulling}
       ${evidenceLine}
       ${decisionLine}
       ${payloadBlock(payload)}
@@ -1399,7 +1445,11 @@ function schemaJson(rows) {
       ? `[${value.map((item) => `"${item}"`).join(", ")}]`
       : `"${value}"`;
     const comma = index === rows.length - 1 ? "" : ",";
-    return `  <span class="k">"${key}"</span>: <span class="v">${shown}</span>${comma}`;
+    const meaning = DEFINITIONS[key];
+    const term = meaning
+      ? `<span class="k term" tabindex="0" data-def="${escapeHtml(meaning)}">"${escapeHtml(key)}"</span>`
+      : `<span class="k">"${escapeHtml(key)}"</span>`;
+    return `  ${term}: <span class="v">${escapeHtml(shown)}</span>${comma}`;
   });
   return `<pre class="contract-json">{
 ${lines.join("\n")}
@@ -1446,6 +1496,7 @@ const DICTIONARY = [
   ]],
 ];
 
+const DEFINITIONS = Object.fromEntries(DICTIONARY.flatMap(([, rows]) => rows));
 const contractOpen = { "log state": false, snapshot: false, site: false, dictionary: false };
 
 function contractSchema(name, rows) {
@@ -1527,6 +1578,7 @@ function renderPanel(data) {
     : `<p class="muted">No maintenance alerts in this view.</p>`;
 
   const openCount = (desk, scope) => agentCases(data, desk, scope).filter((entry) => entry.status === "pending" || entry.status === "active").length;
+  revealVisits(data);
   const fleetOpen = openCount("fleet");
   const careOpen = openCount("maintenance", ids);
   panelBody.innerHTML = `
@@ -1947,7 +1999,7 @@ function renderUnit() {
   const linked = new Set(rows.map((item) => item[3]).filter(Boolean));
   const charts = (site.charts || []).filter((chart) => linked.has(chart.chart_id) && expanded.has(chart.chart_id));
   const mode = modeOf(site);
-  const modeLabel = gridOff(site) ? "grid off" : mode;
+  const modeLabel = gridOff(site) ? "grid off" : site.offline ? "service" : mode;
 
   document.getElementById("unit-id").textContent = site.id;
   document.getElementById("unit-sub").textContent =
@@ -2030,6 +2082,60 @@ modal.addEventListener("toggle", (event) => {
   if (event.target.dataset.log !== undefined) logOpen = event.target.open;
   if (event.target.dataset.contract) contractOpen[event.target.dataset.contract] = event.target.open;
 }, true);
+
+const contractTip = document.getElementById("contract-tip");
+
+function placeContractTip(event) {
+  const pad = 14;
+  contractTip.style.left = "0px";
+  contractTip.style.top = "0px";
+  const width = contractTip.offsetWidth;
+  const height = contractTip.offsetHeight;
+  const left = Math.min(event.clientX + pad, window.innerWidth - width - 8);
+  const top = Math.min(event.clientY + pad, window.innerHeight - height - 8);
+  contractTip.style.left = `${Math.max(8, left)}px`;
+  contractTip.style.top = `${Math.max(8, top)}px`;
+}
+
+function showContractTip(term, event) {
+  const meaning = term && term.dataset.def;
+  if (!meaning) {
+    contractTip.hidden = true;
+    return;
+  }
+  contractTip.hidden = false;
+  contractTip.textContent = meaning;
+  placeContractTip(event);
+}
+
+modal.addEventListener("pointerover", (event) => {
+  showContractTip(event.target.closest(".term"), event);
+});
+modal.addEventListener("pointermove", (event) => {
+  if (contractTip.hidden) return;
+  const term = event.target.closest(".term");
+  if (!term) return;
+  placeContractTip(event);
+});
+modal.addEventListener("pointerout", (event) => {
+  const term = event.target.closest(".term");
+  if (!term) return;
+  const next = event.relatedTarget && event.relatedTarget.closest && event.relatedTarget.closest(".term");
+  if (next === term) return;
+  contractTip.hidden = true;
+});
+modal.addEventListener("focusin", (event) => {
+  showContractTip(event.target.closest(".term"), {
+    clientX: event.target.getBoundingClientRect().left,
+    clientY: event.target.getBoundingClientRect().bottom,
+  });
+});
+modal.addEventListener("focusout", () => {
+  contractTip.hidden = true;
+});
+document.getElementById("unit-detail").addEventListener("scroll", () => {
+  contractTip.hidden = true;
+});
 
 modal.addEventListener("close", () => {
   history.replaceState(null, "", location.pathname);
@@ -2327,7 +2433,7 @@ canvas.addEventListener("pointermove", (event) => {
   } else {
     const site = hit.site;
     const station = (payload.stations || []).find((item) => item.id === site.station);
-    const word = gridOff(site) ? "grid off" : modeOf(site);
+    const word = gridOff(site) ? "grid off" : site.offline ? "service" : modeOf(site);
     tip.innerHTML = `<b>${site.id}</b> ${word} · ${fmt(site.soc_pct, 0)}%${
       station ? `<br>supplies ${station.name}` : ""
     }${site.flagged?.length ? `<br>${site.flagged.join(", ")}` : ""}`;

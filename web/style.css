@@ -441,6 +441,11 @@ h2 {
 
 .stack { margin-top: 22px; }
 .ledger { margin-top: 12px; }
+.model-now b {
+  white-space: normal;
+  font-weight: 500;
+  color: var(--ink);
+}
 .ledger h3 { margin-top: 8px; }
 .stack h3 {
   margin: 16px 0 6px;
@@ -811,6 +816,23 @@ dialog#unit[open] { display: flex; flex-direction: column; animation: pop 0.18s 
   overflow: auto;
 }
 .contract-json .k { color: var(--watch); }
+.contract-json .term {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+#contract-tip {
+  position: fixed;
+  z-index: 5;
+  max-width: 280px;
+  padding: 6px 9px;
+  background: #1a1c21;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
 .contract-json .v { color: var(--ink); }
 .unit-detail, .unit-chain, aside { scrollbar-width: thin; scrollbar-color: #33373f transparent; }
 

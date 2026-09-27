@@ -13,6 +13,7 @@ from gridsim.fleet.agent import (
     audit,
     choose_unit_signal,
     close_model_ticket,
+    open_model_tickets,
     day_shape,
     expected_kw,
     record_toggle,
@@ -150,6 +151,16 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(site["armed"], [])
         self.assertEqual(online["kind"], "return_online")
         self.assertIsNone(close_model_ticket(site, ticket, detail, now))
+
+    def test_the_pull_waits_until_the_next_tick(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare({"base_temp"})
+        site["armed"] = ["base_temp"]
+        rows = audit([site], [], _grid(0.5), {}, now)
+        self.assertTrue(site["offline"])
+        self.assertEqual(open_model_tickets(rows, now), [])
+        later = open_model_tickets(rows, now + timedelta(seconds=10))
+        self.assertEqual(later[0]["id"], rows[0]["id"])
 
     def test_a_model_reply_is_the_decision(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)

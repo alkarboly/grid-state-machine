@@ -752,6 +752,8 @@ class Fleet:
                 ],
                 "sites": sites,
                 "ercot": self.status,
+                "supabase": self.supabase,
+                "llm": self.llm,
                 "day": list(self.day),
                 "shape": day_shape(self.day),
                 "tick_seconds": config.TICK_SECONDS,

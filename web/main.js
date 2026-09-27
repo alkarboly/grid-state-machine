@@ -1372,15 +1372,72 @@ ${lines.join("\n")}
 }</pre>`;
 }
 
+const DICTIONARY = [
+  ["log state", [
+    ["ts", "Tick time, US Central, with an offset. Null before any row exists."],
+    ["state", "What the battery did: push, pull, or hold."],
+    ["signal", "The call: push, pull, or hold. Pull charges the battery from the grid. Push discharges toward the grid. Hold does neither."],
+    ["source", "rules, external, or action. rules means the ladder chose the call. external means a fleet-wide order chose it and replaces the ladder until it is cleared with auto. action means a set_signal on this home outranks the fleet call."],
+    ["availability", "online or offline."],
+    ["grid", "on or off. off means the contactor is open."],
+    ["soc_pct", "Reported state of charge, percent."],
+    ["physical_soc_kwh", "Coulomb count."],
+    ["load_kw", "House load this tick."],
+    ["load_kw_state", "Lagged load the next tick starts from."],
+    ["charge_kw", "Kilowatts into the battery."],
+    ["discharge_kw", "Kilowatts out of the battery."],
+    ["in_kw", "Meter import."],
+    ["out_kw", "Meter export."],
+    ["voltage_v", "Disco voltage."],
+    ["voltage_state", "Lagged service voltage the next tick starts from."],
+    ["frequency_hz", "Disco frequency."],
+    ["temp_c", "Cabinet temperature this tick. The hour mean is usage_hours.temp_c and the base_temp chart."],
+    ["temp_c_state", "Lagged temperature the next tick starts from."],
+    ["energy_in_kwh", "Cumulative meter import."],
+    ["energy_out_kwh", "Cumulative meter export."],
+    ["alarming", "Chart ids past ±3σ."],
+    ["out_of_control", "Chart ids where a rule fired. This is what the unit view paints red."],
+  ]],
+  ["snapshot", [
+    ["offline", "True while a scheduled service has the cabinet out."],
+    ["signal_override", "null, or {signal, intensity} while a set_signal is in force."],
+    ["armed", "Chart ids the next tick will drive to +4σ."],
+    ["addons", "Add-on ids on the disco."],
+    ["chart_history", "Completed bucket residuals the run rules just used, one list per chart_id, oldest first, at most 24."],
+  ]],
+  ["site", [
+    ["duty", "A draw in [0, 1]. The call reaches this home only when intensity is at least its duty."],
+    ["intensity", "Depth of the call on this home this tick, from 0 to 1. A set_signal replaces it. Service zeros it."],
+    ["reserve_frac", "Between SOC_RESERVE and SOC_RESERVE + 0.25. The customer's backup floor. Discharge stops there."],
+  ]],
+];
+
+const contractOpen = { "log state": false, snapshot: false, site: false, dictionary: false };
+
+function contractSchema(name, rows) {
+  return `<details class="fold contract-fold" data-contract="${name}"${contractOpen[name] ? " open" : ""}>
+    <summary>${name}</summary>
+    ${schemaJson(rows)}
+  </details>`;
+}
+
+function dictionaryBlock() {
+  const groups = DICTIONARY.map(([name, rows]) => `<p class="dict-group">${name}</p><dl class="dict">${
+    rows.map(([field, meaning]) => `<dt>${escapeHtml(field)}</dt><dd>${escapeHtml(meaning)}</dd>`).join("")
+  }</dl>`).join("");
+  return `<details class="fold contract-fold" data-contract="dictionary"${contractOpen.dictionary ? " open" : ""}>
+    <summary>dictionary</summary>
+    <div class="dict-body">${groups}</div>
+  </details>`;
+}
+
 function contractBlock() {
   return `<section class="contract" aria-label="Data contract">
     <p class="unit-chain-cap">contract</p>
-    <p class="contract-name">log state</p>
-    ${schemaJson(LOG_STATE_SCHEMA)}
-    <p class="contract-name">snapshot</p>
-    ${schemaJson(SNAPSHOT_SCHEMA)}
-    <p class="contract-name">site</p>
-    ${schemaJson(SITE_SCHEMA)}
+    ${contractSchema("log state", LOG_STATE_SCHEMA)}
+    ${contractSchema("snapshot", SNAPSHOT_SCHEMA)}
+    ${contractSchema("site", SITE_SCHEMA)}
+    ${dictionaryBlock()}
   </section>`;
 }
 
@@ -1937,6 +1994,7 @@ async function openUnit(id, block = null) {
 
 modal.addEventListener("toggle", (event) => {
   if (event.target.dataset.log !== undefined) logOpen = event.target.open;
+  if (event.target.dataset.contract) contractOpen[event.target.dataset.contract] = event.target.open;
 }, true);
 
 modal.addEventListener("close", () => {
@@ -2367,6 +2425,221 @@ function ingestDecisions(data) {
   paintDecisions();
 }
 
+const ARCH_W = 156;
+const ARCH_H = 54;
+const ARCH_BOX = {
+  dashboard: [28, 24],
+  official: [28, 108],
+  raw: [220, 66],
+  snapshot: [412, 66],
+  tick: [604, 66],
+  managers: [796, 66],
+  sqlite: [796, 250],
+  supabase: [412, 250],
+  scene: [220, 250],
+  map: [28, 250],
+  controller: [220, 390],
+};
+const ARCH_ROLE = {
+  dashboard: "Public dashboard JSON, fetched with no key: system demand, the short forecast, and five-minute generation by fuel, including power-storage megawatts.",
+  official: "When the official credentials are set, api.ercot.com adds binding transmission constraints, settlement-point LMPs, and a capped page of electrical-bus LMPs.",
+  raw: "Raw payloads are stored in SQLite before they are normalized.",
+  snapshot: "The normalized grid snapshot, constraints, and prices. This is what the fleet tick reads.",
+  tick: "One battery at a time: load, dispatch, sensor noise, and control charts.",
+  managers: "The maintenance manager opens or escalates a ticket, then the fleet manager posts a price call. Both append unit_actions.",
+  sqlite: "metric_logs, observations, control_points, and dispatch_ticks.",
+  supabase: "When configured, Supabase receives the dispatch row, the market row, unit_latest, closed usage hours, and action status.",
+  scene: "GET /api/scene is the map. GET /api/dispatch is the control row a controller reads.",
+  map: "The Three.js map, the actions list, and the selected battery's charts.",
+  controller: "A controller reads market_ticks, unit_latest, and usage_hours and writes the next fleet call or a per-unit row. The next tick applies those rows. It does not wait on the model.",
+};
+let viewName = "fleet";
+let archFocus = "tick";
+let archKey = "";
+
+function archRight(id) {
+  const [x, y] = ARCH_BOX[id];
+  return [x + ARCH_W, y + ARCH_H / 2];
+}
+function archLeft(id) {
+  const [x, y] = ARCH_BOX[id];
+  return [x, y + ARCH_H / 2];
+}
+function archTop(id) {
+  const [x, y] = ARCH_BOX[id];
+  return [x + ARCH_W / 2, y];
+}
+function archBottom(id) {
+  const [x, y] = ARCH_BOX[id];
+  return [x + ARCH_W / 2, y + ARCH_H];
+}
+
+function archArrow(x1, y1, x2, y2, tone) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const size = 5;
+  const bx = x2 - ux * (size + 1);
+  const by = y2 - uy * (size + 1);
+  return `<polygon class="head ${tone}" points="${x2},${y2} ${bx + -uy * size},${by + ux * size} ${bx + uy * size},${by + -ux * size}" />`;
+}
+
+function archLink(points, tone) {
+  const path = points.map((point, index) => `${index ? "L" : "M"}${point[0]} ${point[1]}`).join(" ");
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  return `<path class="rail" d="${path}" fill="none" />
+    <path class="flow ${tone}" d="${path}" fill="none" stroke-width="1.6" style="animation-duration:1.35s" />
+    ${archArrow(prev[0], prev[1], last[0], last[1], tone)}`;
+}
+
+function archJoin(from, to) {
+  const start = archRight(from);
+  const end = archLeft(to);
+  const x = (start[0] + end[0]) / 2;
+  return [start, [x, start[1]], [x, end[1]], end];
+}
+
+function archLive(data) {
+  const ercot = data.ercot || {};
+  const grid = data.grid || {};
+  const fleet = data.fleet || {};
+  const dispatch = data.dispatch || {};
+  const signal = dispatch.signal || "hold";
+  const netKw = (fleet.grid_in_kw || 0) - (fleet.grid_out_kw || 0);
+  const mw = Math.abs(netKw) / 1000;
+  const flow = mw < 0.005 ? "grid" : netKw < 0 ? "export" : "import";
+  const demand = grid.demand_mw == null ? "—" : `${fmt(grid.demand_mw, 0)} MW`;
+  const constraints = (data.constraints || []).length;
+  const official = ercot.official_api || "—";
+  return {
+    signal,
+    notes: {
+      dashboard: `${ercot.dashboard || "—"} · ${demand}`,
+      official: constraints ? `${official} · ${fmt(constraints)} constraints` : official,
+      raw: "SQLite",
+      snapshot: `percentile ${fmt(grid.demand_percentile, 2)}`,
+      tick: `${fmt(fleet.units, 0)} homes`,
+      managers: `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`,
+      sqlite: "each tick",
+      supabase: data.supabase || "—",
+      scene: "every 5s",
+      map: `${flow} ${fmt(mw, 2)} MW`,
+      controller: `llm ${data.llm || "—"}`,
+    },
+    tone: {
+      in: ercot.dashboard === "live" ? "push" : "hold",
+      official: official === "live" ? "push" : "hold",
+      call: signal === "pull" || signal === "push" ? signal : "hold",
+      store: data.supabase === "live" ? "push" : "hold",
+    },
+    state: {
+      dashboard: ercot.dashboard === "unavailable" ? "flagged" : ercot.dashboard === "cached" ? "watch" : "",
+      official: official === "error" ? "flagged" : official === "pending" ? "watch" : "",
+      supabase: data.supabase === "error" ? "flagged" : "",
+      controller: data.llm === "error" ? "flagged" : "",
+    },
+  };
+}
+
+function archBox(id, name, note, state) {
+  const [x, y] = ARCH_BOX[id];
+  const classes = ["blk"];
+  if (archFocus === id) classes.push("on");
+  if (state) classes.push(state);
+  return `<g class="${classes.join(" ")}" data-arch="${id}" tabindex="0" role="button" aria-label="${name}">
+    <rect class="blk-bg" x="${x}" y="${y}" width="${ARCH_W}" height="${ARCH_H}" rx="3" />
+    <rect class="blk-edge" x="${x}" y="${y}" width="2.5" height="${ARCH_H}" />
+    <text class="blk-name" x="${x + 14}" y="${y + 22}">${name}</text>
+    <text class="blk-note" data-note="${id}" x="${x + 14}" y="${y + 40}">${escapeHtml(note)}</text>
+  </g>`;
+}
+
+function archSvg(live) {
+  const call = live.tone.call;
+  const links = [
+    archLink(archJoin("dashboard", "raw"), live.tone.in),
+    archLink(archJoin("official", "raw"), live.tone.official),
+    archLink([archRight("raw"), archLeft("snapshot")], "hold"),
+    archLink([archRight("snapshot"), archLeft("tick")], call),
+    archLink([archRight("tick"), archLeft("managers")], call),
+    archLink([archBottom("managers"), archTop("sqlite")], "hold"),
+    archLink([archLeft("sqlite"), archRight("supabase")], live.tone.store),
+    archLink([archLeft("supabase"), archRight("scene")], "hold"),
+    archLink([archLeft("scene"), archRight("map")], "hold"),
+    archLink([archBottom("map"), [archBottom("map")[0], archLeft("controller")[1]], archLeft("controller")], "hold"),
+    archLink([archRight("controller"), [archBottom("tick")[0], archRight("controller")[1]], archBottom("tick")], call),
+  ].join("");
+  const boxes = [
+    ["dashboard", "ERCOT dashboard"],
+    ["official", "public API"],
+    ["raw", "raw records"],
+    ["snapshot", "grid snapshot"],
+    ["tick", "fleet tick"],
+    ["managers", "managers"],
+    ["sqlite", "SQLite"],
+    ["supabase", "Supabase"],
+    ["scene", "scene"],
+    ["map", "map"],
+    ["controller", "controller"],
+  ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
+  return `<svg viewBox="0 0 980 500" class="diagram arch-svg">
+    ${links}
+    <text class="flow-kw ${call}" x="700" y="446">next tick</text>
+    ${boxes}
+  </svg>`;
+}
+
+function renderArch(data) {
+  if (!data || viewName !== "architecture") return;
+  const live = archLive(data);
+  const key = [
+    archFocus,
+    live.signal,
+    live.tone.in,
+    live.tone.official,
+    live.tone.store,
+    live.state.dashboard,
+    live.state.official,
+    live.state.supabase,
+    live.state.controller,
+  ].join("|");
+  const holder = document.getElementById("arch-diagram");
+  const role = document.getElementById("arch-role");
+  if (role) role.textContent = ARCH_ROLE[archFocus] || "";
+  if (key !== archKey || !holder.querySelector("svg")) {
+    archKey = key;
+    holder.innerHTML = archSvg(live);
+    return;
+  }
+  for (const [id, text] of Object.entries(live.notes)) {
+    const node = holder.querySelector(`[data-note="${id}"]`);
+    if (node) node.textContent = text;
+  }
+}
+
+function fleetHash() {
+  if (focusedStation) return `#station/${focusedStation}`;
+  if (focusedMetro) return `#metro/${focusedMetro}`;
+  return "";
+}
+
+function showView(name) {
+  viewName = name === "architecture" ? "architecture" : "fleet";
+  document.body.dataset.view = viewName;
+  document.getElementById("tab-fleet").classList.toggle("on", viewName === "fleet");
+  document.getElementById("tab-arch").classList.toggle("on", viewName === "architecture");
+  if (viewName === "architecture") {
+    if (modal.open) modal.close();
+    placeHash("#architecture");
+    renderArch(payload);
+    return;
+  }
+  if (location.hash === "#architecture") placeHash(fleetHash());
+}
+
 async function poll() {
   try {
     const response = await fetch(api("/api/scene"));
@@ -2376,6 +2649,7 @@ async function poll() {
     renderDay(payload);
     renderPanel(payload);
     ingestDecisions(payload);
+    renderArch(payload);
     if (modal.open && selected) {
       unitDetail = (await loadUnit(selected)) || unitDetail;
       renderUnit();
@@ -2593,8 +2867,27 @@ function frame() {
 // A unit id in the hash opens that battery, so a link points at one cabinet.
 // Add a block, as in #hou-0002/disco, and it opens on that block.
 // #metro/austin flies the camera to that city, close enough to see the substations.
+document.querySelector(".nav").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-view]");
+  if (button) showView(button.dataset.view);
+});
+
+document.getElementById("arch").addEventListener("click", (event) => {
+  const node = event.target.closest("[data-arch]");
+  if (!node || node.dataset.arch === archFocus) return;
+  archFocus = node.dataset.arch;
+  document.querySelectorAll("#arch-diagram [data-arch]").forEach((item) => {
+    item.classList.toggle("on", item.dataset.arch === archFocus);
+  });
+  document.getElementById("arch-role").textContent = ARCH_ROLE[archFocus] || "";
+});
+
 poll().then(() => {
   const [wanted, block] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (wanted === "architecture") {
+    showView("architecture");
+    return;
+  }
   if (wanted === "metro" && block) {
     const metro = (payload.metros || []).find((item) => item.id === block);
     if (metro) focusMetro(metro);

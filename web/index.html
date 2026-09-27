@@ -4,11 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gridsim</title>
-  <link rel="stylesheet" href="/style.css?v=6">
+  <link rel="stylesheet" href="/style.css?v=9">
 </head>
 <body>
   <header>
-    <div class="brand">gridsim</div>
+    <div class="brand-row">
+      <div class="brand">gridsim</div>
+      <nav class="nav" aria-label="Views">
+        <button type="button" id="tab-fleet" class="on" data-view="fleet">fleet</button>
+        <button type="button" id="tab-arch" data-view="architecture">architecture</button>
+      </nav>
+    </div>
     <div class="stats" id="stats"></div>
     <div class="clock" id="clock">sim <b>—</b></div>
   </header>
@@ -22,6 +28,11 @@
       <p id="stage-counts"></p>
     </div>
     <canvas id="map"></canvas>
+    <section id="arch">
+      <p class="stage-kicker">architecture</p>
+      <p id="arch-role"></p>
+      <div id="arch-diagram"></div>
+    </section>
     <aside id="panel">
       <button type="button" id="panel-toggle" aria-expanded="true" aria-controls="panel-body">hide</button>
       <div id="panel-body">
@@ -63,6 +74,6 @@
       }
     }
   </script>
-  <script type="module" src="/main.js?v=7"></script>
+  <script type="module" src="/main.js?v=10"></script>
 </body>
 </html>

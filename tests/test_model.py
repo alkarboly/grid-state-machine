@@ -11,7 +11,6 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     price_day,
     prices_from_rows,
-    reverse_demand,
     pin_demand,
 )
 from gridsim.fleet.charts import (
@@ -119,33 +118,6 @@ class NormalizeTests(unittest.TestCase):
         filled = day_points(supply, extra=[older])
         self.assertIn(45000.0, [point["demand_mw"] for point in filled if point["kind"] == "actual"])
 
-    def test_reverse_demand_flips_the_day_and_the_ladder(self):
-        day = [
-            {"ts": "2026-09-25T01:00:00-05:00", "demand_mw": 40000, "kind": "actual"},
-            {"ts": "2026-09-25T12:00:00-05:00", "demand_mw": 50000, "kind": "actual"},
-            {"ts": "2026-09-25T19:00:00-05:00", "demand_mw": 60000, "kind": "actual"},
-            {"ts": "2026-09-25T20:00:00-05:00", "demand_mw": 58000, "kind": "forecast"},
-        ]
-        grid = {
-            "demand_mw": 60000,
-            "demand_percentile": 1.0,
-            "forecast_demand_mw": 58000,
-            "prices": [{"location": "LZ_HOUSTON", "lmp": 90, "settlement_point": "LZ_HOUSTON"}],
-        }
-        flipped, series = reverse_demand(grid, day)
-        self.assertEqual(flipped["demand_mw"], 40000)
-        self.assertLessEqual(flipped["demand_percentile"], 0.35)
-        self.assertEqual(flipped["forecast_demand_mw"], 42000)
-        self.assertEqual(flipped["prices"], [])
-        self.assertTrue(flipped["demand_reverse"])
-        self.assertEqual(series[0]["demand_mw"], 60000)
-        self.assertEqual(series[2]["demand_mw"], 40000)
-        self.assertEqual(choose_signal(flipped["demand_percentile"], 1400, None, None), "pull")
-        self.assertEqual(
-            choose_signal(flipped["demand_percentile"], 1400, None, None, demand_only=True),
-            "pull",
-        )
-
     def test_peak_pin_uses_today_high_as_now(self):
         day = [
             {"ts": "2026-09-25T01:00:00-05:00", "demand_mw": 40000, "kind": "actual"},
@@ -167,26 +139,6 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(empty["demand_mw"], 48000)
         self.assertEqual(empty_day, [])
         self.assertIsNone(empty_ts)
-        flipped, flipped_day = reverse_demand(pinned, series)
-        self.assertEqual(flipped["demand_mw"], 40000)
-        self.assertLessEqual(flipped["demand_percentile"], 0.35)
-        self.assertEqual(flipped_day[2]["demand_mw"], 40000)
-        self.assertEqual(choose_signal(flipped["demand_percentile"], 0, None, None, demand_only=True), "pull")
-
-    def test_reverse_demand_charges_when_today_is_mid(self):
-        day = [
-            {"ts": "2026-09-25T01:00:00-05:00", "demand_mw": 40000, "kind": "actual"},
-            {"ts": "2026-09-25T12:00:00-05:00", "demand_mw": 50000, "kind": "actual"},
-            {"ts": "2026-09-25T19:00:00-05:00", "demand_mw": 60000, "kind": "actual"},
-        ]
-        grid = {"demand_mw": 50000, "demand_percentile": 0.5, "storage_gen_mw": 1400, "prices": []}
-        flipped, _series = reverse_demand(grid, day)
-        self.assertEqual(flipped["demand_percentile"], 0.5)
-        self.assertEqual(choose_signal(0.5, 1400, None, None), "push")
-        self.assertEqual(choose_signal(0.5, 1400, None, None, demand_only=True), "pull")
-        signal, because = explain_signal(0.5, 1400, None, None, demand_only=True)
-        self.assertEqual(signal, "pull")
-        self.assertEqual(because[0]["threshold"], "charging window")
 
     def test_constraint_columns_and_edges(self):
         rows = constraints_from_rows(
@@ -298,25 +250,6 @@ class FleetTests(unittest.TestCase):
         self.assertTrue(
             all(abs(site["metrics"]["disco"]["frequency_hz"] - base) < 0.05 for site in pushed)
         )
-
-    def test_reverse_demand_rolls_the_fleet_off_storage(self):
-        now = datetime(2026, 9, 25, 12, 0, tzinfo=CENTRAL)
-        live = dict(_grid(0.5), storage_gen_mw=1400)
-        reversed_grid = dict(live, demand_reverse=True)
-        note_live = {}
-        live_sites, *_ = tick_sites(FLEET(), live, now, 0.0028, random.Random(4), note=note_live)
-        note_rev = {}
-        rev_sites, *_ = tick_sites(
-            FLEET(), reversed_grid, now, 0.0028, random.Random(4), note=note_rev
-        )
-        self.assertEqual(note_live["signal"], "push")
-        self.assertEqual(note_rev["signal"], "pull")
-        self.assertEqual(note_rev["source"], "rules")
-        self.assertIn("charging window", note_rev["because"][0]["threshold"])
-        live_push = sum(site["state"] == "push" for site in live_sites)
-        rev_pull = sum(site["state"] == "pull" for site in rev_sites)
-        self.assertGreater(live_push, 50)
-        self.assertGreater(rev_pull, 50)
 
     def test_load_and_temperature_carry_across_ticks(self):
         now = datetime(2026, 9, 25, 19, 45, tzinfo=CENTRAL)

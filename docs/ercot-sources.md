@@ -33,7 +33,7 @@ Normalized grid snapshot fields:
 
 Each point is `{ts, demand_mw, rate_usd_mwh, rate_basis, kind}`. `kind` is `actual` or `forecast`.
 
-`GET /api/scene` also has `demand_pin` (`peak` or `live`, default `peak`) and `demand_now_ts`. Peak keeps the 24h `day` series as published and uses the highest actual as the live `grid.demand_mw` and `demand_percentile`. The 24h card draws now on that sample. Live is the newest actual. `demand_reverse` then inverts that view around today's actual min and max, so a peak reads as a trough. `demand_percentile` is the complement of today's rank so the ladder can switch the fleet. The simulated rate follows that percentile. Storage megawatts are left alone; the tick skips them while reverse is on. The live dashboard payloads are unchanged.
+`GET /api/scene` also has `demand_pin` (`peak` or `live`, default `peak`) and `demand_now_ts`. Peak keeps the 24h `day` series as published and uses the highest actual as the live `grid.demand_mw` and `demand_percentile`. The 24h card draws now on that sample. Live is the newest actual. The live dashboard payloads are unchanged.
 
 Actuals are the dashboard `data[]` rows with `forecast` 0, kept for the 24 hours before the newest actual and bucketed to 15 minutes. The newest sample in a bucket wins. A restart also reads two stored payloads: the latest one at least 30 minutes old, and the latest one from before midnight, so the trace still covers the day those responses published. The forecast is `forecast[]` (`forecastedDemand`), which replaces a `data[]` row with `forecast` 1 at the same time, and only the next 6 hours are kept. The rest of that multi-day forecast is dropped.
 

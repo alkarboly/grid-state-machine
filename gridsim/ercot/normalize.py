@@ -297,47 +297,6 @@ def price_day(points: list[dict], live_rate: tuple[float, str] | None = None) ->
     return priced
 
 
-def reverse_demand(grid: dict, day: list[dict]) -> tuple[dict, list[dict]]:
-    """Flip today's demand around its min and max so peaks become troughs.
-
-    The ladder reads the complement of today's percentile so a mid-day reverse
-    is a charging window, not a hold. Load-zone prices are dropped. Storage
-    stays on the grid snapshot but the tick skips it while this flag is on.
-    """
-    out_grid = dict(grid)
-    out_grid["prices"] = []
-    out_grid["demand_reverse"] = True
-    percentile = round(1.0 - float(grid.get("demand_percentile") or 0.5), 4)
-    out_grid["demand_percentile"] = percentile
-    pool = [
-        float(point["demand_mw"])
-        for point in day
-        if point.get("kind") == "actual" and point.get("demand_mw") is not None
-    ]
-    if grid.get("demand_mw") is not None:
-        pool.append(float(grid["demand_mw"]))
-    if len(pool) < 2 or max(pool) <= min(pool):
-        rate = simulated_rate(percentile)
-        return out_grid, price_day(list(day), (rate, "simulated"))
-    lo, hi = min(pool), max(pool)
-
-    def flip(value):
-        if value is None:
-            return None
-        return round(lo + hi - float(value), 1)
-
-    out_grid["demand_mw"] = flip(grid.get("demand_mw"))
-    if grid.get("forecast_demand_mw") is not None:
-        out_grid["forecast_demand_mw"] = flip(grid["forecast_demand_mw"])
-    flipped = []
-    for point in day:
-        row = dict(point)
-        row["demand_mw"] = flip(point.get("demand_mw"))
-        flipped.append(row)
-    rate = simulated_rate(percentile)
-    return out_grid, price_day(flipped, (rate, "simulated"))
-
-
 def pin_demand(grid: dict, day: list[dict], pin: str) -> tuple[dict, list[dict], str | None]:
     """Use one actual on today's curve as the live demand. The series is unchanged.
 

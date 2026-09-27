@@ -940,13 +940,12 @@ def _preview_call(
     storage,
     by_location: dict,
     lmp_mean: float | None,
-    demand_only: bool,
 ) -> tuple[str, float, str, bool]:
     lmp = by_location.get(site["load_zone"])
     if fleet_call:
         signal, level, source = fleet_call
     else:
-        signal = choose_signal(percentile, storage, lmp, lmp_mean, demand_only=demand_only)
+        signal = choose_signal(percentile, storage, lmp, lmp_mean)
         level = intensity(signal, percentile)
         source = "rules"
     override = False
@@ -966,14 +965,13 @@ def _station_duty(
     storage,
     by_location: dict,
     lmp_mean: float | None,
-    demand_only: bool,
 ) -> tuple[dict[str, tuple[str, float, str, bool]], dict[str, float]]:
     """Rank each service area by stored energy, then map that rank to duty."""
     previews = {}
     groups: dict[tuple[str, str], list[tuple[str, float]]] = {}
     for site in sites:
         preview = _preview_call(
-            site, fleet_call, percentile, storage, by_location, lmp_mean, demand_only
+            site, fleet_call, percentile, storage, by_location, lmp_mean
         )
         previews[site["id"]] = preview
         signal, _level, _source, override = preview
@@ -1028,12 +1026,11 @@ def tick_sites(
     hour = now.hour
     percentile = float(grid.get("demand_percentile") or 0.5)
     storage = grid.get("storage_gen_mw")
-    demand_only = bool(grid.get("demand_reverse"))
     scale = 0.85 + 0.30 * percentile
     dt = max(dt_hours, 0.0)
     fleet_call = resolve_order(order, percentile)
     previews, queue = _station_duty(
-        sites, fleet_call, percentile, storage, by_location, lmp_mean, demand_only
+        sites, fleet_call, percentile, storage, by_location, lmp_mean
     )
     # One frequency for the interconnection. Homes only add a local measurement error.
     frequency_hz = 60.0 + rng.gauss(0, 0.006)
@@ -1389,7 +1386,7 @@ def tick_sites(
             }]
         else:
             applied_signal, because = explain_signal(
-                percentile, storage, None, None, demand_only=demand_only
+                percentile, storage, None, None
             )
             applied_level = intensity(applied_signal, percentile)
             applied_source = "rules"

@@ -82,7 +82,7 @@ One row per tick. This is the object a controller reads in order to decide the n
 
 The Postgres tables the bot and a controller share are created by the SQL files in `supabase/migrations`, in filename order. The diagram of those eight tables, and the sample each disco records, is [data-model.md](data-model.md). Local SQLite mirrors the column names. Row level security is enabled and there is no anon policy, so the browser cannot read them. Only the bot's service role can.
 
-`dispatch_orders` is not a local table. It lives in Supabase. The tick reads the newest row. `POST /api/dispatch` inserts a row when the keys are set. Reverse demand inserts `auto` so the ladder can follow inverted demand.
+`dispatch_orders` is not a local table. It lives in Supabase. The tick reads the newest row. `POST /api/dispatch` inserts a row when the keys are set. Demand pin inserts `auto` so the ladder can follow the pinned sample.
 
 ```sql
 create table dispatch_orders (

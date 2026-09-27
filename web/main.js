@@ -932,20 +932,16 @@ function renderDay(data) {
   const points = (data && data.day) || [];
   const actuals = points.filter((point) => point.kind !== "forecast");
   const latest = actuals[actuals.length - 1];
-  const reversed = Boolean(data.demand_reverse);
   const peaked = (data.demand_pin || "peak") === "peak";
   const nowPoint = (data.demand_now_ts && points.find((point) => point.ts === data.demand_now_ts)) || latest;
-  if (!host.dataset.ready || !document.getElementById("day-pin")) {
+  if (!host.dataset.ready || document.getElementById("day-reverse") || !document.getElementById("day-pin")) {
     host.innerHTML = `
       <p class="day-kicker" id="day-kicker">24h</p>
       <p class="day-row" id="day-demand-row"><span>demand</span><b id="day-demand-val">—</b></p>
       <div id="day-demand-spark"></div>
       <p class="day-row" id="day-price-row"><span>price</span><b id="day-price-val">—</b></p>
       <div id="day-price-spark"></div>
-      <div class="day-actions">
-        <button type="button" class="day-toggle" id="day-pin" data-demand-pin="peak">Live now</button>
-        <button type="button" class="day-toggle" id="day-reverse" data-demand-reverse="0">Reverse demand</button>
-      </div>
+      <button type="button" class="day-toggle" id="day-pin" data-demand-pin="peak">Live now</button>
     `;
     host.dataset.ready = "1";
   }
@@ -954,15 +950,8 @@ function renderDay(data) {
   const priceVal = document.getElementById("day-price-val");
   const demandSpark = document.getElementById("day-demand-spark");
   const priceSpark = document.getElementById("day-price-spark");
-  const reverse = document.getElementById("day-reverse");
   const pin = document.getElementById("day-pin");
-  const tags = ["24h"];
-  if (peaked) tags.push("peak");
-  if (reversed) tags.push("reversed");
-  kicker.textContent = tags.join(" · ");
-  reverse.classList.toggle("on", reversed);
-  reverse.dataset.demandReverse = reversed ? "1" : "0";
-  reverse.textContent = reversed ? "Use live demand" : "Reverse demand";
+  kicker.textContent = peaked ? "24h · peak" : "24h";
   pin.classList.toggle("on", peaked);
   pin.dataset.demandPin = peaked ? "peak" : "live";
   pin.textContent = peaked ? "Live now" : "Peak now";
@@ -1170,18 +1159,6 @@ function describeBecause(clause) {
   if (line.includes("inside ±")) {
     const pct = demand ? demand[1] : "";
     return `Texas demand is mid-range${pct ? ` (${pct} of today)` : ""}, and grid storage is quiet, so Base batteries hold`;
-  }
-  if (line.includes("charging window")) {
-    return "Reversed demand opens a charging window, so Base batteries charge";
-  }
-  if (line.includes("inverted peak")) {
-    return "Reversed demand looks like a peak, so Base batteries discharge";
-  }
-  if (line.includes("reversed demand") && demand && (line.includes("≤") || line.includes("<"))) {
-    return `Reversed demand is low (${demand[1]} of today), so Base batteries charge`;
-  }
-  if (line.includes("reversed demand") && demand) {
-    return `Reversed demand is high (${demand[1]} of today), so Base batteries discharge`;
   }
   if (demand && line.includes("≥")) {
     return `Texas demand is high (${demand[1]} of today), so Base batteries discharge (above ${bar || "0.75"})`;
@@ -2781,7 +2758,7 @@ function archLive(data) {
   return {
     signal,
     notes: {
-      ercot: ["Demand and short forecast", `${demand} · ${priceWord}${data.demand_pin === "peak" ? " · peak" : ""}${data.demand_reverse ? " · reversed" : ""}`],
+      ercot: ["Demand and short forecast", `${demand} · ${priceWord}${data.demand_pin === "peak" ? " · peak" : ""}`],
       gateway: ["Simulated telemetry collection", gateLine],
       tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: [callVerb(signal), `${callDepth(signal, dispatch.intensity) || "idle"} · ${callWho(dispatch.source || "rules")}`],
@@ -2882,7 +2859,6 @@ function renderArch(data) {
     live.state.ercot || "",
     live.state.supabase || "",
     live.state.model || "",
-    data.demand_reverse ? "rev" : "",
     data.demand_pin === "peak" ? "peak" : "",
   ].join("|");
   const holder = document.getElementById("arch-diagram");
@@ -2905,7 +2881,6 @@ function renderArch(data) {
 function protoStep(data) {
   const dispatch = data.dispatch || {};
   if (dispatch.source === "external") return "order";
-  if (data.demand_reverse) return "reverse";
   const clause = (dispatch.because || [])[0] || {};
   const bar = clause.threshold || "";
   const line = clause.line || "";
@@ -3218,28 +3193,23 @@ function frame() {
 // A unit id in the hash opens that battery, so a link points at one cabinet.
 // Add a block, as in #hou-0002/disco, and it opens on that block.
 // #metro/austin flies the camera to that city, close enough to see the substations.
-let reverseBusy = false;
+let pinBusy = false;
 document.getElementById("day").addEventListener("click", async (event) => {
-  const reverse = event.target.closest("[data-demand-reverse]");
   const pin = event.target.closest("[data-demand-pin]");
-  if ((!reverse && !pin) || reverseBusy) return;
+  if (!pin || pinBusy) return;
   event.stopPropagation();
-  reverseBusy = true;
-  const button = reverse || pin;
-  button.disabled = true;
+  pinBusy = true;
+  pin.disabled = true;
   try {
-    const body = reverse
-      ? { demand_reverse: reverse.dataset.demandReverse !== "1" }
-      : { demand_pin: pin.dataset.demandPin === "peak" ? "live" : "peak" };
     await fetch(api("/api/agent"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ demand_pin: pin.dataset.demandPin === "peak" ? "live" : "peak" }),
     });
     await poll();
   } finally {
-    button.disabled = false;
-    reverseBusy = false;
+    pin.disabled = false;
+    pinBusy = false;
   }
 });
 

@@ -24,7 +24,7 @@
   <meta name="twitter:title" content="grid state machine">
   <meta name="twitter:description" content="Live ERCOT demand joined to a simulated fleet of 3000 Base home batteries. The state machine tells them to push, pull, or hold.">
   <meta name="twitter:image" content="https://gridstatemachine.com/og.png">
-  <link rel="stylesheet" href="/style.css?v=27">
+  <link rel="stylesheet" href="/style.css?v=28">
 </head>
 <body>
   <header>
@@ -89,7 +89,6 @@
           <h2>What outranks the ladder</h2>
           <ul>
             <li data-proto="order">A posted fleet order is one call for every home. The ladder is off.</li>
-            <li data-proto="reverse">Reverse demand skips prices and takes the opposite of the live call. A discharge becomes a charging window.</li>
             <li>A set-signal on one home outranks the fleet call for that home.</li>
             <li>An open maintenance ticket keeps the fleet manager off that home.</li>
           </ul>
@@ -122,7 +121,7 @@
               <tr><td><code>GET</code></td><td><code>/api/scene</code></td><td>The map. One small row per home. The page polls this every 5 seconds.</td></tr>
               <tr><td><code>GET</code></td><td><code>/api/site/{id}</code></td><td>One home in full: metrics, charts, snapshot, log, actions.</td></tr>
               <tr><td><code>GET</code></td><td><code>/api/dispatch</code></td><td>Applied call, pending order, controller snapshot.</td></tr>
-              <tr><td><code>GET</code></td><td><code>/api/agent</code></td><td>Homes that are armed, set to dispatch, or grid-off, and whether reverse demand or peak now is on.</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/agent</code></td><td>Homes that are armed, set to dispatch, or grid-off, and whether peak now is on.</td></tr>
             </tbody>
           </table>
           <pre>curl https://gridstatemachine.com/api/scene
@@ -137,7 +136,7 @@ curl https://gridstatemachine.com/api/site/aus-0004</pre>
             <tbody>
               <tr><td><code>POST</code></td><td><code>/api/dispatch</code></td><td><code>{"signal":"push","intensity":0.8}</code> — one call for every home. <code>auto</code> returns the ladder.</td></tr>
               <tr><td><code>POST</code></td><td><code>/api/actions</code></td><td><code>{"site_id","kind","payload"}</code> — <code>scheduled_service</code>, <code>set_signal</code>, <code>install_addon</code>, <code>remove_addon</code>.</td></tr>
-              <tr><td><code>POST</code></td><td><code>/api/agent</code></td><td><code>{"site_id","chart_id","armed"}</code>, or <code>dispatch</code>, or <code>grid</code>, or <code>{"demand_pin":"peak"}</code>, or <code>{"demand_reverse":true}</code>.</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/agent</code></td><td><code>{"site_id","chart_id","armed"}</code>, or <code>dispatch</code>, or <code>grid</code>, or <code>{"demand_pin":"peak"}</code>.</td></tr>
             </tbody>
           </table>
           <pre>curl -X POST https://gridstatemachine.com/api/dispatch -H "Content-Type: application/json" -d "{\"signal\":\"auto\"}"</pre>
@@ -187,6 +186,6 @@ curl https://gridstatemachine.com/api/site/aus-0004</pre>
       }
     }
   </script>
-  <script type="module" src="/main.js?v=43"></script>
+  <script type="module" src="/main.js?v=44"></script>
 </body>
 </html>

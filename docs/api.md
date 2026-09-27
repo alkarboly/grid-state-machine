@@ -10,16 +10,16 @@ This origin is the live prototype. A post changes that fleet until the next rest
 
 ## Tick
 
-A tick is 10 seconds (`tick_seconds` on the scene). `GET` is the current memory. `POST /api/dispatch` and `POST /api/actions` land as `pending` and apply on the **next** tick. `POST /api/agent` updates flags in memory immediately; an armed chart, grid off, demand pin, and reverse demand show on the next scene poll, and chart residuals move on the next tick.
+A tick is 10 seconds (`tick_seconds` on the scene). `GET` is the current memory. `POST /api/dispatch` and `POST /api/actions` land as `pending` and apply on the **next** tick. `POST /api/agent` updates flags in memory immediately; an armed chart, grid off, and demand pin show on the next scene poll, and chart residuals move on the next tick.
 
 ## Reads
 
 | Method | Path | What you get |
 | --- | --- | --- |
-| `GET` | `/api/scene` | The map. One small row per home, plus metros, substations, the fleet rollup, the live call, `calls`, `actions`, ERCOT context, the 24h `day` trace, `shape`, `gateway`, `supabase`, `openai`, `demand_reverse`, `demand_pin`, `demand_now_ts`, `tick_seconds`. About 330 KB for 3000 homes. The map polls it every 5 seconds. |
+| `GET` | `/api/scene` | The map. One small row per home, plus metros, substations, the fleet rollup, the live call, `calls`, `actions`, ERCOT context, the 24h `day` trace, `shape`, `gateway`, `supabase`, `openai`, `demand_pin`, `demand_now_ts`, `tick_seconds`. About 330 KB for 3000 homes. The map polls it every 5 seconds. |
 | `GET` | `/api/site/{id}` | One home in full: component `metrics`, charts with the 30-hour residual, `usage`, `state_log`, `snapshot`, `actions`, `armed`, `dispatch`, `agent_call`, `duty`, `reserve_frac`, `intensity`. A few kilobytes. `404` if the id is unknown. |
 | `GET` | `/api/dispatch` | `applied` (the call this tick), `pending` (the order waiting, or `null`), `snapshot` (demand, storage, frequency, fleet totals), `supabase`. |
-| `GET` | `/api/agent` | `{sites, demand_reverse, demand_pin}`. `sites` is only homes that are armed, set to dispatch, or grid-off. |
+| `GET` | `/api/agent` | `{sites, demand_pin}`. `sites` is only homes that are armed, set to dispatch, or grid-off. |
 
 Each `GET /api/scene` home row is `{id, metro, station, lat, lon, state, signal, source, soc_pct, alarm, offline, grid}`. `state` is what the cabinet did. `signal` is the call. `source` is `rules`, `external`, or `action`. `grid` is `on` or `off`. When a chart is past limits, the row also has `flagged` (chart ids) and `families`.
 
@@ -70,19 +70,13 @@ One `unit_actions` row. The bot assigns `id`, `status` `pending`, and `actor` `a
 
 Flags in this process. A restart clears them.
 
-`demand_reverse` and `demand_pin` are their own body. When either key is present, the rest of the body is ignored except the other of those two keys.
+`demand_pin` is its own body. When that key is present, the rest of the body is ignored. `demand_reverse` is not a field; posting it is a `400`.
 
 ```json
 {"demand_pin": "peak"}
 ```
 
-Uses today's highest actual as the live operating point. The 24h series is unchanged. `live` restores the newest actual. Default is `peak`. A restart returns to peak. Returns `{demand_pin, demand_reverse}`.
-
-```json
-{"demand_reverse": true}
-```
-
-Inverts today's demand on the 24h card and on the next tick's ladder, and clears a posted order so that ladder can run. `false` restores the live series. Returns `{demand_reverse, demand_pin}`. Pin is applied first, so peak then reverse is a charging window.
+Uses today's highest actual as the live operating point. The 24h series is unchanged. `live` restores the newest actual. Default is `peak`. A restart returns to peak. Returns `{demand_pin}`.
 
 Otherwise `site_id` is required. You can set more than one flag in the same post.
 
@@ -105,4 +99,4 @@ Failed posts return `{detail: "..."}`. `400` is a bad body. `404` is an unknown 
 
 ## Who outranks whom
 
-The ladder, a posted order, a per-home `set_signal`, reverse demand, demand pin, and an open ticket are [protocols.md](protocols.md).
+The ladder, a posted order, a per-home `set_signal`, demand pin, and an open ticket are [protocols.md](protocols.md).

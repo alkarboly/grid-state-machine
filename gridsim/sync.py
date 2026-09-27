@@ -2,7 +2,7 @@
 
 Supabase is optional. When it is configured, each tick inserts one
 `dispatch_ticks` row and reads the newest `dispatch_orders` row. A posted
-fleet call, and reverse demand clearing that call, write `dispatch_orders`.
+fleet call, and demand pin clearing that call, write `dispatch_orders`.
 The browser never sees the service-role key. A failed call does not stop
 the tick.
 """

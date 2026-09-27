@@ -54,7 +54,6 @@ from gridsim.ercot.normalize import (
     grid_from_dashboards,
     price_day,
     prices_from_rows,
-    reverse_demand,
     pin_demand,
 )
 from gridsim.fleet.agent import audit, close_model_ticket, day_shape, open_model_tickets, record_toggle
@@ -352,7 +351,6 @@ class Fleet:
         self.constraints: list[dict] = []
         self.edges: list[dict] = []
         self.day: list[dict] = []
-        self.demand_reverse = False
         self.demand_pin = "peak"
         self.status = {
             "dashboard": "unavailable",
@@ -482,18 +480,6 @@ class Fleet:
                 }
         push_order(signal, intensity)
 
-    def set_demand_reverse(self, on: bool) -> dict:
-        """Invert today's ERCOT demand for the next tick. A restart clears it.
-
-        A posted order is cleared so the ladder can follow the inverted demand.
-        That clear is written to Supabase `dispatch_orders` when the keys are set.
-        """
-        with self._lock:
-            self.demand_reverse = bool(on)
-            self._pending = None
-        push_order("auto", None)
-        return {"demand_reverse": self.demand_reverse, "demand_pin": self.demand_pin}
-
     def set_demand_pin(self, pin: str) -> dict:
         """Use today's peak actual as now, or the newest actual. A restart returns to peak.
 
@@ -506,7 +492,7 @@ class Fleet:
             self.demand_pin = pin
             self._pending = None
         push_order("auto", None)
-        return {"demand_pin": self.demand_pin, "demand_reverse": self.demand_reverse}
+        return {"demand_pin": self.demand_pin}
 
     def dispatch_view(self) -> dict:
         with self._lock:
@@ -595,16 +581,12 @@ class Fleet:
                     })
             return {
                 "sites": rows,
-                "demand_reverse": self.demand_reverse,
                 "demand_pin": self.demand_pin,
             }
 
     def _demand_view(self) -> tuple[dict, list[dict], str | None]:
-        """Pinned sample on today's curve, then optional reverse around min and max."""
-        grid, day, now_ts = pin_demand(self.grid, self.day, self.demand_pin)
-        if self.demand_reverse:
-            grid, day = reverse_demand(grid, day)
-        return grid, day, now_ts
+        """Pinned sample on today's curve."""
+        return pin_demand(self.grid, self.day, self.demand_pin)
 
     def tick(self) -> None:
         remote, remote_error = pull_order()
@@ -870,7 +852,6 @@ class Fleet:
                 "openai": "live" if config.OPENAI_API_KEY else "disabled",
                 "day": list(view_day),
                 "shape": day_shape(view_day, now_ts),
-                "demand_reverse": self.demand_reverse,
                 "demand_pin": self.demand_pin,
                 "demand_now_ts": now_ts,
                 "tick_seconds": config.TICK_SECONDS,

@@ -79,7 +79,7 @@ erDiagram
 
 | Group | Tables | Who writes | Grain |
 | --- | --- | --- | --- |
-| Fleet call | `dispatch_orders` | The API, or a controller | Newest row wins. `auto` hands the fleet back to the ladder. `POST /api/dispatch` and reverse demand write this row when Supabase is configured. |
+| Fleet call | `dispatch_orders` | The API, or a controller | Newest row wins. `auto` hands the fleet back to the ladder. `POST /api/dispatch` and demand pin write this row when Supabase is configured. |
 | Fleet call | `dispatch_ticks` | Bot, every tick | One row per 10 seconds. No cap in Postgres. |
 | Read model | `market_ticks` | Bot, every tick | Same clock as `dispatch_ticks`, plus `rate_usd_mwh` and `rate_basis`. |
 | Read model | `unit_latest` | Bot | One row per published home, replaced in place. Cap 80 homes a tick. |

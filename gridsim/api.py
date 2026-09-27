@@ -63,20 +63,15 @@ def agent():
     return fleet.agent_view()
 
 
-@app.post("/api/agent", summary="Arm a chart, set dispatch, grid, demand pin, or reverse demand")
+@app.post("/api/agent", summary="Arm a chart, set dispatch, grid, or demand pin")
 def post_agent(body: dict):
-    if "demand_reverse" in body or "demand_pin" in body:
-        result = {}
-        if "demand_reverse" in body:
-            if not isinstance(body.get("demand_reverse"), bool):
-                raise HTTPException(status_code=400, detail="demand_reverse must be true or false")
-            result.update(fleet.set_demand_reverse(body["demand_reverse"]))
-        if "demand_pin" in body:
-            pin = body.get("demand_pin")
-            if pin not in ("live", "peak"):
-                raise HTTPException(status_code=400, detail="demand_pin must be live or peak")
-            result.update(fleet.set_demand_pin(pin))
-        return result
+    if "demand_reverse" in body:
+        raise HTTPException(status_code=400, detail="demand_reverse is not supported")
+    if "demand_pin" in body:
+        pin = body.get("demand_pin")
+        if pin not in ("live", "peak"):
+            raise HTTPException(status_code=400, detail="demand_pin must be live or peak")
+        return fleet.set_demand_pin(pin)
     site_id = body.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=400, detail="site_id is required")

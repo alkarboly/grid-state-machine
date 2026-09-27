@@ -26,8 +26,6 @@ The call is what the fleet was asked to do. Colour on the map is what the cabine
 5. Pull when ERCOT Power Storage is charging (storage generation ≤ −200 MW). The Base fleet charges with it.
 6. Hold.
 
-**Reverse demand** skips prices and takes the opposite of that live call: a discharge becomes a charging window.
-
 **Peak now** is not a posted order. It only moves the operating point the ladder reads to today's highest actual. **Live now** is the newest actual.
 
 ## Who answers

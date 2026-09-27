@@ -9,7 +9,6 @@ LMP_PULL_CAP = 25.0
 LMP_PULL_RATIO = 0.9
 DEMAND_PUSH = 0.75
 DEMAND_PULL = 0.35
-DEMAND_MID = 0.50
 STORAGE_PUSH = 200.0
 STORAGE_PULL = -200.0
 
@@ -19,14 +18,9 @@ def explain_signal(
     storage_gen_mw: float | None,
     lmp: float | None,
     lmp_mean: float | None,
-    demand_only: bool = False,
 ) -> tuple[str, list[dict]]:
-    """The call, and the clause that fired. `threshold` is the limit to highlight.
-
-    `demand_only` is reverse demand: skip prices, then take the opposite of the
-    live call so a storage-driven discharge becomes a charging window.
-    """
-    if not demand_only and lmp is not None and lmp_mean is not None:
+    """The call, and the clause that fired. `threshold` is the limit to highlight."""
+    if lmp is not None and lmp_mean is not None:
         push_at = max(LMP_PUSH_FLOOR, lmp_mean * LMP_PUSH_RATIO)
         if lmp >= push_at:
             limit = f"{push_at:.0f} $/MWh"
@@ -43,28 +37,6 @@ def explain_signal(
                 f" (lesser of {LMP_PULL_CAP:.0f} and {LMP_PULL_RATIO:.1f}× the mean {lmp_mean:.0f})"
             )
             return "pull", [{"line": line, "threshold": limit}]
-    if demand_only:
-        original = round(1.0 - float(demand_percentile), 4)
-        live_signal, _live = explain_signal(original, storage_gen_mw, None, None)
-        if live_signal == "push":
-            return "pull", [{
-                "line": f"reversed demand percentile {demand_percentile:.2f} opens a charging window",
-                "threshold": "charging window",
-            }]
-        if live_signal == "pull":
-            return "push", [{
-                "line": f"reversed demand percentile {demand_percentile:.2f} matches inverted peak demand",
-                "threshold": "inverted peak",
-            }]
-        if demand_percentile <= DEMAND_MID:
-            return "pull", [{
-                "line": f"reversed demand percentile {demand_percentile:.2f} ≤ {DEMAND_MID:.2f}",
-                "threshold": f"{DEMAND_MID:.2f}",
-            }]
-        return "push", [{
-            "line": f"reversed demand percentile {demand_percentile:.2f} > {DEMAND_MID:.2f}",
-            "threshold": f"{DEMAND_MID:.2f}",
-        }]
     if demand_percentile >= DEMAND_PUSH:
         return "push", [{
             "line": f"demand percentile {demand_percentile:.2f} ≥ {DEMAND_PUSH:.2f}",
@@ -100,10 +72,9 @@ def choose_signal(
     storage_gen_mw: float | None,
     lmp: float | None,
     lmp_mean: float | None,
-    demand_only: bool = False,
 ) -> str:
     signal, _because = explain_signal(
-        demand_percentile, storage_gen_mw, lmp, lmp_mean, demand_only=demand_only
+        demand_percentile, storage_gen_mw, lmp, lmp_mean
     )
     return signal
 

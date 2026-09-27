@@ -579,12 +579,15 @@ h2 {
   overflow-wrap: anywhere;
 }
 .alert.case-row .case-step { color: var(--ink); font-size: 12px; }
-.alert.case-row .case-evidence {
+.alert.case-row .case-evidence,
+.alert.case-row .case-decision {
   grid-column: 1 / -1;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
 }
+.alert.case-row .case-decision { color: var(--ink); }
+.alert.case-row .case-decision b { color: var(--watch); font-weight: 600; }
 .case-payload {
   grid-column: 1 / -1;
   margin: 6px 0 0;

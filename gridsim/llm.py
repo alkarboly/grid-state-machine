@@ -19,22 +19,16 @@ from gridsim import config
 _TIMEOUT = 8.0
 
 
-def write_ticket(context: dict) -> str | None:
-    """Ask the configured OpenAI model for the ticket note. None if the key is unset or the call fails."""
+def _chat(system: str, user: str) -> str | None:
+    """One chat completion. None if the key is unset or the call fails."""
     if not config.OPENAI_API_KEY:
         return None
     body = {
         "model": config.OPENAI_MODEL,
+        "response_format": {"type": "json_object"},
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Write one short maintenance ticket for a home battery. "
-                    "Use only the JSON you are given. Name the home, the chart, "
-                    "the readings, and why the reset did not clear it. Two sentences."
-                ),
-            },
-            {"role": "user", "content": json.dumps(context)},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ],
     }
     request = urllib.request.Request(
@@ -54,6 +48,32 @@ def write_ticket(context: dict) -> str | None:
         return None
     note = str(text).strip()
     return note or None
+
+
+def decide_maintenance(pull: dict) -> dict | None:
+    """Ask OPENAI_MODEL how to resolve this pull. None keeps the chart sentence."""
+    raw = _chat(
+        (
+            "You resolve one home-battery maintenance ticket. "
+            "Use only the JSON you are given. evidence.action is the procedure for this chart. "
+            'Reply with JSON {"result":"done","action":"..."}. '
+            "action is two sentences: what the readings show, and how that procedure resolves it. "
+            "Do not invent readings."
+        ),
+        json.dumps(pull),
+    )
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    action = str(parsed.get("action") or "").strip()
+    if not action:
+        return None
+    return {"result": "done", "action": action, "model": config.OPENAI_MODEL}
 
 
 _EVIDENCE = ("chart_id", "z", "measured", "expected", "soc_pct", "temp_c", "load_kw", "action")

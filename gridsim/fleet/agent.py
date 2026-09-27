@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from gridsim.fleet.actions import OPEN, market_rate, new_action
-from gridsim.llm import site_evidence, write_ticket
+from gridsim.llm import decide_maintenance, site_evidence
 from gridsim.timeutil import iso
 from gridsim.fleet.charts import CHARTS, mean_sigma, subgroup_size
 from gridsim.fleet.simulate import HOUR_MEAN_KW, panel_kw
@@ -243,14 +243,6 @@ def _estimate_label(minutes: float | None) -> str:
 
 
 def _agent_note(site: dict, chart_id: str, gathered: dict, reset_min: float | None) -> str:
-    written = write_ticket({
-        "site_id": site["id"],
-        "chart_id": chart_id,
-        "gathered": gathered,
-        "reset_min": reset_min,
-    })
-    if written:
-        return written
     return _ticket_note(site, chart_id, gathered, reset_min)
 
 
@@ -453,7 +445,11 @@ def open_model_tickets(actions: list[dict]) -> list[dict]:
 
 
 def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) -> dict | None:
-    """Close one visit from a GET /api/site/{id} body. The chart action is the decision."""
+    """Close one visit from a GET /api/site/{id} body.
+
+    When OPENAI_API_KEY is set, OPENAI_MODEL writes decision.action from the pull.
+    A missing key or a failed call keeps the chart's action sentence.
+    """
     if detail.get("id") != site.get("id") or detail.get("id") != ticket.get("site_id"):
         return None
     payload = ticket.setdefault("payload", {})
@@ -473,11 +469,12 @@ def close_model_ticket(site: dict, ticket: dict, detail: dict, now: datetime) ->
         key: evidence.get(key)
         for key in ("z", "measured", "expected", "soc_pct", "temp_c", "load_kw")
     }
-    payload["decision"] = {"result": "done", "action": evidence["action"]}
+    written = decide_maintenance(payload["pull"])
+    payload["decision"] = written or {"result": "done", "action": evidence["action"]}
     _append_step(ticket, "ticket", payload.get("estimate_min"), "done", "llm", now)
     ticket["status"] = "done"
     ticket["actor"] = "llm"
-    ticket["note"] = evidence["action"]
+    ticket["note"] = payload["decision"]["action"]
     site["armed"] = [item for item in (site.get("armed") or []) if item != chart_id]
     return _return_online(
         site["id"],

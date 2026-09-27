@@ -67,7 +67,7 @@ LLM_URL = os.environ.get("LLM_URL", "").strip()
 LLM_EVERY_S = float(os.environ.get("LLM_EVERY_S", "600"))
 
 # Optional. When the key is set, an escalated maintenance ticket asks this model
-# to write the note from the gathered readings. gpt-4o-mini is the cheap default.
+# for the decision from the site pull. gpt-4o-mini is the cheap default.
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 

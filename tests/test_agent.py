@@ -1,9 +1,13 @@
+import json
 import random
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from gridsim import config
 from gridsim.fleet.actions import market_rate
+from gridsim.llm import decide_maintenance
 from gridsim.fleet.agent import (
     RESOLUTION,
     audit,
@@ -132,10 +136,12 @@ class AgentTests(unittest.TestCase):
                 "action": spec["action"],
             }],
         }
-        online = close_model_ticket(site, ticket, detail, now)
+        with patch("gridsim.fleet.agent.decide_maintenance", return_value=None):
+            online = close_model_ticket(site, ticket, detail, now)
         self.assertEqual(ticket["status"], "done")
         self.assertEqual(ticket["payload"]["decision"]["result"], "done")
         self.assertEqual(ticket["payload"]["decision"]["action"], spec["action"])
+        self.assertNotIn("model", ticket["payload"]["decision"])
         self.assertEqual(ticket["payload"]["pull"]["method"], "GET")
         self.assertEqual(ticket["payload"]["pull"]["path"], "/api/site/aus-0099")
         self.assertEqual(ticket["payload"]["pull"]["evidence"]["z"], 11.286)
@@ -144,6 +150,68 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(site["armed"], [])
         self.assertEqual(online["kind"], "return_online")
         self.assertIsNone(close_model_ticket(site, ticket, detail, now))
+
+    def test_a_model_reply_is_the_decision(self):
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)
+        site = _bare({"base_temp"})
+        site["armed"] = ["base_temp"]
+        site["metrics"] = {"base": {"soc_pct": 40, "temp_c": 49.0}, "panel": {"load_kw": 1.2}}
+        ticket = audit([site], [], _grid(0.5), {}, now)[0]
+        spec = next(item for item in CHARTS if item["chart_id"] == "base_temp")
+        detail = {
+            "id": site["id"],
+            "metrics": site["metrics"],
+            "charts": [{
+                "chart_id": "base_temp",
+                "z": 11.286,
+                "measured": 49.0,
+                "expected": 33.2,
+                "action": spec["action"],
+            }],
+        }
+        reply = {
+            "result": "done",
+            "action": "The cabinet is hot against the expected temperature. Heat does not clear by reboot, so the visit stands.",
+            "model": "gpt-4o-mini",
+        }
+        with patch("gridsim.fleet.agent.decide_maintenance", return_value=reply):
+            close_model_ticket(site, ticket, detail, now)
+        self.assertEqual(ticket["payload"]["decision"], reply)
+        self.assertEqual(ticket["note"], reply["action"])
+        self.assertEqual(ticket["payload"]["pull"]["evidence"]["action"], spec["action"])
+
+    def test_decide_maintenance_reads_the_chat_json(self):
+        body = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "result": "done",
+                        "action": "Load is high for this hour. The procedure is a cabinet visit.",
+                    }),
+                },
+            }],
+        }
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+
+        with patch.object(config, "OPENAI_API_KEY", "test-key"), patch.object(config, "OPENAI_MODEL", "gpt-4o-mini"), patch(
+            "gridsim.llm.urllib.request.urlopen", return_value=_Response()
+        ):
+            decision = decide_maintenance({"method": "GET", "path": "/api/site/aus-0099", "evidence": {}})
+        self.assertEqual(decision["model"], "gpt-4o-mini")
+        self.assertEqual(decision["result"], "done")
+        self.assertIn("cabinet visit", decision["action"])
+
+        with patch.object(config, "OPENAI_API_KEY", ""):
+            self.assertIsNone(decide_maintenance({"method": "GET"}))
 
     def test_a_warning_posts_nothing(self):
         now = datetime(2026, 9, 25, 10, 0, tzinfo=CENTRAL)

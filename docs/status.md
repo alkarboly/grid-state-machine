@@ -32,7 +32,7 @@ An agent case shows a status pill and, while it is open, a timer to `ends_at`. T
 
 The web service is described in `render.yaml` and [deploy.md](deploy.md). It serves the map and the API from one process. The Supabase project and that Render service have not been created from this repo. Until they are, the map people open is the local process, and a model has nowhere to write except `POST /api/actions` on that process.
 
-`LLM_URL` is unset, so the fleet read-model POST is not called. An escalated maintenance ticket is still resolved on this API server: the tick pulls `GET /api/site/{id}`, stores that payload and the chart evidence, and the Maintenance manager shows the row as a done case. The decisions log shows the model step. The contract is in [llm.md](llm.md). The fleet manager still resolves a home set to dispatch.
+`LLM_URL` is unset, so the fleet read-model POST is not called. An escalated maintenance ticket is still resolved on this API server: the tick pulls `GET /api/site/{id}`, stores that payload and the chart evidence, and the Maintenance manager shows the row as a done case. When `OPENAI_API_KEY` is set, `OPENAI_MODEL` writes `decision.action`. A missing key keeps the chart sentence. The decisions log shows that step. The contract is in [llm.md](llm.md). The fleet manager still resolves a home set to dispatch.
 
 `rate_basis` on the local map is `simulated` until the official price reports return rows. The public dashboard is already live.
 

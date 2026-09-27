@@ -1229,6 +1229,11 @@ function caseCard(entry, opts = {}) {
     const steps = stepList(payload);
     const evidence = evidenceText((payload.pull && payload.pull.evidence) || payload.evidence);
     const evidenceLine = evidence ? `<span class="case-evidence">${escapeHtml(evidence)}</span>` : "";
+    const decided = (payload.decision && payload.decision.action) || "";
+    const modelName = (payload.decision && payload.decision.model) || "";
+    const decisionLine = decided
+      ? `<span class="case-decision">${modelName ? `<b>${escapeHtml(modelName)}</b> ` : ""}${escapeHtml(decided)}</span>`
+      : "";
     const whoLine = !steps && named ? `<span class="escalation">${escapeHtml(named)}</span>` : "";
     return `<button type="button" class="alert case-row status-${escapeHtml(status)}" data-site="${escapeHtml(entry.site)}" data-chart="${chart}">
       ${pill || `<span class="status">case</span>`}
@@ -1239,6 +1244,7 @@ function caseCard(entry, opts = {}) {
       ${whoLine}
       ${steps}
       ${evidenceLine}
+      ${decisionLine}
       ${payloadBlock(payload)}
     </button>`;
   }
@@ -2426,9 +2432,8 @@ function ingestDecisions(data) {
         const evidence = step.result === "done"
           ? evidenceText(((action.payload || {}).pull || {}).evidence || (action.payload || {}).evidence)
           : "";
-        const text = evidence
-          ? `${title} · ${stepText(step)} · ${evidence}`
-          : `${title} · ${stepText(step)}`;
+        const decided = step.result === "done" ? (((action.payload || {}).decision || {}).action || "") : "";
+        const text = [title, stepText(step), evidence, decided].filter(Boolean).join(" · ");
         incoming.push({
           key: `act:${action.id}:step:${index}:${step.result}:${actor}`,
           ts: step.ts || action.ts || "",
@@ -2485,7 +2490,7 @@ const ARCH_ROLE = {
   map: "The browser. It polls this origin for /api/scene. It never opens SQLite or Supabase.",
   sqlite: "data/gridsim.db on the service disk. Render's disk is ephemeral. This file keeps sites, raw_records, grid_snapshots, metric_logs, observations, control_points, fleet_rollups, and a copy of dispatch_ticks. Identity stays here. There is no sites table in Supabase.",
   supabase: "A separate hosted Postgres project. It has not been created from this repo yet. The controller tables live here: market_ticks, unit_latest, usage_hours, dispatch_orders, dispatch_ticks, unit_actions, addon_catalog, and site_addons. Row level security is on and there is no anon policy, so the browser cannot read them.",
-  llm: "A remote model does not sit inside the tick. An escalated maintenance ticket is resolved here: this process pulls GET /api/site/{id}, keeps that payload as evidence, and closes the ticket done using the chart's action sentence. When LLM_URL is set, this process also POSTs the fleet read model and turns the reply into unit_actions. LLM_URL is unset, so that fleet call is not made. An OpenAI note on an escalated ticket is a separate call and does not use LLM_URL.",
+  llm: "A remote model does not sit inside the tick. An escalated maintenance ticket is resolved here: this process pulls GET /api/site/{id} and closes the ticket done. When OPENAI_API_KEY is set, OPENAI_MODEL writes the decision from that pull. Otherwise the decision is the chart's action sentence. When LLM_URL is set, this process also POSTs the fleet read model and turns the reply into unit_actions. LLM_URL is unset, so that fleet call is not made.",
 };
 let viewName = "fleet";
 let archFocus = "scene";

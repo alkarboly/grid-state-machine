@@ -2,9 +2,9 @@
 
 A remote model does not sit inside the tick. The bot publishes a read model, the model writes action rows, and the next tick applies them. One fleet call is still `dispatch_orders`. Per-unit changes are `unit_actions`.
 
-An escalated maintenance ticket is closed by a pull on this API server, not by `LLM_URL`. After the maintenance manager sets `stage` to `ticket` and `actor` to `llm`, the tick thread calls `GET /api/site/{id}` on this process (`GRIDSIM_ORIGIN` if set, otherwise `http://127.0.0.1` and `PORT`, default 8000). The model may use only that home's chart for the ticket and the readings below. The chart's `action` sentence is the decision. The same ticket is marked `done`, the chart is disarmed, and the bot writes `return_online`. The service estimate stays on the payload. The case does not wait out that estimate. A failed pull leaves the ticket open and retries on the next tick.
+An escalated maintenance ticket is closed by a pull on this API server, not by `LLM_URL`. After the maintenance manager sets `stage` to `ticket` and `actor` to `llm`, the tick thread calls `GET /api/site/{id}` on this process (`GRIDSIM_ORIGIN` if set, otherwise `http://127.0.0.1` and `PORT`, default 8000). The model may use only that home's chart for the ticket and the readings below. When `OPENAI_API_KEY` is set, `OPENAI_MODEL` (default `gpt-4o-mini`) writes `decision.action` from that pull: two sentences on what the readings show and how the chart procedure resolves it. A missing key or a failed call keeps the chart's `action` sentence and omits `decision.model`. The same ticket is marked `done`, the chart is disarmed, and the bot writes `return_online`. The service estimate stays on the payload. The case does not wait out that estimate. A failed pull leaves the ticket open and retries on the next tick.
 
-Two managers do sit in the tick. After the charts are written, the maintenance manager opens or escalates a ticket, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). When a reset does not clear the fault, the in-tick agent writes the visit with `actor` `llm`. If `OPENAI_API_KEY` is set, that note is two sentences from `OPENAI_MODEL` (default `gpt-4o-mini`) using the gathered readings. A missing key or a failed call keeps the gathered sentence. That call does not use `LLM_URL`. `LLM_URL` is still optional. A remote model remains a third writer and is not either manager.
+Two managers do sit in the tick. After the charts are written, the maintenance manager opens or escalates a ticket, then the fleet manager appends a price call with `actor` `fleet` on a home set to dispatch. An open code response blocks that price call. The following tick applies those rows. Arming a chart and the price-and-usage call are in [simulation.md](simulation.md). When a reset does not clear the fault, the in-tick agent writes the visit with `actor` `llm`. The OpenAI decision above is that close. It does not use `LLM_URL`. `LLM_URL` is still optional. A remote model remains a third writer and is not either manager.
 
 The service-role key stays on the bot. Give the model a key that can read the three read tables and insert `unit_actions`, or let the bot call `LLM_URL`. Do not put that key in the browser.
 
@@ -77,12 +77,13 @@ Do not insert `return_online`. The simulator does that when a service window end
   },
   "decision": {
     "result": "done",
-    "action": "Heat does not clear by reboot. The agent opens a service ticket from the cabinet readings."
+    "action": "The cabinet is at 49 °C against an expected 33.2 °C. Heat does not clear by reboot, so the visit stands.",
+    "model": "gpt-4o-mini"
   }
 }
 ```
 
-`evidence.action` is the chart catalog sentence from [control-charts.md](control-charts.md). `decision.action` copies it. `decision.result` is `done`. The escalation step for that close is `{stage: "ticket", result: "done", actor: "llm"}`. Maintenance manager shows the row as a done case, with the evidence line and this payload. The decisions log shows that step, the evidence, and `model`.
+`evidence.action` is the chart catalog sentence from [control-charts.md](control-charts.md). `decision.result` is `done`. `decision.action` is the two sentences from `OPENAI_MODEL` when `OPENAI_API_KEY` is set. `decision.model` is that model name. A missing key or a failed call sets `decision.action` to `evidence.action` and leaves `model` off. The escalation step for that close is `{stage: "ticket", result: "done", actor: "llm"}`. Maintenance manager shows the row as a done case, with the evidence, the decision, and this payload. The decisions log shows that step, the evidence, the decision, and `model`.
 
 ## Optional HTTP call
 

@@ -441,11 +441,6 @@ h2 {
 
 .stack { margin-top: 22px; }
 .ledger { margin-top: 12px; }
-.model-now b {
-  white-space: normal;
-  font-weight: 500;
-  color: var(--ink);
-}
 .ledger h3 { margin-top: 8px; }
 .stack h3 {
   margin: 16px 0 6px;

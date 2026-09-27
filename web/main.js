@@ -1049,9 +1049,9 @@ function escapeHtml(text) {
 }
 
 function callVerb(signal) {
-  if (signal === "push") return "Discharge to the grid";
-  if (signal === "pull") return "Charge from the grid";
-  return "Hold";
+  if (signal === "push") return "Base batteries discharge";
+  if (signal === "pull") return "Base batteries charge";
+  return "Base batteries hold";
 }
 
 function callDepth(signal, intensity) {
@@ -1083,26 +1083,26 @@ function describeBecause(clause) {
   const demand = line.match(/demand percentile ([\d.]+)/);
   if (line.includes("ladder is not running")) return "A posted order is running. The ladder is off.";
   if (storage && line.includes("≥")) {
-    return `ERCOT batteries are discharging ${fmt(Number(storage[1]), 0)} MW, above 200 MW`;
+    return `Grid storage is discharging ${fmt(Number(storage[1]), 0)} MW, so Base batteries discharge too (above 200 MW)`;
   }
   if (storage && line.includes("≤") && !line.includes("inside")) {
-    return `ERCOT batteries are charging ${fmt(Math.abs(Number(storage[1])), 0)} MW, past −200 MW`;
+    return `Grid storage is charging ${fmt(Math.abs(Number(storage[1])), 0)} MW, so Base batteries charge too (past −200 MW)`;
   }
   if (line.includes("inside ±")) {
     const pct = demand ? demand[1] : "";
-    return `Texas demand is mid-range${pct ? ` (${pct} of today)` : ""}, and ERCOT storage is quiet`;
+    return `Texas demand is mid-range${pct ? ` (${pct} of today)` : ""}, and grid storage is quiet, so Base batteries hold`;
   }
   if (demand && line.includes("≥")) {
-    return `Texas demand is high (${demand[1]} of today), above 0.75`;
+    return `Texas demand is high (${demand[1]} of today), so Base batteries discharge (above 0.75)`;
   }
   if (demand && line.includes("≤")) {
-    return `Texas demand is low (${demand[1]} of today), below 0.35`;
+    return `Texas demand is low (${demand[1]} of today), so Base batteries charge (below 0.35)`;
   }
   if (line.includes("load-zone price") && line.includes("≥")) {
-    return "This zone's price is high enough to discharge";
+    return "This zone's price is high enough for Base batteries to discharge";
   }
   if (line.includes("load-zone price") && line.includes("≤")) {
-    return "This zone's price is low enough to charge";
+    return "This zone's price is low enough for Base batteries to charge";
   }
   return line;
 }
@@ -1121,43 +1121,12 @@ function nowBlock(data) {
   const shape = data.shape && data.shape.shape ? data.shape.shape : "—";
   const call = describeCall(data.dispatch);
   const because = (data.dispatch && data.dispatch.because) || [];
-  const visit = modelVisit(data);
-  const model = visit
-    ? `<p class="model-now"><span>model</span><b>${escapeHtml(modelLine(visit))}</b></p>`
-    : "";
   return `<div class="stack ledger">
       ${row("price", `${fmt(market.rate_usd_mwh, 1)} $/MWh · ${basis}`)}
       ${row("day", shape)}
       ${row("fleet call", call)}
-      ${model}
     </div>
     ${because.map(markLine).join("")}`;
-}
-
-function modelVisit(data) {
-  const rows = (data.actions || []).filter((action) => {
-    if (action.kind !== "scheduled_service") return false;
-    const payload = action.payload || {};
-    const steps = payload.escalation || [];
-    return action.actor === "llm" || payload.decision || steps.some((step) => step.actor === "llm");
-  });
-  const open = rows.find((action) => action.status === "active" || action.status === "pending");
-  if (open) return open;
-  return rows.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""))[0] || null;
-}
-
-function modelLine(action) {
-  const payload = action.payload || {};
-  const site = action.site_id || "";
-  const decision = payload.decision || {};
-  if (decision.action) {
-    const who = decision.model ? `${decision.model} · ` : "";
-    return `${site} · ${who}${decision.action}`;
-  }
-  if (payload.stage === "ticket") return `${site} · pulling GET /api/site/${site}`;
-  const steps = payload.escalation || [];
-  const last = steps[steps.length - 1];
-  return `${site} · ${last ? stepText(last) : "scheduled service"}`;
 }
 
 const WHO = { fleet: "fleet", maintenance: "maintenance", sim: "agent", api: "user", llm: "model" };
@@ -2643,7 +2612,7 @@ const ARCH_ROLE = {
   ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
   gateway: "On-premises gateway, simulated telemetry collection.",
   tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
-  machine: "The state machine runs on the API server. Push means discharge to the grid. Pull means charge from the grid. Hold does neither. A light call reaches about a third of the homes; a strong call reaches almost all of them. The ladder picks that from ERCOT demand and whether Texas batteries are discharging. Those steps show up in the decisions log as [state machine].",
+  machine: "The state machine runs on the API server. It tells Base batteries to discharge to the grid, charge from the grid, or hold. A light call reaches about a third of the homes; a strong call reaches almost all of them. The ladder picks that from ERCOT demand and grid storage. Those steps show up in the decisions log as [state machine].",
   map: "The map in the browser. It asks the server for an update every five seconds and draws one dot per home.",
   sqlite: "The API writes this file every tick. It is data/gridsim.db on the service disk. Identity, ERCOT payloads, logs, dispatch, and the controller tables live here. There is no sites table in Supabase.",
   supabase: "Hosted Postgres. Only the API talks to it. When the Supabase keys are set, the API copies dispatch, market, and actions here. Until then this box reads disabled.",

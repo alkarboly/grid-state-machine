@@ -71,8 +71,8 @@ The ladder, used whenever no order is set, is evaluated in this order:
 1. If the home's load-zone LMP is present and outside the middle band, it decides: `push` when LMP is at least the greater of 40 $/MWh and 1.1× the mean LMP of that interval; `pull` when LMP is at most the lesser of 25 $/MWh and 0.9× that mean. The mean is load zones and hubs only (`LZ_*`, `HB_*`).
 2. Otherwise `push` when `demand_percentile` ≥ 0.75.
 3. Else `pull` when `demand_percentile` ≤ 0.35.
-4. Else `push` when storage generation ≥ 200 MW (the ERCOT storage fleet is discharging).
-5. Else `pull` when storage generation ≤ −200 MW (the ERCOT storage fleet is charging).
+4. Else `push` when storage generation ≥ 200 MW (ERCOT Power Storage is discharging; the Base fleet then discharges).
+5. Else `pull` when storage generation ≤ −200 MW (ERCOT Power Storage is charging; the Base fleet then charges).
 6. Else `hold`.
 
 Steps 1 to 6 run per home, so two load zones can be given different calls when their prices disagree. Intensity is 0 on hold, and otherwise at least 0.35, rising as the percentile moves further into the push or pull region.

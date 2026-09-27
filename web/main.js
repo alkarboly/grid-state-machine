@@ -919,9 +919,8 @@ function renderField(data) {
     return `<p class="day-row"><span>${clock}</span><b>${fmt(row.samples, 0)} samples</b></p>`;
   }).join("");
   document.getElementById("field").innerHTML = `
-    <p class="day-kicker">on-prem gateway</p>
-    <p class="day-row"><span>field stream</span><b class="ercot">simulated</b></p>
-    <p class="day-row"><span>status</span><b class="ercot">generating now</b></p>
+    <p class="day-kicker">on-premises gateway</p>
+    <p class="day-row"><span>telemetry</span><b class="ercot">simulated collection</b></p>
     <p class="day-row"><span>${homes}</span><b>${when}</b></p>
     ${rows}
   `;
@@ -2590,19 +2589,19 @@ function ingestDecisions(data) {
 const ARCH_W = 200;
 const ARCH_H = 74;
 const ARCH_BOX = {
-  ercot: [20, 36],
-  tick: [264, 36],
-  machine: [508, 36],
-  map: [752, 36],
-  gateway: [20, 180],
-  sqlite: [264, 180],
-  model: [508, 180],
-  supabase: [264, 310],
+  ercot: [20, 48],
+  tick: [264, 48],
+  machine: [508, 48],
+  map: [752, 48],
+  gateway: [20, 214],
+  sqlite: [264, 214],
+  model: [508, 214],
+  supabase: [264, 372],
 };
 const ARCH_ROLE = {
-  ercot: "Live system demand, the short forecast, and generation by fuel, from the public dashboard. No key. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
-  gateway: "On-premises gateway. There is no field device and no socket. Each tick this process generates one disco sample per home and treats that batch as the stream a gateway would have sent. The line says simulated, generating now.",
-  tick: "Data ingest protocol, inside the Render web service gridsim. That service has not been created, so this machine is it. It takes the ERCOT snapshot and the on-prem gateway stream. This process generates that stream. The model calls this server. This server writes Supabase when that project is configured.",
+  ercot: "Live system demand and the short forecast. Official prices and constraints turn on only when the ERCOT subscription key is set. Until then the price is simulated.",
+  gateway: "On-premises gateway, simulated telemetry collection.",
+  tick: "Data contract governed ingestion. Ensures data quality by data contract adherence.",
   machine: "The state machine, inside the API server. The ladder chooses push, pull, or hold for the fleet. The maintenance manager opens one visit when a chart alarms. The fleet manager posts a price call on a home set to dispatch. The decisions log labels these steps [state machine].",
   model: "Talks only to the API server. On the tick after a visit opens, it reads GET /api/site/{id} there. It does not open Supabase. The API server writes the close, and the API server writes Supabase. With no OpenAI key, the sentence is the chart's action.",
   map: "The browser. It polls the Render service every 5 seconds and draws one dot per home. It does not open SQLite or Supabase.",
@@ -2688,12 +2687,13 @@ function archLive(data) {
   const gate = data.gateway || {};
   const gateWhen = (gate.ts || "").slice(11, 19);
   const gateLine = gate.homes ? `${fmt(gate.homes, 0)} homes · ${gateWhen}` : "generating";
+  const priceWord = (data.market || {}).rate_basis === "ercot" ? "live price" : "price simulated";
   return {
     signal,
     notes: {
-      ercot: ["Public demand, no key", `${ercot.dashboard || "—"} · ${demand}`],
-      gateway: ["Simulated. Generating now", gateLine],
-      tick: ["One home at a time", `${fmt(fleet.units, 0)} homes`],
+      ercot: ["Demand and short forecast", `${demand} · ${priceWord}`],
+      gateway: ["Simulated telemetry collection", gateLine],
+      tick: ["Contract-governed ingestion", "Contract adherence"],
       machine: ["Decides push, pull, or hold", `${signal} ${fmt(dispatch.intensity, 2)} · ${dispatch.source || "rules"}`],
       model: ["Talks to the API server", modelNote],
       map: ["Polls the Render service", `${flow} ${fmt(mw, 2)} MW`],
@@ -2739,20 +2739,23 @@ function archRegion(x, y, w, h, label) {
 function archSvg(live) {
   const call = live.tone.call;
   const store = live.tone.store;
-  const streamX = 242;
+  const gateEdge = archRight("gateway");
+  const tickEdge = archLeft("tick");
+  const streamX = (gateEdge[0] + tickEdge[0]) / 2;
+  const streamY = tickEdge[1] + 20;
   const ask = archTop("model");
   const regions = [
-    archRegion(8, 16, 224, 112, "ERCOT"),
-    archRegion(8, 164, 224, 106, "on premises"),
-    archRegion(248, 16, 476, 110, "Render · gridsim"),
-    archRegion(248, 164, 232, 110, ""),
-    archRegion(736, 16, 232, 110, "browser"),
-    archRegion(492, 164, 232, 110, "model"),
-    archRegion(248, 294, 232, 106, "Supabase"),
+    archRegion(8, 20, 224, 122, "ERCOT"),
+    archRegion(8, 186, 224, 122, "on premises"),
+    archRegion(248, 20, 476, 122, "Render · gridsim"),
+    archRegion(248, 186, 232, 122, ""),
+    archRegion(736, 20, 232, 122, "browser"),
+    archRegion(492, 186, 232, 122, "model"),
+    archRegion(248, 344, 232, 122, "Supabase"),
   ].join("");
   const links = [
     archLink(archJoin("ercot", "tick"), live.tone.in),
-    archLink([archRight("gateway"), [streamX, archRight("gateway")[1]], [streamX, 95], [archLeft("tick")[0], 95]], "hold"),
+    archLink([gateEdge, [streamX, gateEdge[1]], [streamX, streamY], [tickEdge[0], streamY]], "hold"),
     archLink(archJoin("tick", "machine"), call),
     archLink(archJoin("machine", "map"), call),
     archLink([archBottom("tick"), archTop("sqlite")], "hold"),
@@ -2770,12 +2773,12 @@ function archSvg(live) {
     ["supabase", "Supabase"],
   ].map(([id, name]) => archBox(id, name, live.notes[id], live.state[id] || "")).join("");
   const wrote = archBottom("sqlite");
-  return `<svg viewBox="0 0 980 416" class="diagram arch-svg">
+  return `<svg viewBox="0 0 980 490" class="diagram arch-svg">
     ${regions}
     ${links}
-    <text class="flow-kw hold" x="168" y="156">stream</text>
-    <text class="flow-kw ${call}" x="${ask[0] + 10}" y="${ask[1] - 16}">GET /api/site</text>
-    <text class="flow-kw ${store}" x="${wrote[0] + 10}" y="${wrote[1] + 28}">writes</text>
+    <text class="flow-kw hold" x="150" y="176">stream</text>
+    <text class="flow-kw ${call}" x="${ask[0] + 10}" y="${ask[1] - 18}">GET /api/site</text>
+    <text class="flow-kw ${store}" x="${wrote[0] + 10}" y="${wrote[1] + 32}">writes</text>
     ${boxes}
   </svg>`;
 }

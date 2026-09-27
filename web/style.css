@@ -315,8 +315,8 @@ body[data-view="architecture"] canvas { visibility: hidden; }
   font-size: 13px;
   line-height: 1.45;
 }
-#arch-diagram { flex: 1; min-height: 0; }
-.arch-svg { width: 100%; height: 100%; }
+#arch-diagram { flex: 1; min-height: 0; overflow: auto; }
+.arch-svg { display: block; width: 100%; height: auto; }
 .diagram .arch-region { fill: #14161a; stroke: #262931; }
 .diagram .arch-label {
   font-size: 9px;
